@@ -23,13 +23,13 @@
 ENV_NAME="SO101_ARM"
 
 # The Hugging Face repository ID where your dataset is/will be stored.
-DATASET_REPO_ID="jrkhf/so101_wrist_top_cameras_set_1" # "jrkhf/so101_set_2"
+DATASET_REPO_ID="jrkhf/so101_wrist_top_cameras_set_2" # "jrkhf/so101_set_2"
 
 # The Hugging Face repository ID where your dataset is/will be stored.
 EVAL_REPO_ID="jrkhf/eval_so101"
 
 # The Hugging Face repository ID where your trained policy is/will be stored.
-POLICY_REPO_ID="jrkhf/so101_dual_cameras_act_policy" # "lerobot/smolvla_base"
+POLICY_REPO_ID="jrkhf/so101_dual_cameras_act_policy_2" # "lerobot/smolvla_base"
 
 # --- TASK-SPECIFIC PARAMETERS -------------------------------------------------
 
@@ -73,8 +73,8 @@ case "$1" in
             --robot.type=so101_follower \
             --robot.port=/dev/ttyUSB1 \
             --robot.id=follower_arm_1 \
-            --robot.cameras="{top: {type: opencv, index_or_path: /dev/video3, width: 640, height: 480, fps: 30}, \
-                              wrist: {type: opencv, index_or_path: /dev/video5, width: 640, height: 480, fps: 30}}" \
+            --robot.cameras="{top: {type: opencv, index_or_path: /dev/video2, width: 640, height: 480, fps: 30}, \
+                              wrist: {type: opencv, index_or_path: /dev/video4, width: 640, height: 480, fps: 30}}" \
             --teleop.type=so101_leader \
             --teleop.port=/dev/ttyUSB0 \
             --teleop.id=leader_arm_1 \
@@ -89,8 +89,8 @@ case "$1" in
             --robot.type=so101_follower \
             --robot.port=/dev/ttyUSB1 \
             --robot.id=follower_arm_1 \
-            --robot.cameras="{top: {type: opencv, index_or_path: /dev/video3, width: 640, height: 480, fps: 30}, \
-                              wrist: {type: opencv, index_or_path: /dev/video5, width: 640, height: 480, fps: 30}}" \
+            --robot.cameras="{top: {type: opencv, index_or_path: /dev/video2, width: 640, height: 480, fps: 30}, \
+                              wrist: {type: opencv, index_or_path: /dev/video4, width: 640, height: 480, fps: 30}}" \
             --teleop.type=so101_leader \
             --teleop.port=/dev/ttyUSB0 \
             --teleop.id=leader_arm_1 \
@@ -116,7 +116,7 @@ case "$1" in
             --wandb.enable=false \
             --policy.repo_id=${POLICY_REPO_ID} \
             --batch_size=8 \
-            --steps=20000 \
+            --steps=${NUM_TRAIN_STEPS} \
             --save_freq=5000
 
         ;;
@@ -129,8 +129,8 @@ case "$1" in
         lerobot-record \
             --robot.type=so101_follower \
             --robot.port=/dev/ttyUSB1 \
-            --robot.cameras="{top: {type: opencv, index_or_path: /dev/video3, width: 640, height: 480, fps: 30}, \
-                            wrist: {type: opencv, index_or_path: /dev/video5, width: 640, height: 480, fps: 30}}" \
+            --robot.cameras="{top: {type: opencv, index_or_path: /dev/video2, width: 640, height: 480, fps: 30}, \
+                            wrist: {type: opencv, index_or_path: /dev/video4, width: 640, height: 480, fps: 30}}" \
             --robot.id=follower_arm_1 \
             --display_data=true \
             --dataset.repo_id=${EVAL_REPO_ID} \
