@@ -23,13 +23,13 @@
 ENV_NAME="SO101_ARM"
 
 # The Hugging Face repository ID where your dataset is/will be stored.
-DATASET_REPO_ID="jrkhf/so101_wrist_top_cameras_set_2" # "jrkhf/so101_set_2"
+DATASET_REPO_ID="jrkhf/so101_wrist_top_cameras_set_merged" # "jrkhf/so101_set_2"
 
 # The Hugging Face repository ID where your dataset is/will be stored.
 EVAL_REPO_ID="jrkhf/eval_so101"
 
 # The Hugging Face repository ID where your trained policy is/will be stored.
-POLICY_REPO_ID="jrkhf/so101_dual_cameras_act_policy_2" # "lerobot/smolvla_base"
+POLICY_REPO_ID="jrkhf/so101_dual_cameras_act_policy_100k" # "lerobot/smolvla_base"
 
 # --- TASK-SPECIFIC PARAMETERS -------------------------------------------------
 
@@ -98,8 +98,9 @@ case "$1" in
             --dataset.repo_id=${DATASET_REPO_ID} \
             --dataset.num_episodes=${NUM_RECORD_EPISODES} \
             --dataset.single_task="Pick and drop lego block" \
+            --dataset.episode_time_s=60 \
             --dataset.push_to_hub=True \
-            --resume=true
+            --resume=false
 
         ;;
     train)
@@ -117,7 +118,11 @@ case "$1" in
             --policy.repo_id=${POLICY_REPO_ID} \
             --batch_size=8 \
             --steps=${NUM_TRAIN_STEPS} \
-            --save_freq=5000
+            --save_freq=5000 \
+            --dataset.image_transforms.enable=true \
+            --dataset.image_transforms.random_order=true \
+            --dataset.image_transforms.max_num_transforms=2 \
+            --resume=false
 
         ;;
     eval)
@@ -136,10 +141,29 @@ case "$1" in
             --dataset.repo_id=${EVAL_REPO_ID} \
             --dataset.single_task="Move lego block" \
             --dataset.num_episodes=${NUM_EVAL_EPISODES} \
+            --dataset.episode_time_s=120 \
             --teleop.type=so101_leader \
             --teleop.port=/dev/ttyUSB0 \
             --teleop.id=leader_arm_1 \
             --policy.path=${POLICY_REPO_ID}
+        ;;
+    tfs_viz)
+        echo ">>> Starting image transformation visualization..."
+        echo "    Dataset Repo: ${DATASET_REPO_ID}"
+        lerobot-imgtransform-viz \
+            --repo_id=${DATASET_REPO_ID} \
+            --image_transforms.enable=true \
+            --image_transforms.max_num_transforms=3 \
+            --image_transforms.random_order=false
+        ;;
+    merge_datasets)
+        echo ">>> Merging datasets..."
+        lerobot-edit-dataset \
+            --repo_id=jrkhf/so101_wrist_top_cameras_set_merged \
+            --operation.type=merge \
+            --operation.repo_ids="['jrkhf/so101_wrist_top_cameras_set_2', 'jrkhf/so101_wrist_top_cameras_set_daytime']" \
+            --push_to_hub=true \
+            --operation.reset_frame_indices=true
         ;;
     *)
         echo "Error: Invalid option '$1'."
