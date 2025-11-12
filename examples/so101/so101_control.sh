@@ -23,14 +23,15 @@
 ENV_NAME="SO101_ARM"
 
 # The Hugging Face repository ID where your dataset is/will be stored.
-DATASET_REPO_ID="jrkhf/so101_wrist_top_cameras_set_merged" # "jrkhf/so101_set_2"
+DATASET_REPO_ID="jrkhf/so101_wrist_top_cameras_set_2" # "jrkhf/so101_set_2"
 
 # The Hugging Face repository ID where your dataset is/will be stored.
-EVAL_REPO_ID="jrkhf/eval_so101"
+EVAL_REPO_ID="jrkhf/eval_so101_smolvala_20k"
 
 # The Hugging Face repository ID where your trained policy is/will be stored.
-POLICY_REPO_ID="jrkhf/so101_dual_cameras_act_policy_100k" # "lerobot/smolvla_base"
-
+# POLICY_REPO_ID="jrkhf/so101_dual_cameras_act_policy_80k" # "lerobot/smolvla_base"
+POLICY_REPO_ID="jrkhf/so101_smolvala_policy_20k"
+# POLICY_REPO_ID="jrkhf/so101_smolvala_policy_20k"
 # --- TASK-SPECIFIC PARAMETERS -------------------------------------------------
 
 # Number of episodes to record during a data collection session.
@@ -54,7 +55,8 @@ usage() {
     echo "Usage: $0 {teleop|record|train|eval}"
     echo "  teleop:      Start teleoperation interface."
     echo "  record:      Record ${NUM_RECORD_EPISODES} episodes of training data to '${DATASET_REPO_ID}'."
-    echo "  train:       Train a policy for ${NUM_TRAIN_STEPS} steps."
+    echo "  train_act:   Train an ACT policy for ${NUM_TRAIN_STEPS} steps."
+    echo "  train_smolvla: Train a SMOLVLA policy for ${NUM_TRAIN_STEPS} steps."
     echo "  eval:        Evaluate the '${EVAL_CHECKPOINT}' checkpoint of policy '${POLICY_REPO_ID}'."
 }
 
@@ -100,10 +102,10 @@ case "$1" in
             --dataset.single_task="Pick and drop lego block" \
             --dataset.episode_time_s=60 \
             --dataset.push_to_hub=True \
-            --resume=false
+            --resume=true
 
         ;;
-    train)
+    train_act)
         echo ">>> Starting policy training..."
         echo "    Dataset Repo: ${DATASET_REPO_ID}"
         echo "    Policy Repo:  ${POLICY_REPO_ID}"
@@ -125,6 +127,54 @@ case "$1" in
             --resume=false
 
         ;;
+    train_smolvla)
+        echo ">>> Starting policy training..."
+        echo "    Dataset Repo: ${DATASET_REPO_ID}"
+        echo "    Policy Repo:  ${POLICY_REPO_ID}"
+        echo "    Train Steps:  ${NUM_TRAIN_STEPS}"
+        lerobot-train \
+            --policy.type=smolvla \
+            --policy.pretrained_path=lerobot/smolvla_base \
+            --policy.repo_id="jrkhf/so101_smolvala_policy_20k" \
+            --dataset.repo_id=${DATASET_REPO_ID} \
+            --dataset.image_transforms.enable=true \
+            --dataset.image_transforms.random_order=true \
+            --dataset.image_transforms.max_num_transforms=2 \
+            --batch_size=1 \
+            --steps=20000 \
+            --output_dir="outputs/train/so101_smolvla" \
+            --job_name=my_smolvla_training \
+            --policy.device=cpu \
+            --wandb.enable=true \
+            --save_freq=5000 \
+            --resume=false \
+            --policy.input_features='{"observation.images.top": {"type": "VISUAL", "shape": [3, 480, 640]}, "observation.images.wrist": {"type": "VISUAL", "shape": [3, 480, 640]}}'
+        ;;
+    train_pi0)
+        echo ">>> Starting policy training..."
+        echo "    Dataset Repo: ${DATASET_REPO_ID}"
+        echo "    Policy Repo:  ${POLICY_REPO_ID}"
+        echo "    Train Steps:  ${NUM_TRAIN_STEPS}"
+        lerobot-train \
+            --policy.type=pi0 \
+            --policy.pretrained_path=lerobot/pi0_base \
+            --policy.repo_id=$"jrkhf/so101_pi0_policy_20k" \
+            --dataset.repo_id=${DATASET_REPO_ID} \
+            --dataset.image_transforms.enable=false \
+            --dataset.image_transforms.random_order=true \
+            --dataset.image_transforms.max_num_transforms=2 \
+            --batch_size=1 \
+            --steps=1 \
+            --output_dir="outputs/train/so101_pi0" \
+            --job_name=my_pi0_training \
+            --num_workers=0 \
+            --policy.device=cpu \
+            --wandb.enable=true \
+            --save_freq=5000 \
+            --resume=false
+            # --policy.input_features='{"observation.images.top": {"type": "VISUAL", "shape": [3, 480, 640]}, "observation.images.wrist": {"type": "VISUAL", "shape": [3, 480, 640]}}'
+        ;;
+
     eval)
         echo ">>> Starting policy evaluation..."
         echo "    Environment: ${ENV_NAME}"
@@ -141,11 +191,12 @@ case "$1" in
             --dataset.repo_id=${EVAL_REPO_ID} \
             --dataset.single_task="Move lego block" \
             --dataset.num_episodes=${NUM_EVAL_EPISODES} \
-            --dataset.episode_time_s=120 \
+            --dataset.episode_time_s=300 \
             --teleop.type=so101_leader \
             --teleop.port=/dev/ttyUSB0 \
             --teleop.id=leader_arm_1 \
-            --policy.path=${POLICY_REPO_ID}
+            --policy.path=${POLICY_REPO_ID} \
+            --resume=false
         ;;
     tfs_viz)
         echo ">>> Starting image transformation visualization..."
