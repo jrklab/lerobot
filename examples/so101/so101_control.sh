@@ -80,6 +80,12 @@ case "$1" in
             --teleop.type=so101_leader \
             --teleop.port=/dev/ttyUSB0 \
             --teleop.id=leader_arm_1 \
+            --torque_feedback.enabled=true \
+            --torque_feedback.per_motor_thresholds="{shoulder_pan: 0.2, shoulder_lift: 0.5, \
+            elbow_flex: 0.5, wrist_flex: 0.5, wrist_roll: 0.3, gripper: 0.2}" \
+            --torque_feedback.global_scale_factor=1.0 \
+            --torque_feedback.per_motor_scales="{shoulder_pan: 1.0, shoulder_lift: 1.0, \
+            elbow_flex: 1.0, wrist_flex: 1.0, wrist_roll: 1.0, gripper: 1.0}" \
             --display_data=true
         ;;
     record)

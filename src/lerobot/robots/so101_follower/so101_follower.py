@@ -65,6 +65,10 @@ class SO101Follower(Robot):
         return {f"{motor}.pos": float for motor in self.bus.motors}
 
     @property
+    def _motors_load_ft(self) -> dict[str, type]:
+        return {f"{motor}.load": float for motor in self.bus.motors}
+
+    @property
     def _cameras_ft(self) -> dict[str, tuple]:
         return {
             cam: (self.config.cameras[cam].height, self.config.cameras[cam].width, 3) for cam in self.cameras
@@ -72,7 +76,7 @@ class SO101Follower(Robot):
 
     @cached_property
     def observation_features(self) -> dict[str, type | tuple]:
-        return {**self._motors_ft, **self._cameras_ft}
+        return {**self._motors_ft, **self._motors_load_ft, **self._cameras_ft}
 
     @cached_property
     def action_features(self) -> dict[str, type]:
@@ -174,10 +178,16 @@ class SO101Follower(Robot):
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected.")
 
-        # Read arm position
+        # Read arm position and load feedback
         start = time.perf_counter()
         obs_dict = self.bus.sync_read("Present_Position")
         obs_dict = {f"{motor}.pos": val for motor, val in obs_dict.items()}
+        
+        # Read present load for torque feedback
+        # Present_Load uses sign-magnitude format: bit 10 is sign bit, lower 10 bits are magnitude
+        load_dict = self.bus.sync_read("Present_Load")
+        # Extract absolute value (magnitude only, ignore direction)
+        obs_dict.update({f"{motor}.load": (val & 0x3FF) for motor, val in load_dict.items()})
         dt_ms = (time.perf_counter() - start) * 1e3
         logger.debug(f"{self} read state: {dt_ms:.1f}ms")
 

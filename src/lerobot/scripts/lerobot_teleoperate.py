@@ -88,10 +88,13 @@ from lerobot.teleoperators import (  # noqa: F401
     so100_leader,
     so101_leader,
 )
+from lerobot.teleoperators.torque_feedback import TorqueFeedbackConfig, map_load_to_torque_limit
 from lerobot.utils.import_utils import register_third_party_devices
 from lerobot.utils.robot_utils import busy_wait
 from lerobot.utils.utils import init_logging, move_cursor_up
 from lerobot.utils.visualization_utils import init_rerun, log_rerun_data
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -104,6 +107,12 @@ class TeleoperateConfig:
     teleop_time_s: float | None = None
     # Display all cameras on screen
     display_data: bool = False
+    # Torque feedback configuration
+    torque_feedback: TorqueFeedbackConfig = None  # type: ignore
+
+    def __post_init__(self):
+        if self.torque_feedback is None:
+            self.torque_feedback = TorqueFeedbackConfig()
 
 
 def teleop_loop(
@@ -115,6 +124,7 @@ def teleop_loop(
     robot_observation_processor: RobotProcessorPipeline[RobotObservation, RobotObservation],
     display_data: bool = False,
     duration: float | None = None,
+    torque_feedback_config: TorqueFeedbackConfig | None = None,
 ):
     """
     This function continuously reads actions from a teleoperation device, processes them through optional
@@ -130,7 +140,11 @@ def teleop_loop(
         teleop_action_processor: An optional pipeline to process raw actions from the teleoperator.
         robot_action_processor: An optional pipeline to process actions before they are sent to the robot.
         robot_observation_processor: An optional pipeline to process raw observations from the robot.
+        torque_feedback_config: Configuration for torque feedback. If None or disabled, no feedback is sent.
     """
+
+    if torque_feedback_config is None:
+        torque_feedback_config = TorqueFeedbackConfig()
 
     display_len = max(len(key) for key in robot.action_features)
     start = time.perf_counter()
@@ -156,6 +170,22 @@ def teleop_loop(
         # Send processed action to robot (robot_action_processor.to_output should return dict[str, Any])
         _ = robot.send_action(robot_action_to_send)
 
+        # Extract load feedback and send to teleoperator if enabled
+        if torque_feedback_config.enabled:
+            # Extract Present_Load from observations
+            load_dict = {key.removesuffix(".load"): val for key, val in obs.items() if key.endswith(".load")}
+            if load_dict:
+                # Map loads to torque limits
+                torque_limits = map_load_to_torque_limit(
+                    load_dict,
+                    torque_feedback_config,
+                    motor_names=list(robot.bus.motors.keys()),
+                )
+                # Send feedback to teleoperator
+                feedback_dict = {f"{motor}.torque": val for motor, val in torque_limits.items()}
+                teleop.send_feedback(feedback_dict)
+
+
         if display_data:
             # Process robot observation through pipeline
             obs_transition = robot_observation_processor(obs)
@@ -165,12 +195,30 @@ def teleop_loop(
                 action=teleop_action,
             )
 
-            print("\n" + "-" * (display_len + 10))
-            print(f"{'NAME':<{display_len}} | {'NORM':>7}")
-            # Display the final robot action that was sent
-            for motor, value in robot_action_to_send.items():
-                print(f"{motor:<{display_len}} | {value:>7.2f}")
-            move_cursor_up(len(robot_action_to_send) + 5)
+            print("\n" + "-" * (display_len + 20))
+            print("FOLLOWER OBSERVATIONS:")
+            print(f"{'Motor':<{display_len}} | {'Pos':>7} | {'Load':>7}")
+            for motor in robot.bus.motors:
+                pos = obs.get(f"{motor}.pos", 0)
+                load = obs.get(f"{motor}.load", 0)
+                print(f"{motor:<{display_len}} | {pos:7.2f} | {load:7.0f}")
+
+            # Display leader feedback (if enabled)
+            if torque_feedback_config.enabled:
+                load_dict = {key.removesuffix(".load"): val for key, val in obs.items() if key.endswith(".load")}
+                if load_dict:
+                    torque_limits = map_load_to_torque_limit(
+                        load_dict,
+                        torque_feedback_config,
+                        motor_names=list(robot.bus.motors.keys()),
+                    )
+                    print("\n" + "-" * (display_len + 20))
+                    print("LEADER FEEDBACK (Torque Limits):")
+                    print(f"{'Motor':<{display_len}} | {'Torque':>7}")
+                    for motor, torque_val in torque_limits.items():
+                        print(f"{motor:<{display_len}} | {torque_val:7.1f}")
+                    move_cursor_up(len(robot.bus.motors) + 4)
+            move_cursor_up(len(robot.bus.motors) + 6)
 
         dt_s = time.perf_counter() - loop_start
         busy_wait(1 / fps - dt_s)
@@ -205,6 +253,7 @@ def teleoperate(cfg: TeleoperateConfig):
             teleop_action_processor=teleop_action_processor,
             robot_action_processor=robot_action_processor,
             robot_observation_processor=robot_observation_processor,
+            torque_feedback_config=cfg.torque_feedback,
         )
     except KeyboardInterrupt:
         pass
