@@ -162,6 +162,9 @@ class OpenCVCamera(Camera):
 
         self.videocapture = cv2.VideoCapture(self.index_or_path, self.backend)
 
+        # Force the camera to use MJPEG compression to save USB bandwidth
+        self.videocapture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc('M', 'J', 'P', 'G'))
+
         if not self.videocapture.isOpened():
             self.videocapture.release()
             self.videocapture = None
