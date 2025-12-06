@@ -25,8 +25,8 @@ from lerobot.utils.visualization_utils import init_rerun, log_rerun_data
 FPS = 30
 
 # Create the robot and teleoperator configurations
-robot_config = LeKiwiClientConfig(remote_ip="192.168.1.162", id="my_kiwi_1")
-teleop_arm_config = SO101LeaderConfig(port="/dev/ttyUSB0", id="leader_arm_1")
+robot_config = LeKiwiClientConfig(remote_ip="192.168.1.176", id="my_kiwi_1")
+teleop_arm_config = SO101LeaderConfig(port="/dev/ttyUSB1", id="leader_arm_1")
 keyboard_config = KeyboardTeleopConfig(id="my_laptop_keyboard")
 
 # Initialize the robot and teleoperator
