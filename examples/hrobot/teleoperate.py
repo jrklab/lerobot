@@ -26,8 +26,9 @@ FPS = 30
 
 # --- Robot and Teleop Configuration ---
 # IMPORTANT: Replace with your actual IP address and port.
-robot_config = HRobotClientConfig(remote_ip="192.168.1.176", id="hrobot_follower")
-teleop_config = BiSO101LeaderConfig(port="/dev/ttyUSB1", id="hrobot_leader")
+# robot_config = HRobotClientConfig(remote_ip="localhost", id="hrobot_follower") # localhost for debugging
+robot_config = HRobotClientConfig(remote_ip="raspberrypi.local", id="hrobot_follower") # with raspberry pi
+teleop_config = BiSO101LeaderConfig(port="/dev/ttyUSB0", id="hrobot_leader")
 keyboard_config = KeyboardTeleopConfig(id="keyboard_base_control")
 
 # --- Initialization ---

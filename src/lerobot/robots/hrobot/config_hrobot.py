@@ -87,10 +87,14 @@ class HRobotClientConfig(RobotConfig):
             "head_lift_down": "k",
             "head_pan_left": "j",
             "head_pan_right": "l",
+            "head_reset": "n",
             # quit teleop
             "quit": "q",
         }
     )
+
+    head_reset_pan: float = 0.0
+    head_reset_lift: float = 70.0 # in percent of full range
 
     cameras: dict[str, CameraConfig] = field(default_factory=hrobot_cameras_config)
 

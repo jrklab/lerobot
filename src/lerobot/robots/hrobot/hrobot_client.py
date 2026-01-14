@@ -57,6 +57,10 @@ class HRobotClient(Robot):
         self.last_frames = {}
         self.last_remote_state = {}
 
+        self.client_head_pan = 0.0
+        self.client_head_lift = 0.0
+        self.head_initialized = False
+
         self.speed_levels = [
             {"xy": 0.1, "theta": 30},  # slow
             {"xy": 0.2, "theta": 60},  # medium
@@ -285,17 +289,29 @@ class HRobotClient(Robot):
         head_pan_step = 2.0
         head_lift_step = 2.0
 
-        new_head_pan = current_pos.get("head_pan.pos", 0.0)
-        new_head_lift = current_pos.get("head_lift.pos", 0.0)
+        if not self.head_initialized and "head_pan.pos" in current_pos:
+            self.client_head_pan = current_pos.get("head_pan.pos", 0.0)
+            self.client_head_lift = current_pos.get("head_lift.pos", 0.0)
+            self.head_initialized = True
 
-        if self.teleop_keys["head_pan_left"] in pressed_keys:
-            new_head_pan -= head_pan_step
-        if self.teleop_keys["head_pan_right"] in pressed_keys:
-            new_head_pan += head_pan_step
-        if self.teleop_keys["head_lift_up"] in pressed_keys:
-            new_head_lift -= head_lift_step
-        if self.teleop_keys["head_lift_down"] in pressed_keys:
-            new_head_lift += head_lift_step
+        new_head_pan = self.client_head_pan
+        new_head_lift = self.client_head_lift
+
+        if self.teleop_keys["head_reset"] in pressed_keys:
+            new_head_pan = self.config.head_reset_pan
+            new_head_lift = self.config.head_reset_lift
+        else:
+            if self.teleop_keys["head_pan_left"] in pressed_keys:
+                new_head_pan -= head_pan_step
+            if self.teleop_keys["head_pan_right"] in pressed_keys:
+                new_head_pan += head_pan_step
+            if self.teleop_keys["head_lift_up"] in pressed_keys:
+                new_head_lift -= head_lift_step
+            if self.teleop_keys["head_lift_down"] in pressed_keys:
+                new_head_lift += head_lift_step
+
+        self.client_head_pan = new_head_pan
+        self.client_head_lift = new_head_lift
 
         return {
             "head_pan.pos": new_head_pan,
