@@ -16,7 +16,6 @@
 
 import time
 
-from lerobot.robots.hrobot.hrobot_audio_client import AudioClient
 from lerobot.robots.hrobot.hrobot_client import HRobotClient, HRobotClientConfig
 from lerobot.teleoperators.bi_so101_leader.bi_so101_leader import BiSO101Leader, BiSO101LeaderConfig
 from lerobot.teleoperators.keyboard import KeyboardTeleop, KeyboardTeleopConfig
@@ -24,12 +23,11 @@ from lerobot.utils.robot_utils import busy_wait
 from lerobot.utils.visualization_utils import init_rerun, log_rerun_data
 
 FPS = 30
-ENABLE_AUDIO = True
 
 # --- Robot and Teleop Configuration ---
 # IMPORTANT: Replace with your actual IP address and port.
 # robot_config = HRobotClientConfig(remote_ip="localhost", id="hrobot_follower") # localhost for debugging
-robot_config = HRobotClientConfig(remote_ip="raspberrypi.local", id="hrobot_follower")  # with raspberry pi
+robot_config = HRobotClientConfig(remote_ip="raspberrypi.local", id="hrobot_follower") # with raspberry pi
 teleop_config = BiSO101LeaderConfig(port="/dev/ttyUSB0", id="hrobot_leader")
 keyboard_config = KeyboardTeleopConfig(id="keyboard_base_control")
 
@@ -37,7 +35,6 @@ keyboard_config = KeyboardTeleopConfig(id="keyboard_base_control")
 robot = HRobotClient(robot_config)
 leader_arms = BiSO101Leader(teleop_config)
 keyboard = KeyboardTeleop(keyboard_config)
-audio_client = None
 
 # --- Connection ---
 # Make sure the host script is running on the robot:
@@ -46,43 +43,25 @@ robot.connect()
 leader_arms.connect()
 keyboard.connect()
 
+init_rerun(session_name="hrobot_teleop")
+
 if not all((robot.is_connected, leader_arms.is_connected, keyboard.is_connected)):
     raise ConnectionError("Failed to connect to one or more devices.")
 
-try:
-    if ENABLE_AUDIO:
-        print("Starting audio client...")
-        audio_client = AudioClient(robot_ip=robot_config.remote_ip)
-        audio_client.start()
+print("Starting teleoperation loop...")
+while True:
+    t0 = time.perf_counter()
 
-    init_rerun(session_name="hrobot_teleop")
+    observation = robot.get_observation()
 
-    print("Starting teleoperation loop...")
-    while True:
-        t0 = time.perf_counter()
+    arm_action = leader_arms.get_action()
+    keyboard_keys = keyboard.get_action()
+    base_action = robot._from_keyboard_to_base_action(keyboard_keys)
+    head_action = robot._from_keyboard_to_head_action(keyboard_keys, observation)
 
-        observation = robot.get_observation()
+    action = {**arm_action, **base_action, **head_action}
+    _ = robot.send_action(action)
 
-        arm_action = leader_arms.get_action()
-        keyboard_keys = keyboard.get_action()
-        base_action = robot._from_keyboard_to_base_action(keyboard_keys)
-        head_action = robot._from_keyboard_to_head_action(keyboard_keys, observation)
+    log_rerun_data(observation=observation, action=action)
 
-        action = {**arm_action, **base_action, **head_action}
-        _ = robot.send_action(action)
-
-        log_rerun_data(observation=observation, action=action)
-
-        busy_wait(max(0.0, 1.0 / FPS - (time.perf_counter() - t0)))
-
-except KeyboardInterrupt:
-    print("Keyboard interrupt received.")
-
-finally:
-    print("Shutting down...")
-    if audio_client:
-        audio_client.stop()
-    robot.disconnect()
-    leader_arms.disconnect()
-    keyboard.disconnect()
-    print("Shutdown complete.")
+    busy_wait(max(0.0, 1.0 / FPS - (time.perf_counter() - t0)))

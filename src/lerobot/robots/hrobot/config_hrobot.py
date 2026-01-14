@@ -61,12 +61,6 @@ class HRobotHostConfig:
     # If robot jitters decrease the frequency and monitor cpu load with `top` in cmd
     max_loop_freq_hz: int = 30
 
-    # Audio Configuration
-    enable_audio: bool = False
-    audio_device: str = "USB"
-    audio_mic_port: int = 6002
-    audio_speaker_port: int = 6003
-
 
 @RobotConfig.register_subclass("hrobot_client")
 @dataclass
