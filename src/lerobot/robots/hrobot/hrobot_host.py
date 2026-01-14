@@ -26,6 +26,7 @@ import zmq
 
 from lerobot.robots.hrobot.config_hrobot import HRobotConfig, HRobotHostConfig
 from lerobot.robots.hrobot.hrobot import HRobot
+from lerobot.robots.hrobot.hrobot_audio_handler import AudioHandler
 
 
 @dataclass
@@ -51,7 +52,22 @@ class HRobotHost:
         self.watchdog_timeout_ms = config.watchdog_timeout_ms
         self.max_loop_freq_hz = config.max_loop_freq_hz
 
+        self.audio_handler = None
+        if config.enable_audio:
+            try:
+                self.audio_handler = AudioHandler(
+                    audio_device=config.audio_device,
+                    mic_port=config.audio_mic_port,
+                    speaker_port=config.audio_speaker_port,
+                )
+                self.audio_handler.start()
+            except Exception as e:
+                logging.error(f"Failed to initialize AudioHandler: {e}")
+                self.audio_handler = None
+
     def disconnect(self):
+        if self.audio_handler:
+            self.audio_handler.stop()
         self.zmq_observation_socket.close()
         self.zmq_cmd_socket.close()
         self.zmq_context.term()
