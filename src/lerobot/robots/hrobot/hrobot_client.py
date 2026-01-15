@@ -68,6 +68,9 @@ class HRobotClient(Robot):
         ]
         self.speed_index = 0
 
+        self.voice_base_velocity = {"x": 0.0, "y": 0.0, "theta": 0.0}
+        self.voice_control_mode = "decay"
+
         self._is_connected = False
         self.logs = {}
 
@@ -317,6 +320,107 @@ class HRobotClient(Robot):
             "head_pan.pos": new_head_pan,
             "head_lift.pos": new_head_lift,
         }
+
+    def _from_voice_to_base_action(self, voice_command: tuple[str, str] | None):
+        if voice_command and voice_command[0] == 'base':
+            command = voice_command[1]
+            
+            # Handle mode switching
+            if command == "continuous_mode":
+                self.voice_control_mode = 'continuous'
+                print("Switched to continuous voice control mode.")
+                self.voice_base_velocity = {"x": 0.0, "y": 0.0, "theta": 0.0}
+            elif command == "decay_mode":
+                self.voice_control_mode = 'decay'
+                print("Switched to decay voice control mode.")
+                self.voice_base_velocity = {"x": 0.0, "y": 0.0, "theta": 0.0}
+            
+            # Handle movement commands
+            elif command == "speed_up":
+                self.speed_index = min(self.speed_index + 1, len(self.speed_levels) - 1)
+            elif command == "speed_down":
+                self.speed_index = max(self.speed_index - 1, 0)
+            
+            speed_setting = self.speed_levels[self.speed_index]
+            xy_speed = speed_setting["xy"]
+            theta_speed = speed_setting["theta"]
+
+            if command == "forward":
+                self.voice_base_velocity["x"] = float(xy_speed)
+            elif command == "backward":
+                self.voice_base_velocity["x"] = float(-xy_speed)
+            elif command == "left":
+                self.voice_base_velocity["y"] = float(xy_speed)
+            elif command == "right":
+                self.voice_base_velocity["y"] = float(-xy_speed)
+            elif command == "rotate_left":
+                self.voice_base_velocity["theta"] = float(theta_speed)
+            elif command == "rotate_right":
+                self.voice_base_velocity["theta"] = float(-theta_speed)
+            elif command == "stop":
+                self.voice_base_velocity = {"x": 0.0, "y": 0.0, "theta": 0.0}
+
+            # in case of speed change, if a velocity is already non-zero, update it
+            if self.voice_base_velocity["x"] != 0:
+                self.voice_base_velocity["x"] = float(xy_speed * np.sign(self.voice_base_velocity["x"]))
+            if self.voice_base_velocity["y"] != 0:
+                self.voice_base_velocity["y"] = float(xy_speed * np.sign(self.voice_base_velocity["y"]))
+            if self.voice_base_velocity["theta"] != 0:
+                self.voice_base_velocity["theta"] = float(theta_speed * np.sign(self.voice_base_velocity["theta"]))
+
+        elif self.voice_control_mode == 'decay':
+            decay_factor = 0.95 # This can be configured
+            self.voice_base_velocity["x"] *= decay_factor
+            self.voice_base_velocity["y"] *= decay_factor
+            self.voice_base_velocity["theta"] *= decay_factor
+            
+            if abs(self.voice_base_velocity["x"]) < 0.01: self.voice_base_velocity["x"] = 0.0
+            if abs(self.voice_base_velocity["y"]) < 0.01: self.voice_base_velocity["y"] = 0.0
+            if abs(self.voice_base_velocity["theta"]) < 0.1: self.voice_base_velocity["theta"] = 0.0
+        
+        return {
+            "x.vel": self.voice_base_velocity["x"],
+            "y.vel": self.voice_base_velocity["y"],
+            "theta.vel": self.voice_base_velocity["theta"],
+        }
+
+    def _from_voice_to_head_action(self, voice_command: tuple[str, str] | None, current_pos: dict[str, float]):
+        if voice_command is None or voice_command[0] != 'head':
+            return {}
+
+        head_pan_step = 5.0
+        head_lift_step = 5.0
+
+        if not self.head_initialized and "head_pan.pos" in current_pos:
+            self.client_head_pan = current_pos.get("head_pan.pos", 0.0)
+            self.client_head_lift = current_pos.get("head_lift.pos", 0.0)
+            self.head_initialized = True
+
+        new_head_pan = self.client_head_pan
+        new_head_lift = self.client_head_lift
+
+        command = voice_command[1]
+
+        if command == "reset":
+            new_head_pan = self.config.head_reset_pan
+            new_head_lift = self.config.head_reset_lift
+        elif command == "turn_left":
+            new_head_pan -= head_pan_step
+        elif command == "turn_right":
+            new_head_pan += head_pan_step
+        elif command == "up":
+            new_head_lift -= head_lift_step
+        elif command == "down":
+            new_head_lift += head_lift_step
+
+        self.client_head_pan = new_head_pan
+        self.client_head_lift = new_head_lift
+
+        return {
+            "head_pan.pos": new_head_pan,
+            "head_lift.pos": new_head_lift,
+        }
+
 
     def configure(self):
         pass
