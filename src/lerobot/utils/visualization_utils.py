@@ -60,11 +60,11 @@ def log_rerun_data(
 
     This function iterates through the provided observation and action dictionaries and sends their contents
     to the Rerun viewer. It handles different data types appropriately:
-    - Scalars values (floats, ints) are logged as `rr.Scalars`.
+    - Scalar values (floats, ints) are logged as `rr.Scalar`.
     - 3D NumPy arrays that resemble images (e.g., with 1, 3, or 4 channels first) are transposed
       from CHW to HWC format, (optionally) compressed to JPEG and logged as `rr.Image` or `rr.EncodedImage`.
-    - 1D NumPy arrays are logged as a series of individual scalars, with each element indexed.
-    - Other multi-dimensional arrays are flattened and logged as individual scalars.
+    - 1D NumPy arrays are logged as a series of individual Scalar, with each element indexed.
+    - Other multi-dimensional arrays are flattened and logged as individual Scalar.
 
     Keys are automatically namespaced with "observation." or "action." if not already present.
 
