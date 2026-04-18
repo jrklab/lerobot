@@ -20,7 +20,14 @@ from enum import Enum
 from typing import Any, TypedDict
 
 import numpy as np
-import torch
+
+try:
+    import torch
+
+    _torch_available = True
+except Exception:
+    torch = None  # type: ignore[assignment]
+    _torch_available = False
 
 
 class TransitionKey(str, Enum):
@@ -36,7 +43,7 @@ class TransitionKey(str, Enum):
     COMPLEMENTARY_DATA = "complementary_data"
 
 
-PolicyAction = torch.Tensor
+PolicyAction = torch.Tensor if _torch_available else Any
 RobotAction = dict[str, Any]
 EnvAction = np.ndarray
 RobotObservation = dict[str, Any]
@@ -46,10 +53,10 @@ EnvTransition = TypedDict(
     "EnvTransition",
     {
         TransitionKey.OBSERVATION.value: RobotObservation | None,
-        TransitionKey.ACTION.value: PolicyAction | RobotAction | EnvAction | None,
-        TransitionKey.REWARD.value: float | torch.Tensor | None,
-        TransitionKey.DONE.value: bool | torch.Tensor | None,
-        TransitionKey.TRUNCATED.value: bool | torch.Tensor | None,
+        TransitionKey.ACTION.value: Any,
+        TransitionKey.REWARD.value: Any,
+        TransitionKey.DONE.value: Any,
+        TransitionKey.TRUNCATED.value: Any,
         TransitionKey.INFO.value: dict[str, Any] | None,
         TransitionKey.COMPLEMENTARY_DATA.value: dict[str, Any] | None,
     },
