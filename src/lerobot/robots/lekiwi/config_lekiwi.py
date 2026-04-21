@@ -104,5 +104,10 @@ class LeKiwiClientConfig(RobotConfig):
 
     cameras: dict[str, CameraConfig] = field(default_factory=lekiwi_cameras_config)
 
+    # Must match the `use_degrees` setting on the LeKiwi server (lekiwi_host).
+    # False → actions in normalized range [-100, 100] (default).
+    # True  → actions in physical degrees.
+    use_degrees: bool = False
+
     polling_timeout_ms: int = 15
     connect_timeout_s: int = 5

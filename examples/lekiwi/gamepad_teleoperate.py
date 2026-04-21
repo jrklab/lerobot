@@ -115,8 +115,9 @@ except ImportError:
 # Frame-rate of the control loop
 FPS = 30
 
-# Joint position limits (degrees).  Clip all computed targets within these.
-JOINT_LIMITS: dict[str, tuple[float, float]] = {
+# Joint position limits in DEGREES (use_degrees=True).
+# Clip all computed targets within these bounds.
+JOINT_LIMITS_DEG: dict[str, tuple[float, float]] = {
     "arm_shoulder_pan":  (-180.0, 180.0),
     "arm_shoulder_lift": (-120.0,  80.0),
     "arm_elbow_flex":    (  -5.0, 180.0),
@@ -125,8 +126,19 @@ JOINT_LIMITS: dict[str, tuple[float, float]] = {
     "arm_gripper":       (   0.0, 100.0),
 }
 
-# Neutral/home joint angles (degrees) — sent when B (BTN_SOUTH) is pressed.
-ARM_NEUTRAL_POS: dict[str, float] = {
+# Joint position limits in NORMALIZED range [-100, 100] (use_degrees=False).
+# Derived by scaling degree limits by 100/180; gripper keeps [0, 100].
+JOINT_LIMITS_NORM: dict[str, tuple[float, float]] = {
+    "arm_shoulder_pan":  (-100.0, 100.0),
+    "arm_shoulder_lift": ( -100.0,  100.0),
+    "arm_elbow_flex":    (  -100.0, 100.0),
+    "arm_wrist_flex":    ( -100.0,  100.0),
+    "arm_wrist_roll":    (-100.0, 100.0),
+    "arm_gripper":       (   0.0, 100.0),
+}
+
+# Neutral/home joint angles in DEGREES — sent when B (BTN_SOUTH) is pressed.
+ARM_NEUTRAL_POS_DEG: dict[str, float] = {
     "arm_shoulder_pan":  0.0,
     "arm_shoulder_lift": -30.0,
     "arm_elbow_flex":    60.0,
@@ -135,17 +147,37 @@ ARM_NEUTRAL_POS: dict[str, float] = {
     "arm_gripper":       50.0,
 }
 
-# Three speed levels — joint/wrist_roll/gripper are degrees per frame at full input.
-# At FPS=30: 1 deg/frame = 30 deg/s.
-# xy   : base linear speed  (m/s)
-# theta: base angular speed (deg/s)
-SPEED_LEVELS = [
+# Neutral/home joint angles in NORMALIZED range [-100, 100].
+ARM_NEUTRAL_POS_NORM: dict[str, float] = {
+    "arm_shoulder_pan":  0.0,
+    "arm_shoulder_lift": -17.0,
+    "arm_elbow_flex":    33.0,
+    "arm_wrist_flex":    -17.0,
+    "arm_wrist_roll":    0.0,
+    "arm_gripper":       50.0,
+}
+
+# Three speed levels — joint/wrist_roll/gripper are units per frame at full input.
+# At FPS=30: 1 unit/frame = 30 units/s.
+# Degree mode:      1 deg/frame  = 30 deg/s
+# Normalized mode:  0.56/frame   ≈ 17 norm-units/s  (same physical rate)
+SPEED_LEVELS_DEG = [
     # slow
     {"joint": 0.5,  "wrist_roll": 0.8,  "gripper": 0.8,  "xy": 0.10, "theta": 30.0},
     # medium  ← default
     {"joint": 1.0,  "wrist_roll": 1.5,  "gripper": 1.5,  "xy": 0.20, "theta": 60.0},
     # fast
     {"joint": 2.0,  "wrist_roll": 3.0,  "gripper": 3.0,  "xy": 0.35, "theta": 90.0},
+]
+
+# Normalized equivalents: joint speeds scaled by 100/180 ≈ 0.556
+SPEED_LEVELS_NORM = [
+    # slow
+    {"joint": 0.28, "wrist_roll": 0.44, "gripper": 0.8,  "xy": 0.10, "theta": 30.0},
+    # medium  ← default
+    {"joint": 0.56, "wrist_roll": 0.83, "gripper": 1.5,  "xy": 0.20, "theta": 60.0},
+    # fast
+    {"joint": 1.11, "wrist_roll": 1.67, "gripper": 3.0,  "xy": 0.35, "theta": 90.0},
 ]
 
 
@@ -329,8 +361,8 @@ class GamepadReader:
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 
 
-def clamp_joint(joint_name: str, value: float) -> float:
-    lo, hi = JOINT_LIMITS[joint_name]
+def clamp_joint(joint_name: str, value: float, limits: dict[str, tuple[float, float]]) -> float:
+    lo, hi = limits[joint_name]
     return float(np.clip(value, lo, hi))
 
 
@@ -340,6 +372,14 @@ def clamp_joint(joint_name: str, value: float) -> float:
 def main():
     robot_config = LeKiwiClientConfig(remote_ip="raspberrypi.local", id="my_lekiwi")
     robot = LeKiwiClient(robot_config)
+
+    # Select unit system based on robot config
+    use_degrees = robot_config.use_degrees
+    JOINT_LIMITS  = JOINT_LIMITS_DEG  if use_degrees else JOINT_LIMITS_NORM
+    ARM_NEUTRAL_POS = ARM_NEUTRAL_POS_DEG if use_degrees else ARM_NEUTRAL_POS_NORM
+    SPEED_LEVELS  = SPEED_LEVELS_DEG  if use_degrees else SPEED_LEVELS_NORM
+    unit_label = "deg" if use_degrees else "norm[-100,100]"
+    print(f"[CONFIG] use_degrees={use_degrees} — joint units: {unit_label}")
 
     gamepad = GamepadReader()
     gamepad.start()
@@ -458,7 +498,7 @@ def main():
         }
 
         for joint, delta in deltas.items():
-            joint_pos[joint] = clamp_joint(joint, joint_pos[joint] + delta)
+            joint_pos[joint] = clamp_joint(joint, joint_pos[joint] + delta, JOINT_LIMITS)
 
         arm_action: dict[str, float] = {
             f"{joint}.pos": pos for joint, pos in joint_pos.items()

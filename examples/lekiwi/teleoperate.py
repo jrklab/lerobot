@@ -59,6 +59,8 @@ def main():
         # Arm
         arm_action = leader_arm.get_action()
         arm_action = {f"arm_{k}": v for k, v in arm_action.items()}
+        # print arm action for debugging with timestamp
+        print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Arm action: {arm_action}")
         # Keyboard
         keyboard_keys = keyboard.get_action()
         base_action = robot._from_keyboard_to_base_action(keyboard_keys)
