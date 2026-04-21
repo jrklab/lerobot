@@ -16,18 +16,35 @@
 
 from __future__ import annotations
 
+import importlib.util
+import subprocess
+import sys
 from enum import Enum
 from typing import Any, TypedDict
 
 import numpy as np
 
-try:
-    import torch
 
-    _torch_available = True
-except Exception:
+def _probe_torch_available() -> bool:
+    """Check if torch can actually be imported without crashing (SIGILL-safe)."""
+    if importlib.util.find_spec("torch") is None:
+        return False
+    try:
+        result = subprocess.run(
+            [sys.executable, "-c", "import torch"],
+            timeout=15,
+            capture_output=True,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+_torch_available = _probe_torch_available()
+if _torch_available:
+    import torch
+else:
     torch = None  # type: ignore[assignment]
-    _torch_available = False
 
 
 class TransitionKey(str, Enum):
