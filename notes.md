@@ -4,15 +4,19 @@
 ```bash
 uv sync --locked --extra feetech --extra lekiwi --extra viz --extra pynput-dep
 ```
-
 add needed dependency with `--extra`
 
-## Run teleoperation with SO101 arm
+## Run Lekiwi host on Raspberry Pi, under ~/Work/lerobot
+```bash
+./run_lekiwi_host.sh
+```
+
+## Run teleoperation with SO101 arm, only working on host laptop
 ```bash
 uv run python examples/lekiwi/teleoperate.py
 ```
 
-## Run teleoperation with gamepad
+## Run teleoperation with gamepad, working on both host laptop and on raspberrypi
 ```bash
 uv run python examples/lekiwi/gamepad_teleoperate.py
 ```
@@ -37,3 +41,4 @@ uv run lerobot-calibrate --robot.type=lekiwi --robot.port=/dev/ttyUSB0 --robot.i
     -Type pair [MAC Address]
     -Type trust [MAC Address] to ensure it reconnects automatically.
     -Type connect [MAC Address] to connect
+    -Other commands, disconnect[MAC Address], and remove [MAC Address]
