@@ -150,11 +150,11 @@ ARM_NEUTRAL_POS_DEG: dict[str, float] = {
 # Neutral/home joint angles in NORMALIZED range [-100, 100].
 ARM_NEUTRAL_POS_NORM: dict[str, float] = {
     "arm_shoulder_pan":  0.0,
-    "arm_shoulder_lift": -17.0,
-    "arm_elbow_flex":    33.0,
-    "arm_wrist_flex":    -17.0,
-    "arm_wrist_roll":    0.0,
-    "arm_gripper":       50.0,
+    "arm_shoulder_lift": -98.0,
+    "arm_elbow_flex":    99.0,
+    "arm_wrist_flex":    75.0,
+    "arm_wrist_roll":    52.0,
+    "arm_gripper":       2.0,
 }
 
 # Three speed levels — joint/wrist_roll/gripper are units per frame at full input.
@@ -173,11 +173,11 @@ SPEED_LEVELS_DEG = [
 # Normalized equivalents: joint speeds scaled by 100/180 ≈ 0.556
 SPEED_LEVELS_NORM = [
     # slow
-    {"joint": 0.28, "wrist_roll": 0.44, "gripper": 0.8,  "xy": 0.10, "theta": 30.0},
+    {"joint": 0.5, "wrist_roll": 0.8, "gripper": 0.8,  "xy": 0.10, "theta": 30.0},
     # medium  ← default
-    {"joint": 0.56, "wrist_roll": 0.83, "gripper": 1.5,  "xy": 0.20, "theta": 60.0},
+    {"joint": 1.0, "wrist_roll": 1.6, "gripper": 1.6,  "xy": 0.20, "theta": 60.0},
     # fast
-    {"joint": 1.11, "wrist_roll": 1.67, "gripper": 3.0,  "xy": 0.35, "theta": 90.0},
+    {"joint": 2.0, "wrist_roll": 3.2, "gripper": 3.2,  "xy": 0.40, "theta": 90.0},
 ]
 
 

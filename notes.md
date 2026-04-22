@@ -25,3 +25,15 @@ uv run lerobot-calibrate --teleop.type=so101_leader --teleop.port=/dev/ttyUSB0 -
 ```bash
 uv run lerobot-calibrate --robot.type=lekiwi --robot.port=/dev/ttyUSB0 --robot.id=kiwi_sn_0
 ```
+
+## How to connect Gamepad to Laptop via Bluetooth
+1. Make sure the controller is turned off.
+2. Press and hold X + Home simultaneously for 2–3 seconds.
+3. The LED indicator will start flashing rapidly (green in my case).
+4. Open your laptop's Bluetooth settings and search for devices.
+5. Bluetooth Name: Look for "Gamepad"
+6. Click to pair, and the LED will remain solid once connected. or when you SSH to the laptop, use "bluetoothctl" in the terminal:
+    -Type "scan on" to find the MAC address. ("A0:5A:5D:AC:B9:5F")
+    -Type pair [MAC Address]
+    -Type trust [MAC Address] to ensure it reconnects automatically.
+    -Type connect [MAC Address] to connect
