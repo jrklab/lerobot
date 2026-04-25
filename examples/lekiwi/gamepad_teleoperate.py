@@ -417,7 +417,7 @@ def main():
     print("  D-pad up/down     → base forward / back")
     print("  D-pad left/right  → base rotate")
     print("  LB / RB           → base strafe left / right")
-    print("  START             → cycle speed (slow → medium → fast)")
+    print("  START             → cycle speed (slow → medium → fast → ultra fast)")
     print("  SELECT            → emergency stop")
     print("  B (BTN_SOUTH)     → go to neutral pose")
     print()
@@ -456,7 +456,7 @@ def main():
         start_pressed = buttons.get("BTN_START", False)
         if start_pressed and not prev_start_btn:
             speed_index = (speed_index + 1) % len(SPEED_LEVELS)
-            names = ["slow", "medium", "fast"]
+            names = ["slow", "medium", "fast", "ultra fast"]
             print(f"[SPEED] {names[speed_index]}")
         prev_start_btn = start_pressed
 
