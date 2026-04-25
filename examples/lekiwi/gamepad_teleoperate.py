@@ -167,7 +167,9 @@ SPEED_LEVELS_DEG = [
     # medium  ← default
     {"joint": 1.0,  "wrist_roll": 1.5,  "gripper": 1.5,  "xy": 0.20, "theta": 60.0},
     # fast
-    {"joint": 2.0,  "wrist_roll": 3.0,  "gripper": 3.0,  "xy": 0.35, "theta": 90.0},
+    {"joint": 2.0,  "wrist_roll": 3.0,  "gripper": 3.0,  "xy": 0.35, "theta": 120.0},
+    # ultra fast
+    {"joint": 2.0,  "wrist_roll": 3.0,  "gripper": 3.0,  "xy": 0.35, "theta": 180.0},
 ]
 
 # Normalized equivalents: joint speeds scaled by 100/180 ≈ 0.556
@@ -177,7 +179,9 @@ SPEED_LEVELS_NORM = [
     # medium  ← default
     {"joint": 1.0, "wrist_roll": 1.6, "gripper": 1.6,  "xy": 0.20, "theta": 60.0},
     # fast
-    {"joint": 2.0, "wrist_roll": 3.2, "gripper": 3.2,  "xy": 0.40, "theta": 90.0},
+    {"joint": 2.0, "wrist_roll": 3.2, "gripper": 3.2,  "xy": 0.40, "theta": 120.0},
+    # ultra fast
+    {"joint": 2.0, "wrist_roll": 3.2, "gripper": 3.2,  "xy": 0.40, "theta": 180.0},
 ]
 
 
