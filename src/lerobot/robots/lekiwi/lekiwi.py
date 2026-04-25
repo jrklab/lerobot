@@ -232,7 +232,7 @@ class LeKiwi(Robot):
         theta: float,
         wheel_radius: float = 0.05,
         base_radius: float = 0.125,
-        max_raw: int = 3000,
+        max_raw: int = 4500,
     ) -> dict:
         """
         Convert desired body-frame velocities into wheel raw commands.
