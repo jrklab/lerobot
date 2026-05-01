@@ -98,8 +98,13 @@ class LeKiwiClient(Robot):
         return {name: (cfg.height, cfg.width, 3) for name, cfg in self.config.cameras.items()}
 
     @cached_property
+    def _load_ft(self) -> dict[str, type]:
+        arm_motors = ["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll", "gripper"]
+        return {f"arm_{m}.load": float for m in arm_motors}
+
+    @cached_property
     def observation_features(self) -> dict[str, type | tuple]:
-        return {**self._state_ft, **self._cameras_ft}
+        return {**self._state_ft, **self._load_ft, **self._cameras_ft}
 
     @cached_property
     def action_features(self) -> dict[str, type]:
@@ -202,6 +207,10 @@ class LeKiwiClient(Robot):
         state_vec = np.array([flat_state[key] for key in self._state_order], dtype=np.float32)
 
         obs_dict: RobotObservation = {**flat_state, OBS_STATE: state_vec}
+
+        # Pass arm load values through for torque feedback
+        for key in self._load_ft:
+            obs_dict[key] = observation.get(key, 0.0)
 
         # Decode images
         current_frames: dict[str, np.ndarray] = {}

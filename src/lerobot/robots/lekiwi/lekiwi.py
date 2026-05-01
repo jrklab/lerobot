@@ -354,7 +354,11 @@ class LeKiwi(Robot):
 
         arm_state = {f"{k}.pos": v for k, v in arm_pos.items()}
 
-        obs_dict = {**arm_state, **base_vel}
+        # Read arm motor loads for torque feedback; sync_read applies sign-magnitude decoding
+        arm_load = self.bus.sync_read("Present_Load", self.arm_motors)
+        arm_load_state = {f"{k}.load": abs(v) for k, v in arm_load.items()}
+
+        obs_dict = {**arm_state, **base_vel, **arm_load_state}
 
         dt_ms = (time.perf_counter() - start) * 1e3
         logger.debug(f"{self} read state: {dt_ms:.1f}ms")
