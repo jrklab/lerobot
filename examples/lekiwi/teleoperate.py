@@ -72,6 +72,7 @@ def main():
             "wrist_roll": 0.3,
             "gripper": 0.2,
         },
+        speed_threshold=50,  # suppress feedback if raw speed > 50 (motor is moving, not stalled)
     )
     _prev_b_pressed = False
 
@@ -120,11 +121,17 @@ def main():
                 for k, v in observation.items()
                 if k.startswith("arm_") and k.endswith(".load")
             }
+            # Extract speed values for stall detection
+            speed_dict = {
+                k.removeprefix("arm_").removesuffix(".speed"): v
+                for k, v in observation.items()
+                if k.startswith("arm_") and k.endswith(".speed")
+            }
             # print load dict for debugging with timestamp
             print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Load dict: {load_dict}")
             if load_dict:
                 torque_limits = map_load_to_torque_limit(
-                    load_dict, torque_feedback_config, list(load_dict.keys())
+                    load_dict, torque_feedback_config, list(load_dict.keys()), speed_dict=speed_dict
                 )
                 feedback_dict = {f"{motor}.torque": val for motor, val in torque_limits.items()}
                 leader_arm.send_feedback(feedback_dict)

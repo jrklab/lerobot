@@ -11,3 +11,12 @@
 +3 −3  src/lerobot/utils/visualization_utils.py
 
 2. add this torque feedback feature on LeKiwi robot, under the branch named Lekiwi_v2. Lekiwi robot use the same SO101 arm, on a mobile platform. I want to have the torque feedback feature when teleoperate Lekiwi with the leader arm. 
+
+## Task 2, Add present speed reading from the SO101 arm on Lekiwi, to improve torque feedback on Lekiwi
+1. A large load reading may not always associate with stalled motor. A motor accelerating or moving can have large load current. A further improvement for torque feedback is to read the motor speed as well, from address 58 (present velocity). If the speed is higher than a predefined threshold, even the load is high, the motor is not stuck. Only when the speed is lower than the predefined threshold (near zeros or a small value) and the torque is high, it indicates stalled motor, and the leader arm need to reflect the resistance. Modify the code based on this. The following files are the most relevant
+    a. examples/lekiwi/teleoperate.py
+    b. src/lerobot/robots/so_follower/so_follower.py
+    c. src/lerobot/teleoperators/so_leader/so_leader.py
+    d. src/lerobot/teleoperators/torque_feedback.py
+    e. src/lerobot/robots/lekiwi/lekiwi.py
+    f. src/lerobot/robots/lekiwi/lekiwi_client.py

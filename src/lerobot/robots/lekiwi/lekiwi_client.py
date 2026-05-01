@@ -103,8 +103,13 @@ class LeKiwiClient(Robot):
         return {f"arm_{m}.load": float for m in arm_motors}
 
     @cached_property
+    def _speed_ft(self) -> dict[str, type]:
+        arm_motors = ["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll", "gripper"]
+        return {f"arm_{m}.speed": float for m in arm_motors}
+
+    @cached_property
     def observation_features(self) -> dict[str, type | tuple]:
-        return {**self._state_ft, **self._load_ft, **self._cameras_ft}
+        return {**self._state_ft, **self._load_ft, **self._speed_ft, **self._cameras_ft}
 
     @cached_property
     def action_features(self) -> dict[str, type]:
@@ -210,6 +215,10 @@ class LeKiwiClient(Robot):
 
         # Pass arm load values through for torque feedback
         for key in self._load_ft:
+            obs_dict[key] = observation.get(key, 0.0)
+
+        # Pass arm speed values through for stall detection
+        for key in self._speed_ft:
             obs_dict[key] = observation.get(key, 0.0)
 
         # Decode images

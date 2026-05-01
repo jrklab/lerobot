@@ -45,12 +45,17 @@ class TorqueFeedbackConfig:
             Default: 0.0 (no feedback unless explicitly specified).
         per_motor_thresholds: Dict mapping motor names to individual threshold ratios (0.0-1.0).
             Specifies minimum load ratio to activate feedback per motor. Default: 1.0 (100%, feedback disabled).
+        speed_threshold: Raw Present_Velocity threshold for stall detection. When > 0, a motor
+            whose absolute speed exceeds this value is considered moving (not stalled) and its
+            torque feedback is suppressed even if the load is high. Set to 0 (default) to disable
+            speed-gating entirely.
     """
 
     enabled: bool = True
     global_scale_factor: float = 1.0
     per_motor_scales: dict[str, float] = field(default_factory=dict)
     per_motor_thresholds: dict[str, float] = field(default_factory=dict)
+    speed_threshold: float = 0.0
 
     def __post_init__(self):
         """Validate configuration values."""
@@ -62,16 +67,22 @@ class TorqueFeedbackConfig:
         for motor, threshold in self.per_motor_thresholds.items():
             if not 0.0 <= threshold <= 1.0:
                 raise ValueError(f"per_motor_thresholds[{motor}] must be in [0, 1], got {threshold}")
+        if self.speed_threshold < 0.0:
+            raise ValueError(f"speed_threshold must be >= 0, got {self.speed_threshold}")
 
 
 def map_load_to_torque_limit(
     load_dict: dict[str, float],
     config: TorqueFeedbackConfig,
     motor_names: Optional[list[str]] = None,
+    speed_dict: Optional[dict[str, float]] = None,
 ) -> dict[str, float]:
     """Map follower motor loads to leader torque limit commands.
 
-    Implements three-layer mapping:
+    Implements three-layer mapping plus optional speed-based stall detection:
+    0. Speed gate: If speed_dict is provided and config.speed_threshold > 0, motors whose
+       absolute speed exceeds the threshold are considered moving (not stalled) and receive
+       zero torque feedback regardless of load.
     1. Threshold: Load values below motor-specific threshold are zeroed
     2. Scale: Remaining load is scaled from [0, 1000] to [0, 1000] with global_scale_factor
     3. Per-motor: Apply individual motor scale factors
@@ -82,6 +93,9 @@ def map_load_to_torque_limit(
         config: TorqueFeedbackConfig instance.
         motor_names: Optional list of expected motor names for validation.
             If provided, missing motors will be logged as warnings.
+        speed_dict: Optional dict mapping motor names to Present_Velocity absolute values
+            (raw units). When provided together with config.speed_threshold > 0, motors
+            exceeding the speed threshold are gated out (feedback set to 0).
 
     Returns:
         Dict mapping motor names to torque limit values (0-1000 range) ready for
@@ -91,13 +105,13 @@ def map_load_to_torque_limit(
         >>> config = TorqueFeedbackConfig(
         ...     global_scale_factor=1.0,
         ...     per_motor_scales={"shoulder_pan": 0.8, "gripper": 0.5},
-        ...     per_motor_thresholds={"gripper": 0.2}  # Gripper threshold 20%, others 100% (disabled)
+        ...     per_motor_thresholds={"gripper": 0.2},  # Gripper threshold 20%, others 100% (disabled)
+        ...     speed_threshold=50,
         ... )
         >>> loads = {"shoulder_pan": 150, "shoulder_lift": 50, "gripper": 250}
-        >>> torque_limits = map_load_to_torque_limit(loads, config)
-        >>> # shoulder_pan: threshold=1000, 150 < 1000, feedback = 0 (threshold too high)
-        >>> # shoulder_lift: threshold=1000, 50 < 1000, feedback = 0 (no scale, threshold disabled)
-        >>> # gripper: threshold=200, 250 > 200, applies scale 0.5
+        >>> speeds = {"shoulder_pan": 0, "shoulder_lift": 0, "gripper": 200}
+        >>> torque_limits = map_load_to_torque_limit(loads, config, speed_dict=speeds)
+        >>> # gripper: load > threshold but speed (200) > speed_threshold (50) → feedback = 0
     """
     if not config.enabled:
         return {motor: 0 for motor in load_dict.keys()}
@@ -105,6 +119,13 @@ def map_load_to_torque_limit(
     torque_limits = {}
 
     for motor, load in load_dict.items():
+        # Layer 0: Speed gate – if motor is moving fast enough, it is not stalled
+        if speed_dict is not None and config.speed_threshold > 0:
+            motor_speed = abs(speed_dict.get(motor, 0.0))
+            if motor_speed > config.speed_threshold:
+                torque_limits[motor] = 0.0
+                continue
+
         # Get motor-specific threshold, default to 1.0 (100%, effectively disabled)
         threshold_ratio = config.per_motor_thresholds.get(motor, 1.0)
         threshold = threshold_ratio * 1000.0

@@ -358,7 +358,11 @@ class LeKiwi(Robot):
         arm_load = self.bus.sync_read("Present_Load", self.arm_motors)
         arm_load_state = {f"{k}.load": abs(v) for k, v in arm_load.items()}
 
-        obs_dict = {**arm_state, **base_vel, **arm_load_state}
+        # Read arm motor speeds for stall detection; take abs() for speed magnitude
+        arm_vel = self.bus.sync_read("Present_Velocity", self.arm_motors)
+        arm_speed_state = {f"{k}.speed": abs(v) for k, v in arm_vel.items()}
+
+        obs_dict = {**arm_state, **base_vel, **arm_load_state, **arm_speed_state}
 
         dt_ms = (time.perf_counter() - start) * 1e3
         logger.debug(f"{self} read state: {dt_ms:.1f}ms")

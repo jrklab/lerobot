@@ -71,6 +71,10 @@ class SOFollower(Robot):
         return {f"{motor}.load": float for motor in self.bus.motors}
 
     @property
+    def _motors_speed_ft(self) -> dict[str, type]:
+        return {f"{motor}.speed": float for motor in self.bus.motors}
+
+    @property
     def _cameras_ft(self) -> dict[str, tuple]:
         return {
             cam: (self.config.cameras[cam].height, self.config.cameras[cam].width, 3) for cam in self.cameras
@@ -78,7 +82,7 @@ class SOFollower(Robot):
 
     @cached_property
     def observation_features(self) -> dict[str, type | tuple]:
-        return {**self._motors_ft, **self._motors_load_ft, **self._cameras_ft}
+        return {**self._motors_ft, **self._motors_load_ft, **self._motors_speed_ft, **self._cameras_ft}
 
     @cached_property
     def action_features(self) -> dict[str, type]:
@@ -183,6 +187,9 @@ class SOFollower(Robot):
         load_dict = self.bus.sync_read("Present_Load")
         # sync_read applies sign-magnitude decoding; take abs() for load magnitude
         obs_dict.update({f"{motor}.load": abs(val) for motor, val in load_dict.items()})
+
+        speed_dict = self.bus.sync_read("Present_Velocity")
+        obs_dict.update({f"{motor}.speed": abs(val) for motor, val in speed_dict.items()})
         dt_ms = (time.perf_counter() - start) * 1e3
         logger.debug(f"{self} read state: {dt_ms:.1f}ms")
 
