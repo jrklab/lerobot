@@ -65,12 +65,12 @@ def main():
             "gripper": 0.3,
         },
         per_motor_thresholds={
-            "shoulder_pan": 0.05,
-            "shoulder_lift": 0.05,
-            "elbow_flex": 0.05,
-            "wrist_flex": 0.05,
-            "wrist_roll": 0.05,
-            "gripper": 0.05,
+            "shoulder_pan": 0.3,
+            "shoulder_lift": 0.5,
+            "elbow_flex": 0.5,
+            "wrist_flex": 0.5,
+            "wrist_roll": 0.3,
+            "gripper": 0.2,
         },
     )
     _prev_b_pressed = False
@@ -120,6 +120,8 @@ def main():
                 for k, v in observation.items()
                 if k.startswith("arm_") and k.endswith(".load")
             }
+            # print load dict for debugging with timestamp
+            print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Load dict: {load_dict}")
             if load_dict:
                 torque_limits = map_load_to_torque_limit(
                     load_dict, torque_feedback_config, list(load_dict.keys())
