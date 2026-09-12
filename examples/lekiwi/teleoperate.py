@@ -128,7 +128,7 @@ def main():
                 if k.startswith("arm_") and k.endswith(".speed")
             }
             # print load dict for debugging with timestamp
-            print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Load dict: {load_dict}")
+            # print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Load dict: {load_dict}")
             if load_dict:
                 torque_limits = map_load_to_torque_limit(
                     load_dict, torque_feedback_config, list(load_dict.keys()), speed_dict=speed_dict

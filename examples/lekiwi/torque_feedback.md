@@ -11,13 +11,17 @@ Torque feedback lets the operator **feel** resistance on the leader arm that mir
 | Register | Address (STS/SMS) | Size | Direction | Description |
 |---|---|---|---|---|
 | `Present_Load` | `0x3C` (60) | 2 bytes | Read-only | Current motor load. Uses **sign-magnitude encoding**: bit 10 is the sign (direction), bits 0-9 are the magnitude (0–1000, where 1000 = 100% load). |
+| `Present_Velocity` | `0x3A` (58) | 2 bytes | Read-only | Current motor speed in raw units. Uses the same sign-magnitude encoding as `Present_Load`. The magnitude indicates motion speed; a value near zero means the motor is near-stationary (stalled). |
 
-The raw value is decoded with sign-magnitude logic inside `FeetechMotorsBus`. The teleoperation code then takes `abs()` of the decoded value so the load magnitude is always non-negative (0–1000).
+Both raw values are decoded with sign-magnitude logic inside `FeetechMotorsBus`. The teleoperation code takes `abs()` of each so the quantities are always non-negative.
 
 ```python
 # src/lerobot/robots/so_follower/so_follower.py
 load_dict = self.bus.sync_read("Present_Load")
 obs_dict.update({f"{motor}.load": abs(val) for motor, val in load_dict.items()})
+
+speed_dict = self.bus.sync_read("Present_Velocity")
+obs_dict.update({f"{motor}.speed": abs(val) for motor, val in speed_dict.items()})
 ```
 
 ### Writing torque limit to the leader arm
@@ -41,7 +45,17 @@ Motors with zero computed feedback have their torque **disabled**, keeping the a
 
 ## 2. Load → Torque Limit Mapping Formula
 
-The mapping is implemented in `map_load_to_torque_limit()` ([src/lerobot/teleoperators/torque_feedback.py](../src/lerobot/teleoperators/torque_feedback.py)) and consists of three sequential layers.
+The mapping is implemented in `map_load_to_torque_limit()` ([src/lerobot/teleoperators/torque_feedback.py](../src/lerobot/teleoperators/torque_feedback.py)) and consists of a speed gate followed by three sequential load-scaling layers.
+
+### Layer 0 — Speed gate (stall detection)
+
+A high `Present_Load` does not always mean a stalled motor; an accelerating or fast-moving joint can also draw large current. To avoid false haptic feedback, the motor's speed is checked first:
+
+$$
+T_\text{limit} = 0 \quad \text{if } |v_\text{motor}| > v_\text{threshold}
+$$
+
+Where $v_\text{motor}$ is the absolute `Present_Velocity` raw value and $v_\text{threshold}$ is `speed_threshold` in `TorqueFeedbackConfig`. Only when the motor is near-stationary (speed below the threshold) does the load-based feedback proceed. Set `speed_threshold = 0` (default) to disable this gate entirely.
 
 ### Layer 1 — Threshold gate
 
@@ -103,20 +117,30 @@ $$
 
 #### `src/lerobot/robots/so_follower/so_follower.py`
 
-- **`get_observation()`** — added a second `sync_read("Present_Load")` call after reading position. Absolute-value decoded load values are merged into `obs_dict` under keys `{motor}.load`.
-- **`observation_features`** property — extended to include `{motor}.load: float` entries via new `_motors_load_ft` property.
+- **`get_observation()`** — reads `Present_Load` and `Present_Velocity` after position. Absolute-value decoded values are merged into `obs_dict` under keys `{motor}.load` and `{motor}.speed`.
+- **`observation_features`** property — extended to include `{motor}.load: float` and `{motor}.speed: float` entries via `_motors_load_ft` and `_motors_speed_ft` properties.
 
 #### `src/lerobot/teleoperators/so_leader/so_leader.py`
 
 - **`send_feedback()`** — new method. Strips `.torque` suffixes, builds a `Torque_Enable` dict (1 if value > 0, else 0), syncs it to the bus, then syncs non-zero values to `Torque_Limit`.
 - **`feedback_features`** property — returns `{motor}.torque: float` for all motors.
 
+#### `src/lerobot/robots/lekiwi/lekiwi.py`
+
+- **`get_observation()`** — reads `Present_Velocity` for arm motors in addition to `Present_Load`. Speed values are added to `obs_dict` under keys `arm_{motor}.speed`.
+
+#### `src/lerobot/robots/lekiwi/lekiwi_client.py`
+
+- Added `_speed_ft` cached property (`arm_{motor}.speed: float` for all six arm motors).
+- `observation_features` extended to include `_speed_ft`.
+- `_remote_state_from_obs()` passes `arm_{motor}.speed` values through from the ZMQ observation.
+
 #### `examples/lekiwi/teleoperate.py`
 
 - Imports `TorqueFeedbackConfig` and `map_load_to_torque_limit`.
-- Instantiates `torque_feedback_config` with per-motor scales and thresholds for all six SO101 joints.
+- Instantiates `torque_feedback_config` with per-motor scales, thresholds, and `speed_threshold=50` for all six SO101 joints.
 - Adds keyboard toggle (`'b'` key, edge-detected) to enable/disable feedback at runtime.
-- In the main loop: extracts `arm_*.load` keys from the observation, strips prefixes/suffixes to get bare motor names, calls `map_load_to_torque_limit()`, then calls `leader_arm.send_feedback()`.
+- In the main loop: extracts `arm_*.load` and `arm_*.speed` keys from the observation, strips prefixes/suffixes to get bare motor names, calls `map_load_to_torque_limit()` with `speed_dict`, then calls `leader_arm.send_feedback()`.
 - Sends an all-zero feedback dict when feedback is toggled off to ensure the leader arm returns to a compliant state immediately.
 
 ---
@@ -131,6 +155,7 @@ $$
 | `global_scale_factor` (`g`) | `float` [0, 1] | `1.0` | Global multiplier applied before per-motor scales. Reduce to soften feedback across **all** motors simultaneously. Good first knob for overall intensity. |
 | `per_motor_scales` (`s`) | `dict[str, float]` each in [0, 1] | `0.0` (no feedback) | Individual gain per joint. Joints not listed default to **0** (no feedback). Tune to balance the felt resistance between large joints (shoulder) and delicate ones (wrist, gripper). |
 | `per_motor_thresholds` (`θ`) | `dict[str, float]` each in [0, 1] | `1.0` (disabled) | Dead-zone threshold as a fraction of full load. Motors not listed default to `1.0`, meaning feedback is **off** unless explicitly configured. Higher threshold = less sensitivity, more noise rejection. |
+| `speed_threshold` ($v_t$) | `float` ≥ 0 | `0.0` (disabled) | Raw `Present_Velocity` magnitude above which a motor is considered moving rather than stalled. Feedback is suppressed for fast-moving motors. `0` disables the gate. Start around **50** (≈ 4 deg/s) and increase if false positives occur when the arm moves quickly. |
 
 ### Recommended starting point (SO101, from `teleoperate.py`)
 
@@ -154,6 +179,7 @@ TorqueFeedbackConfig(
         "wrist_roll":    0.3,
         "gripper":       0.2,   # 20% dead zone (sensitive)
     },
+    speed_threshold=50,     # suppress feedback if motor speed > 50 raw units (~4 deg/s)
 )
 ```
 
@@ -164,3 +190,5 @@ TorqueFeedbackConfig(
 - **Arm buzzes or feels noisy at rest**: raise the threshold (`per_motor_thresholds`) for the offending joint so small static loads are filtered out.
 - **Gripper stalls or burns out**: keep `per_motor_scales["gripper"]` ≤ 0.3 and confirm `Max_Torque_Limit` is set to 500 (50%) in `configure()`.
 - **Latency feels high**: the feedback path runs synchronously in the main loop at `FPS = 30`. Reducing the number of sync writes (e.g. skipping motors with near-zero load) can help on slower USB connections.
+- **Feedback triggers while arm is moving freely**: increase `speed_threshold` so that joints moving above that speed are gated out. If feedback should only fire when the arm is essentially stopped, try values in the 100–200 range.
+- **Feedback doesn't trigger even when clearly stalled**: `speed_threshold` may be too high. Lower it, or set it to `0` to rely on load thresholds alone.
