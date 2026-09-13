@@ -51,6 +51,12 @@ class OpenCVCameraConfig(CameraConfig):
         warmup_s: Time reading frames before returning from connect (in seconds)
         fourcc: FOURCC code for video format (e.g., "MJPG", "YUYV", "I420"). Defaults to None (auto-detect).
         backend: OpenCV backend identifier (https://docs.opencv.org/3.4/d4/d15/group__videoio__flags__base.html). Defaults to ANY.
+        connect_retry_timeout_s: If > 0, retry a failed connect() (open or warmup failure) with a
+                      fixed delay until this many seconds have elapsed, instead of failing on the
+                      first attempt. Useful for USB cameras that aren't reliably ready right after
+                      boot. Defaults to 0 (no retry, fail immediately as before).
+        connect_retry_interval_s: Delay between connect() retry attempts when
+                      `connect_retry_timeout_s` > 0. Defaults to 2.0 seconds.
 
     Note:
         - Only 3-channel color output (RGB/BGR) is currently supported.
@@ -64,6 +70,8 @@ class OpenCVCameraConfig(CameraConfig):
     warmup_s: int = 1
     fourcc: str | None = None
     backend: Cv2Backends = Cv2Backends.ANY
+    connect_retry_timeout_s: float = 0.0
+    connect_retry_interval_s: float = 2.0
 
     def __post_init__(self) -> None:
         self.color_mode = ColorMode(self.color_mode)

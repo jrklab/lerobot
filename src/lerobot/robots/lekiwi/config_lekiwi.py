@@ -30,6 +30,11 @@ def lekiwi_cameras_config() -> dict[str, CameraConfig]:
             rotation=Cv2Rotation.ROTATE_180,
             fourcc="MJPG",
             warmup_s=5,
+            # Right after boot (or a fresh host restart) these USB UVC cameras can take up to
+            # ~90s to reliably deliver frames while the driver/hardware settles, then work fine.
+            # Retry instead of failing the whole host process over a transient boot-time hiccup.
+            connect_retry_timeout_s=120,
+            connect_retry_interval_s=3,
         ),
         "wrist": OpenCVCameraConfig(
             index_or_path="/dev/video0",
@@ -38,6 +43,8 @@ def lekiwi_cameras_config() -> dict[str, CameraConfig]:
             height=480,
             fourcc="MJPG",
             warmup_s=5,
+            connect_retry_timeout_s=120,
+            connect_retry_interval_s=3,
         ),
     }
 

@@ -141,13 +141,21 @@ class OpenCVCamera(Camera):
         Initializes the OpenCV VideoCapture object, sets desired camera properties
         (FPS, width, height), starts the background reading thread and performs initial checks.
 
+        Some USB UVC cameras (especially right after boot, or when sharing a hub with
+        another camera) briefly fail to open or to deliver frames while the driver/hardware
+        is still settling, then work fine moments later. If `config.connect_retry_timeout_s`
+        is set (> 0), transient failures are retried with a fixed delay
+        (`config.connect_retry_interval_s`) until that time budget is exhausted, instead of
+        failing on the first attempt. Defaults to 0 (no retry), preserving prior behavior.
+
         Args:
             warmup (bool): If True, waits at connect() time until at least one valid frame
                            has been captured by the background thread. Defaults to True.
 
         Raises:
             DeviceAlreadyConnectedError: If the camera is already connected.
-            ConnectionError: If the specified camera index/path is not found or fails to open.
+            ConnectionError: If the specified camera index/path is not found or fails to open,
+                              even after exhausting any configured retries.
             RuntimeError: If the camera opens but fails to apply requested settings.
         """
 
@@ -155,6 +163,30 @@ class OpenCVCamera(Camera):
         # blocking in multi-threaded applications, especially during data collection.
         cv2.setNumThreads(1)
 
+        deadline = time.time() + self.config.connect_retry_timeout_s
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                self._connect_once(warmup)
+                return
+            except Exception as e:
+                self._release_after_failed_connect()
+                if time.time() >= deadline:
+                    if attempt > 1:
+                        raise ConnectionError(
+                            f"{self} failed to connect after {attempt} attempts over "
+                            f"~{self.config.connect_retry_timeout_s:.0f}s (last error: {e})"
+                        ) from e
+                    raise
+                logger.warning(
+                    f"{self} connect attempt {attempt} failed ({e}); "
+                    f"retrying in {self.config.connect_retry_interval_s:.1f}s..."
+                )
+                time.sleep(self.config.connect_retry_interval_s)
+
+    def _connect_once(self, warmup: bool) -> None:
+        """Single connect attempt: open, configure, start read thread, and optionally warm up."""
         self.videocapture = cv2.VideoCapture(self.index_or_path, self.backend)
 
         if not self.videocapture.isOpened():
@@ -177,6 +209,13 @@ class OpenCVCamera(Camera):
                     raise ConnectionError(f"{self} failed to capture frames during warmup.")
 
         logger.info(f"{self} connected.")
+
+    def _release_after_failed_connect(self) -> None:
+        """Tears down any partial state (read thread, capture handle) left by a failed connect attempt."""
+        self._stop_read_thread()
+        if self.videocapture is not None:
+            self.videocapture.release()
+            self.videocapture = None
 
     @check_if_not_connected
     def _configure_capture_settings(self) -> None:

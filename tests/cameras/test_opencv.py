@@ -19,6 +19,7 @@
 # pytest tests/cameras/test_opencv.py::test_connect
 # ```
 
+import time
 from pathlib import Path
 from unittest.mock import patch
 
@@ -109,6 +110,78 @@ def test_connect_invalid_camera_path():
 
     with pytest.raises(ConnectionError):
         camera.connect(warmup=False)
+
+
+def test_connect_retries_transient_open_failure_then_succeeds():
+    """With connect_retry_timeout_s > 0, a transient 'failed to open' should be retried
+    instead of raising immediately, and connect() should succeed once it clears up."""
+    attempts = {"count": 0}
+
+    class FlakyThenWorking(MockLoopingVideoCapture):
+        def __init__(self, *args, **kwargs):
+            attempts["count"] += 1
+            super().__init__(*args, **kwargs)
+
+        def isOpened(self):
+            if attempts["count"] < 3:
+                return False
+            return self._real_vc.isOpened()
+
+    module_path = OpenCVCamera.__module__
+    target = f"{module_path}.cv2.VideoCapture"
+    with patch(target, new=FlakyThenWorking):
+        config = OpenCVCameraConfig(
+            index_or_path=DEFAULT_PNG_FILE_PATH,
+            warmup_s=0,
+            connect_retry_timeout_s=5,
+            connect_retry_interval_s=0.01,
+        )
+        camera = OpenCVCamera(config)
+        camera.connect()
+        try:
+            assert camera.is_connected
+            assert attempts["count"] == 3
+        finally:
+            camera.disconnect()
+
+
+def test_connect_retry_exhausted_raises_connection_error():
+    """Once the retry time budget is exhausted, connect() should still raise ConnectionError."""
+
+    class AlwaysFailsToOpen:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def isOpened(self):
+            return False
+
+        def release(self):
+            pass
+
+    module_path = OpenCVCamera.__module__
+    target = f"{module_path}.cv2.VideoCapture"
+    with patch(target, new=AlwaysFailsToOpen):
+        config = OpenCVCameraConfig(
+            index_or_path=DEFAULT_PNG_FILE_PATH,
+            warmup_s=0,
+            connect_retry_timeout_s=0.2,
+            connect_retry_interval_s=0.05,
+        )
+        camera = OpenCVCamera(config)
+        with pytest.raises(ConnectionError, match="failed to connect after"):
+            camera.connect()
+
+
+def test_connect_no_retry_by_default():
+    """connect_retry_timeout_s defaults to 0: a failure should raise immediately, unchanged
+    from prior behavior (no retry delay)."""
+    config = OpenCVCameraConfig(index_or_path="nonexistent/camera.png")
+    camera = OpenCVCamera(config)
+
+    start = time.time()
+    with pytest.raises(ConnectionError):
+        camera.connect(warmup=False)
+    assert time.time() - start < 1.0
 
 
 def test_invalid_width_connect():
