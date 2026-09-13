@@ -183,7 +183,9 @@ class RobotBridge:
             self._desired_base = {"x": x, "y": y, "theta": theta, "speed": speed}
             self._last_base_msg_time = time.monotonic()
 
-    def update_jog(self, joint: str, direction: int, speed: str) -> None:
+    def update_jog(self, joint: str, direction: float, speed: str) -> None:
+        """direction is -1..1: the web UI's hold-to-jog buttons only ever send -1/0/1,
+        but the gamepad passes a continuous analog stick value through this same path."""
         if joint not in ARM_JOINTS:
             raise ValueError(f"Unknown joint: {joint}")
         with self._lock:
@@ -196,6 +198,20 @@ class RobotBridge:
             self._desired_jogs.clear()
             for joint, pos in ARM_NEUTRAL_POS.items():
                 self._joint_targets[joint] = pos
+
+    def emergency_stop(self) -> None:
+        """Halts all motion: zeroes base velocity and cancels any in-progress arm jog.
+
+        Deliberately does NOT move the arm to any position (neutral or otherwise) -- an
+        e-stop must never itself cause a large, sudden, potentially unsafe motion. Position
+        control already holds the arm wherever it currently is with no action needed.
+        """
+        with self._lock:
+            self._desired_base = {"x": 0.0, "y": 0.0, "theta": 0.0, "speed": "medium"}
+            self._last_base_msg_time = time.monotonic()
+            for joint in self._desired_jogs:
+                self._desired_jogs[joint]["dir"] = 0.0
+            self._last_jog_msg_time = time.monotonic()
 
     def get_jpeg_frame(self, cam_name: str) -> bytes | None:
         with self._lock:

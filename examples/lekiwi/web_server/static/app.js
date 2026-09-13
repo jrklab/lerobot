@@ -21,6 +21,7 @@ function connectWs() {
     try {
       const msg = JSON.parse(ev.data);
       if (msg.type === "state") {
+        setGamepadStatus(!!msg.gamepad_connected);
         // Live joint readout could be rendered here later (e.g. in a diagnostics tab).
       }
     } catch (_) {
@@ -32,6 +33,13 @@ function connectWs() {
 function setConnStatus(connected) {
   const el = document.getElementById("conn-status");
   el.textContent = connected ? "connected" : "disconnected";
+  el.className = "status " + (connected ? "status-connected" : "status-disconnected");
+  if (!connected) setGamepadStatus(false);
+}
+
+function setGamepadStatus(connected) {
+  const el = document.getElementById("gamepad-status");
+  el.textContent = connected ? "gamepad: connected" : "gamepad: disconnected";
   el.className = "status " + (connected ? "status-connected" : "status-disconnected");
 }
 

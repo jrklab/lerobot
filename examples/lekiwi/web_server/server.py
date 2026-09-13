@@ -46,6 +46,7 @@ from fastapi.staticfiles import StaticFiles
 # module rather than part of the installed lerobot package.
 sys.path.insert(0, str(Path(__file__).parent))
 
+from gamepad_input import GamepadInput  # noqa: E402
 from robot_bridge import ARM_JOINTS, BASE_SPEEDS, JOG_SPEEDS, MockLeKiwi, RobotBridge  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -57,6 +58,7 @@ app = FastAPI(title="LeKiwi Web Control")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 bridge: RobotBridge | None = None
+gamepad: GamepadInput | None = None
 
 
 @app.get("/")
@@ -134,7 +136,15 @@ async def _status_pusher(websocket: WebSocket) -> None:
     while True:
         if bridge is not None:
             try:
-                await websocket.send_text(json.dumps({"type": "state", "joints": bridge.get_joint_state()}))
+                await websocket.send_text(
+                    json.dumps(
+                        {
+                            "type": "state",
+                            "joints": bridge.get_joint_state(),
+                            "gamepad_connected": gamepad.is_connected() if gamepad is not None else False,
+                        }
+                    )
+                )
             except Exception:
                 return
         await asyncio.sleep(0.2)
@@ -184,9 +194,14 @@ def main():
     parser.add_argument("--port-name", default="/dev/ttyUSB0", help="Serial port for the motor bus.")
     parser.add_argument("--host", default="0.0.0.0", help="Bind address for the web server.")
     parser.add_argument("--port", type=int, default=8000, help="Bind port for the web server.")
+    parser.add_argument(
+        "--no-gamepad",
+        action="store_true",
+        help="Disable Bluetooth/USB gamepad input (auto-detected and connected by default).",
+    )
     args = parser.parse_args()
 
-    global bridge
+    global bridge, gamepad
     if args.mock:
         logger.info("Starting with MockLeKiwi (no hardware).")
         robot = MockLeKiwi()
@@ -199,9 +214,15 @@ def main():
     bridge = RobotBridge(robot)
     bridge.start()
 
+    if not args.no_gamepad:
+        gamepad = GamepadInput(bridge)
+        gamepad.start()
+
     try:
         uvicorn.run(app, host=args.host, port=args.port, log_level="info")
     finally:
+        if gamepad is not None:
+            gamepad.stop()
         bridge.stop()
 
 
