@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <title>LeKiwi Control</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <span class="title">LeKiwi</span>
+    <span id="conn-status" class="status status-disconnected">connecting...</span>
+  </header>
+
+  <nav class="tabs">
+    <button class="tab-btn active" data-tab="base">Base</button>
+    <button class="tab-btn" data-tab="arm">Arm</button>
+    <button class="tab-btn" data-tab="rec" disabled title="Coming soon">Record</button>
+  </nav>
+
+  <main>
+    <!-- BASE TAB -->
+    <section id="tab-base" class="tab-panel active">
+      <div class="video-wrap">
+        <img id="video-base" alt="front camera" />
+      </div>
+      <div class="joystick-row">
+        <div class="joystick-block">
+          <div class="joystick" id="joy-translate"><div class="joystick-knob"></div></div>
+          <span class="joystick-label">translate</span>
+        </div>
+        <div class="joystick-block">
+          <div class="joystick" id="joy-rotate"><div class="joystick-knob"></div></div>
+          <span class="joystick-label">rotate</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ARM TAB -->
+    <section id="tab-arm" class="tab-panel">
+      <div class="video-wrap video-compact">
+        <img id="video-arm" alt="wrist camera" />
+      </div>
+
+      <button id="arm-reset-btn" class="reset-btn">&#8634; Reset arm to neutral</button>
+
+      <div class="jog-grid">
+        <div class="jog-card" data-joint="arm_shoulder_pan">
+          <span class="jog-label">Base rotation</span>
+          <div class="jog-btns">
+            <button class="jog-btn" data-dir="-1">&larr;</button>
+            <button class="jog-btn" data-dir="1">&rarr;</button>
+          </div>
+        </div>
+        <div class="jog-card" data-joint="arm_shoulder_lift">
+          <span class="jog-label">Shoulder</span>
+          <div class="jog-btns">
+            <button class="jog-btn" data-dir="-1">&darr;</button>
+            <button class="jog-btn" data-dir="1">&uarr;</button>
+          </div>
+        </div>
+        <div class="jog-card" data-joint="arm_elbow_flex">
+          <span class="jog-label">Elbow</span>
+          <div class="jog-btns">
+            <button class="jog-btn" data-dir="-1">&darr;</button>
+            <button class="jog-btn" data-dir="1">&uarr;</button>
+          </div>
+        </div>
+        <div class="jog-card" data-joint="arm_wrist_flex">
+          <span class="jog-label">Wrist tilt</span>
+          <div class="jog-btns">
+            <button class="jog-btn" data-dir="-1">&darr;</button>
+            <button class="jog-btn" data-dir="1">&uarr;</button>
+          </div>
+        </div>
+        <div class="jog-card" data-joint="arm_wrist_roll">
+          <span class="jog-label">Wrist twist</span>
+          <div class="jog-btns">
+            <button class="jog-btn" data-dir="-1">&#8634;</button>
+            <button class="jog-btn" data-dir="1">&#8635;</button>
+          </div>
+        </div>
+        <div class="jog-card" data-joint="arm_gripper">
+          <span class="jog-label">Gripper</span>
+          <div class="jog-btns">
+            <button class="jog-btn" data-dir="-1">close</button>
+            <button class="jog-btn" data-dir="1">open</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- RECORD TAB (stub) -->
+    <section id="tab-rec" class="tab-panel">
+      <p class="stub-note">Recording &amp; replay is coming in a later phase.</p>
+    </section>
+  </main>
+
+  <footer class="speed-bar">
+    <span>Speed:</span>
+    <label><input type="radio" name="speed" value="slow" /> Slow</label>
+    <label><input type="radio" name="speed" value="medium" checked /> Medium</label>
+    <label><input type="radio" name="speed" value="fast" /> Fast</label>
+  </footer>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,191 @@
+:root {
+  --bg: #12151a;
+  --panel: #1c2129;
+  --accent: #3b82f6;
+  --text: #e6e9ef;
+  --muted: #8a93a3;
+  --danger: #ef4444;
+  --ok: #22c55e;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.6rem 1rem;
+  background: var(--panel);
+  border-bottom: 1px solid #2a303c;
+}
+.title { font-weight: 700; font-size: 1.1rem; }
+.status { font-size: 0.85rem; padding: 0.2rem 0.6rem; border-radius: 999px; }
+.status-connected { background: rgba(34,197,94,0.15); color: var(--ok); }
+.status-disconnected { background: rgba(239,68,68,0.15); color: var(--danger); }
+
+.tabs {
+  display: flex;
+  gap: 0.4rem;
+  padding: 0.5rem 1rem 0;
+}
+.tab-btn {
+  flex: 1;
+  padding: 0.6rem;
+  background: var(--panel);
+  color: var(--muted);
+  border: 1px solid #2a303c;
+  border-bottom: none;
+  border-radius: 8px 8px 0 0;
+  font-size: 1rem;
+}
+.tab-btn.active { color: var(--text); background: #232a35; }
+.tab-btn:disabled { opacity: 0.4; }
+
+main {
+  padding: 0 1rem;
+}
+.tab-panel { display: none; }
+.tab-panel.active { display: block; }
+
+.video-wrap {
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  background: #000;
+  border-radius: 8px;
+  overflow: hidden;
+  margin: 0.75rem 0;
+}
+.video-wrap img { width: 100%; height: 100%; object-fit: cover; }
+
+.joystick-row {
+  display: flex;
+  justify-content: space-around;
+  padding: 1rem 0 2rem;
+}
+.joystick-block { display: flex; flex-direction: column; align-items: center; gap: 0.4rem; }
+.joystick {
+  width: 130px;
+  height: 130px;
+  border-radius: 50%;
+  background: var(--panel);
+  border: 2px solid #2a303c;
+  position: relative;
+  touch-action: none;
+}
+.joystick-knob {
+  width: 54px;
+  height: 54px;
+  border-radius: 50%;
+  background: var(--accent);
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+.joystick-label { color: var(--muted); font-size: 0.85rem; }
+
+.video-compact { aspect-ratio: 16 / 9; margin: 0.5rem 0; }
+
+.reset-btn {
+  width: 100%;
+  padding: 0.6rem;
+  margin-bottom: 0.6rem;
+  background: #3a2230;
+  color: #f3b7c8;
+  border: 1px solid #5a2f42;
+  border-radius: 8px;
+  font-size: 0.95rem;
+}
+.reset-btn:active { background: #5a2f42; }
+
+/* Two joints per row to keep all 6 controls visible without scrolling on a phone. */
+.jog-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+  padding-bottom: 1rem;
+}
+.jog-card {
+  background: var(--panel);
+  border: 1px solid #232a35;
+  border-radius: 8px;
+  padding: 0.4rem 0.5rem;
+}
+.jog-label {
+  display: block;
+  font-size: 0.8rem;
+  color: var(--muted);
+  margin-bottom: 0.3rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.jog-btns { display: flex; gap: 0.4rem; }
+.jog-btn {
+  flex: 1;
+  padding: 0.55rem 0;
+  font-size: 1.1rem;
+  background: #232a35;
+  color: var(--text);
+  border: 1px solid #2a303c;
+  border-radius: 6px;
+}
+.jog-btn:active { background: var(--accent); }
+.jog-card[data-joint="arm_gripper"] .jog-btn { font-size: 0.8rem; }
+
+.stub-note { color: var(--muted); padding: 2rem 0; text-align: center; }
+
+.speed-bar {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.6rem 1rem;
+  background: var(--panel);
+  border-top: 1px solid #2a303c;
+  font-size: 0.9rem;
+}
+.speed-bar label { display: flex; align-items: center; gap: 0.25rem; }
+
+/* Desktop / wide screens: two-column layout, both tabs' controls reachable without
+   the phone-style single-panel-at-a-time constraint feeling cramped. */
+@media (min-width: 900px) {
+  main {
+    display: grid;
+    grid-template-columns: 1fr 380px;
+    gap: 1.5rem;
+    max-width: 1200px;
+    margin: 0 auto;
+  }
+  .tab-panel { display: grid !important; grid-template-columns: 1fr; }
+  .tab-panel:not(.active) { display: none !important; }
+  .tab-panel.active { grid-column: 1 / -1; grid-template-columns: 1fr 380px; gap: 1.5rem; }
+  .video-wrap { aspect-ratio: 4 / 3; max-height: 70vh; }
+  .joystick-row { flex-direction: column; align-items: center; gap: 1.5rem; padding-top: 2rem; }
+  .joystick { width: 160px; height: 160px; }
+  .joystick-knob { width: 64px; height: 64px; }
+
+  /* Arm tab: keep the same single-column stacked flow as phone (video, then reset,
+     then joint grid) instead of the video|sidebar split used for Base -- the reset
+     button and jog grid don't belong crammed into a narrow sidebar next to the video. */
+  #tab-arm.active {
+    grid-template-columns: 1fr;
+    max-width: 520px;
+    margin: 0 auto;
+  }
+  #tab-arm .video-compact { aspect-ratio: 16 / 9; max-height: 40vh; }
+  #tab-arm .jog-grid { max-width: 420px; margin: 0 auto; width: 100%; }
+}
