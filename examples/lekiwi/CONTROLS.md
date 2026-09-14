@@ -181,7 +181,7 @@ there talks to the already-running web server over the network:
 ```bash
 uv run python examples/lekiwi/web_server/leader_keyboard_client.py \
     --server ws://raspberrypi.local:8000/ws/control \
-    --leader-port /dev/ttyUSB0 --leader-id leader_arm_1
+    --leader-port /dev/ttyACM0 --leader-id leader_arm_1
 ```
 
 This needs a real desktop session on the machine you run it from (keyboard capture uses
