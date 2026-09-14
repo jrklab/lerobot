@@ -199,7 +199,8 @@ class RobotBridge:
 
         self._joint_targets: dict[str, float] = dict.fromkeys(ARM_JOINTS, 0.0)
         self._latest_joint_state: dict[str, dict] = {
-            joint: {"pos": 0.0, "load": 0.0, "stalled": False, "severity": 0.0} for joint in ARM_JOINTS
+            joint: {"pos": 0.0, "load": 0.0, "speed": 0.0, "stalled": False, "severity": 0.0}
+            for joint in ARM_JOINTS
         }
         self._latest_jpeg: dict[str, bytes] = {}
 
@@ -388,6 +389,7 @@ class RobotBridge:
                     new_joint_state[joint] = {
                         "pos": obs[f"{joint}.pos"],
                         "load": load,
+                        "speed": speed,
                         "stalled": severity > 0.0,
                         "severity": severity,
                     }

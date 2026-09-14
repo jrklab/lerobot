@@ -27,7 +27,12 @@ types the server only honors while the web app's control-mode selector is set to
 web app's on-page joystick).
 
 You still need to select "Leader + Keyboard" in the web app's mode selector for this script's
-commands to take effect -- it does not switch modes itself.
+commands to take effect -- it does not switch modes itself, but it does print a line whenever
+the server confirms that mode is (or stops being) active, so it's obvious whether anything
+you do here currently has an effect.
+
+Torque feedback (leader arm resists when the follower stalls, same as examples/lekiwi/
+teleoperate.py) is available -- press 'b' to toggle it on/off, starts disabled.
 
 Usage:
   uv run python examples/lekiwi/web_server/leader_keyboard_client.py \
@@ -46,12 +51,14 @@ import websockets
 
 from lerobot.teleoperators.keyboard.teleop_keyboard import KeyboardTeleop, KeyboardTeleopConfig
 from lerobot.teleoperators.so_leader import SO101Leader, SO101LeaderConfig
+from lerobot.teleoperators.torque_feedback import TorqueFeedbackConfig, map_load_to_torque_limit
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 FPS = 30
 SPEED_NAMES = ["slow", "medium", "fast"]
+ARM_MOTORS = ["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll", "gripper"]
 
 # Matches LeKiwiConfig.teleop_keys' defaults (examples/lekiwi/teleoperate.py's reference
 # keyboard-base mapping), so this feels the same as the existing ZMQ-based teleop script.
@@ -65,6 +72,29 @@ TELEOP_KEYS = {
     "speed_up": "r",
     "speed_down": "f",
 }
+
+# Same recommended starting point as examples/lekiwi/teleoperate.py's torque_feedback_config.
+TORQUE_FEEDBACK_CONFIG = TorqueFeedbackConfig(
+    enabled=False,  # starts disabled; toggle with 'b'
+    global_scale_factor=1.0,
+    per_motor_scales={
+        "shoulder_pan": 0.5,
+        "shoulder_lift": 0.5,
+        "elbow_flex": 0.5,
+        "wrist_flex": 0.5,
+        "wrist_roll": 0.5,
+        "gripper": 0.3,
+    },
+    per_motor_thresholds={
+        "shoulder_pan": 0.3,
+        "shoulder_lift": 0.5,
+        "elbow_flex": 0.5,
+        "wrist_flex": 0.5,
+        "wrist_roll": 0.3,
+        "gripper": 0.2,
+    },
+    speed_threshold=50,
+)
 
 
 class _SpeedCycle:
@@ -107,16 +137,56 @@ def _keyboard_to_base(pressed_keys: dict) -> tuple[float, float, float]:
     return x, y, theta
 
 
-async def _drain_incoming(ws) -> None:
-    """We don't need the server's `state` broadcasts, but must keep reading so the
-    connection doesn't back up."""
+class _ServerState:
+    """Latest info from the server's periodic `state` broadcasts (see server.py's
+    `_status_pusher`), kept up to date by `_receive_loop` and read by the control loop."""
+
+    def __init__(self):
+        self.joints: dict[str, dict] = {}
+        self.control_mode: str | None = None
+
+
+async def _receive_loop(ws, state: _ServerState) -> None:
+    """Reads every incoming message so the connection doesn't back up, and prints a line
+    whenever the server-confirmed control mode changes (so it's obvious whether this
+    script's commands are currently taking effect)."""
     with contextlib.suppress(websockets.ConnectionClosed):
-        async for _ in ws:
-            pass
+        async for raw in ws:
+            try:
+                msg = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            if msg.get("type") != "state":
+                continue
+            state.joints = msg.get("joints", {})
+            mode = msg.get("control_mode")
+            if mode is not None and mode != state.control_mode:
+                state.control_mode = mode
+                if mode == "leader_keyboard":
+                    logger.info("Control mode is now ACTIVE (leader_keyboard) -- driving the robot.")
+                else:
+                    logger.info("Control mode is now '%s' -- this script's commands are ignored.", mode)
 
 
-async def _control_loop(ws, leader: SO101Leader, keyboard: KeyboardTeleop) -> None:
+def _apply_torque_feedback(leader: SO101Leader, state: _ServerState) -> None:
+    load_dict = {}
+    speed_dict = {}
+    for joint, info in state.joints.items():
+        motor = joint.removeprefix("arm_")
+        if motor in ARM_MOTORS and "load" in info and "speed" in info:
+            load_dict[motor] = info["load"]
+            speed_dict[motor] = info["speed"]
+    if not load_dict:
+        return
+    torque_limits = map_load_to_torque_limit(
+        load_dict, TORQUE_FEEDBACK_CONFIG, list(load_dict.keys()), speed_dict=speed_dict
+    )
+    leader.send_feedback({f"{motor}.torque": val for motor, val in torque_limits.items()})
+
+
+async def _control_loop(ws, leader: SO101Leader, keyboard: KeyboardTeleop, state: _ServerState) -> None:
     speed_cycle = _SpeedCycle()
+    prev_b_pressed = False
     period = 1.0 / FPS
     while True:
         loop_start = time.monotonic()
@@ -134,6 +204,19 @@ async def _control_loop(ws, leader: SO101Leader, keyboard: KeyboardTeleop) -> No
             )
         )
 
+        b_pressed = "b" in pressed_keys
+        if b_pressed and not prev_b_pressed:
+            TORQUE_FEEDBACK_CONFIG.enabled = not TORQUE_FEEDBACK_CONFIG.enabled
+            if TORQUE_FEEDBACK_CONFIG.enabled:
+                logger.info("Torque feedback: ENABLED")
+            else:
+                logger.info("Torque feedback: DISABLED")
+                leader.send_feedback({f"{m}.torque": 0 for m in ARM_MOTORS})
+        prev_b_pressed = b_pressed
+
+        if TORQUE_FEEDBACK_CONFIG.enabled:
+            _apply_torque_feedback(leader, state)
+
         elapsed = time.monotonic() - loop_start
         await asyncio.sleep(max(period - elapsed, 0.0))
 
@@ -148,20 +231,23 @@ async def main_async(args: argparse.Namespace) -> None:
             "Keyboard listener failed to start (needs a graphical session -- pynput requires "
             "DISPLAY on Linux). Run this script on a desktop, not a headless machine."
         )
-    logger.info("Leader arm + keyboard connected. Select 'Leader + Keyboard' in the web app to drive.")
+    logger.info("Leader arm + keyboard connected.")
+    logger.info("Select 'Leader arm + keyboard' in the web app's Control selector to drive the robot.")
+    logger.info("Press 'b' to toggle torque feedback ON/OFF (starts disabled).")
 
+    state = _ServerState()
     try:
         while True:
             try:
                 async with websockets.connect(args.server) as ws:
                     logger.info("Connected to %s", args.server)
-                    drain_task = asyncio.create_task(_drain_incoming(ws))
+                    receive_task = asyncio.create_task(_receive_loop(ws, state))
                     try:
-                        await _control_loop(ws, leader, keyboard)
+                        await _control_loop(ws, leader, keyboard, state)
                     finally:
-                        drain_task.cancel()
+                        receive_task.cancel()
                         with contextlib.suppress(asyncio.CancelledError):
-                            await drain_task
+                            await receive_task
             except (websockets.ConnectionClosed, OSError) as e:
                 logger.warning("Connection to %s lost (%s); retrying in 1s...", args.server, e)
                 await asyncio.sleep(1.0)
