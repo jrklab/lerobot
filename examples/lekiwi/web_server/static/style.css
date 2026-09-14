@@ -124,15 +124,27 @@ main {
   border-radius: 8px;
   padding: 0.4rem 0.5rem;
 }
+.jog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem;
+  margin-bottom: 0.3rem;
+}
 .jog-label {
-  display: block;
   font-size: 0.8rem;
   color: var(--muted);
-  margin-bottom: 0.3rem;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.jog-load {
+  font-size: 0.8rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.jog-load.load-ok { color: var(--ok); }
+.jog-load.load-stall { color: var(--danger); }
 .jog-btns { display: flex; gap: 0.4rem; }
 .jog-btn {
   flex: 1;

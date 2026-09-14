@@ -74,6 +74,27 @@ WATCHDOG_TIMEOUT_S = 0.4
 # Matches examples/lekiwi/teleoperate.py's single combined read+write loop rate.
 FPS = 30
 
+# Stall detection, per examples/lekiwi/torque_feedback.md: a motor is "stalled" when it's
+# under significant load (Present_Load, raw 0-1000) while barely moving (Present_Velocity,
+# raw magnitude) -- high load alone can just mean fast acceleration, so the speed gate
+# guards against false positives on an unloaded but quickly-moving joint.
+# Per-motor load thresholds match torque_feedback.md's recommended `per_motor_thresholds`.
+STALL_LOAD_THRESHOLDS = {
+    "arm_shoulder_pan": 0.3,
+    "arm_shoulder_lift": 0.5,
+    "arm_elbow_flex": 0.5,
+    "arm_wrist_flex": 0.5,
+    "arm_wrist_roll": 0.3,
+    "arm_gripper": 0.2,
+}
+STALL_SPEED_THRESHOLD = 50  # raw Present_Velocity magnitude, matches torque_feedback.md's example
+
+
+def _is_stalled(joint: str, load: float, speed: float) -> bool:
+    if speed > STALL_SPEED_THRESHOLD:
+        return False
+    return load > STALL_LOAD_THRESHOLDS[joint] * 1000
+
 
 class RobotLike(Protocol):
     def connect(self) -> None: ...
@@ -113,6 +134,12 @@ class MockLeKiwi:
         obs["x.vel"] = 0.0
         obs["y.vel"] = 0.0
         obs["theta.vel"] = 0.0
+        # Fake a slowly-oscillating load with no real hardware, purely so the load/stall
+        # readout is visible while developing the frontend with --mock.
+        fake_load = abs((self._frame_counter * 7) % 1200 - 600)
+        for joint in ARM_JOINTS:
+            obs[f"{joint}.load"] = float(fake_load)
+            obs[f"{joint}.speed"] = 0.0
         for cam_name in ("front", "wrist"):
             obs[cam_name] = self._synthetic_frame(cam_name)
         return obs
@@ -150,7 +177,9 @@ class RobotBridge:
         self._last_jog_msg_time = 0.0
 
         self._joint_targets: dict[str, float] = dict.fromkeys(ARM_JOINTS, 0.0)
-        self._latest_joint_state: dict[str, float] = dict.fromkeys(ARM_JOINTS, 0.0)
+        self._latest_joint_state: dict[str, dict] = {
+            joint: {"pos": 0.0, "load": 0.0, "stalled": False} for joint in ARM_JOINTS
+        }
         self._latest_jpeg: dict[str, bytes] = {}
 
     def start(self) -> None:
@@ -160,7 +189,7 @@ class RobotBridge:
             key = f"{joint}.pos"
             if key in obs:
                 self._joint_targets[joint] = obs[key]
-                self._latest_joint_state[joint] = obs[key]
+                self._latest_joint_state[joint]["pos"] = obs[key]
         logger.info("RobotBridge starting with initial joint targets: %s", self._joint_targets)
 
         self._stop_event.clear()
@@ -217,7 +246,7 @@ class RobotBridge:
         with self._lock:
             return self._latest_jpeg.get(cam_name)
 
-    def get_joint_state(self) -> dict[str, float]:
+    def get_joint_state(self) -> dict[str, dict]:
         with self._lock:
             return dict(self._latest_joint_state)
 
@@ -272,9 +301,15 @@ class RobotBridge:
                 new_joint_state = {}
                 new_jpeg = {}
                 for joint in ARM_JOINTS:
-                    key = f"{joint}.pos"
-                    if key in obs:
-                        new_joint_state[joint] = obs[key]
+                    if f"{joint}.pos" not in obs:
+                        continue
+                    load = obs.get(f"{joint}.load", 0.0)
+                    speed = obs.get(f"{joint}.speed", 0.0)
+                    new_joint_state[joint] = {
+                        "pos": obs[f"{joint}.pos"],
+                        "load": load,
+                        "stalled": _is_stalled(joint, load, speed),
+                    }
                 for cam_name in ("front", "wrist"):
                     frame = obs.get(cam_name)
                     if frame is not None:

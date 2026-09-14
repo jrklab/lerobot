@@ -22,7 +22,7 @@ function connectWs() {
       const msg = JSON.parse(ev.data);
       if (msg.type === "state") {
         setGamepadStatus(!!msg.gamepad_connected);
-        // Live joint readout could be rendered here later (e.g. in a diagnostics tab).
+        updateJointLoads(msg.joints);
       }
     } catch (_) {
       /* ignore malformed status messages */
@@ -41,6 +41,20 @@ function setGamepadStatus(connected) {
   const el = document.getElementById("gamepad-status");
   el.textContent = connected ? "gamepad: connected" : "gamepad: disconnected";
   el.className = "status " + (connected ? "status-connected" : "status-disconnected");
+}
+
+// Per-joint load readout + stall coloring (see robot_bridge.py's _is_stalled(), which
+// mirrors the stall condition documented in examples/lekiwi/torque_feedback.md).
+function updateJointLoads(joints) {
+  if (!joints) return;
+  document.querySelectorAll(".jog-card").forEach((card) => {
+    const info = joints[card.dataset.joint];
+    const el = card.querySelector(".jog-load");
+    if (!info || !el) return;
+    el.textContent = Math.round(info.load);
+    el.classList.toggle("load-stall", !!info.stalled);
+    el.classList.toggle("load-ok", !info.stalled);
+  });
 }
 
 function send(obj) {
