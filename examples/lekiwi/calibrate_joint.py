@@ -101,15 +101,22 @@ def main():
     robot.bus.connect()  # bus only: skip cameras and LeKiwi.connect()'s auto-full-calibrate path
     try:
         is_wheel = args.joint in robot.base_motors
-        robot.bus.disable_torque([args.joint])
 
         if is_wheel:
+            robot.bus.disable_torque([args.joint])
             # Wheels are continuous-rotation motors -- no meaningful "home" position or
             # mechanical range, so the full-robot calibration hardcodes these too.
             print(f"'{args.joint}' is a base wheel: using a fixed full-turn calibration, no motion needed.")
             homing_offset = 0
             range_min, range_max = 0, 4095
         else:
+            # Disable torque on the WHOLE arm, not just the target joint -- matches how the
+            # full LeKiwi.calibrate() flow does it. Leaving the other arm joints
+            # torque-enabled means you're moving this joint against a rigid linked
+            # structure, which can spike current draw on the still-torqued motors and,
+            # on a shared bus, corrupt reads for any motor (this caused an intermittent
+            # "Incorrect status packet" error here in practice).
+            robot.bus.disable_torque(robot.arm_motors)
             robot.bus.write("Operating_Mode", args.joint, OperatingMode.POSITION.value)
             input(f"Move '{args.joint}' to the middle of its range of motion and press ENTER...")
             homing_offsets = robot.bus.set_half_turn_homings([args.joint])
