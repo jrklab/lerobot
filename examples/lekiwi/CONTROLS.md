@@ -198,6 +198,17 @@ Same keys as `examples/lekiwi/teleoperate.py`'s reference mapping (`LeKiwiConfig
 | A / D | Strafe left / right |
 | Z / X | Rotate left / right |
 | R / F | Cycle speed up / down (slow → medium → fast) |
+| B | Toggle torque feedback on the leader arm ON/OFF (starts disabled) |
+
+The script also prints a line whenever the server confirms Leader arm + keyboard mode is (or
+stops being) active, so it's clear whether anything you do here currently has an effect —
+after connecting, it otherwise runs quietly (no per-tick logging).
+
+### Torque feedback
+Same behavior as `examples/lekiwi/teleoperate.py`: when enabled, the leader arm resists more
+as the corresponding follower joint's load rises (using the follower's live load/speed,
+fetched from the server's periodic state broadcast rather than a local reading). Same
+recommended per-motor scales/thresholds as the reference script.
 
 ### Safety notes
 - If the gamepad disconnects (Bluetooth drop, battery, etc.) mid-use, the server detects
