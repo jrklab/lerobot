@@ -15,14 +15,15 @@
 # limitations under the License.
 
 """
-calibrate_joint.py -- Recalibrate a single LeKiwi joint (e.g. after replacing one
-motor) without redoing the whole robot's calibration.
+calibrate_joint.py -- Recalibrate a single joint on LeKiwi or a standalone SO101/SO100
+follower arm (e.g. after replacing one motor) without redoing the whole robot's
+calibration.
 
-`lerobot-calibrate` / `LeKiwi.calibrate()` always recalibrates all 9 motors (6 arm +
-3 base wheels) in one pass, even if only one was touched. The underlying bus methods
-(`set_half_turn_homings`, `record_ranges_of_motion`, `write_calibration`) already
-support operating on a single motor -- this script just does that, leaving the other
-8 motors' calibration in the file and on-device completely untouched.
+`lerobot-calibrate` always recalibrates every motor in one pass, even if only one was
+touched. The underlying bus methods (`set_half_turn_homings`, `record_ranges_of_motion`,
+`write_calibration`) already support operating on a single motor -- this script just
+does that, leaving every other motor's calibration in the file and on-device completely
+untouched.
 
 Two-step workflow for a freshly replaced motor:
 
@@ -32,21 +33,26 @@ Two-step workflow for a freshly replaced motor:
        uv run python examples/lekiwi/calibrate_joint.py --joint arm_wrist_flex --setup-id-only
 
      Follow the same "connect the controller board to this motor only" procedure as
-     LeKiwi.setup_motors() -- this just does it for the one motor instead of all 9.
+     LeKiwi.setup_motors() -- this just does it for the one motor instead of all of them.
 
   2. Calibrate that joint (homing + range of motion, same procedure as the full
      `lerobot-calibrate` flow, just scoped to this motor):
 
        uv run python examples/lekiwi/calibrate_joint.py --joint arm_wrist_flex
 
-  Base wheels (base_left_wheel/base_back_wheel/base_right_wheel) need no manual
-  motion during calibration -- they're continuous-rotation motors with a fixed
+  Base wheels (base_left_wheel/base_back_wheel/base_right_wheel, LeKiwi only) need no
+  manual motion during calibration -- they're continuous-rotation motors with a fixed
   homing_offset=0 and a hardcoded full-turn range, matching how the full-robot
   calibration already treats them.
 
 Usage:
+  # LeKiwi (default robot type):
   uv run python examples/lekiwi/calibrate_joint.py --joint arm_wrist_flex \
       --robot-id kiwi_sn_0 --port /dev/ttyUSB0
+
+  # Standalone SO101/SO100 follower arm:
+  uv run python examples/lekiwi/calibrate_joint.py --robot-type so101_follower \
+      --joint wrist_flex --robot-id so101_test --port /dev/ttyACM0
 """
 
 import argparse
@@ -55,15 +61,29 @@ from lerobot.motors import MotorCalibration
 from lerobot.motors.feetech import OperatingMode
 from lerobot.robots.lekiwi.config_lekiwi import LeKiwiConfig
 from lerobot.robots.lekiwi.lekiwi import LeKiwi
+from lerobot.robots.so_follower.config_so_follower import SOFollowerRobotConfig
+from lerobot.robots.so_follower.so_follower import SOFollower
+
+ROBOT_CLASSES = {
+    "lekiwi": (LeKiwiConfig, LeKiwi),
+    # so100_follower uses the exact same config/robot classes as so101_follower.
+    "so101_follower": (SOFollowerRobotConfig, SOFollower),
+}
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument(
+        "--robot-type",
+        default="lekiwi",
+        choices=sorted(ROBOT_CLASSES),
+        help="Which robot this joint belongs to (default: lekiwi).",
+    )
+    parser.add_argument(
         "--joint", required=True, help="Motor name to (re)calibrate, e.g. arm_wrist_flex, base_left_wheel"
     )
-    parser.add_argument("--robot-id", default="kiwi_sn_0", help="LeKiwi robot id (calibration file name).")
-    parser.add_argument("--port", default="/dev/ttyUSB0", help="Serial port for the motor bus.")
+    parser.add_argument("--robot-id", required=True, help="Robot id (calibration file name).")
+    parser.add_argument("--port", required=True, help="Serial port for the motor bus.")
     parser.add_argument(
         "--setup-id-only",
         action="store_true",
@@ -72,7 +92,13 @@ def main():
     )
     args = parser.parse_args()
 
-    robot = LeKiwi(LeKiwiConfig(port=args.port, id=args.robot_id))
+    config_cls, robot_cls = ROBOT_CLASSES[args.robot_type]
+    robot = robot_cls(config_cls(port=args.port, id=args.robot_id))
+
+    # LeKiwi exposes .arm_motors/.base_motors; a standalone follower arm has neither
+    # attribute (there's no base) -- every one of its motors counts as an "arm motor".
+    arm_motors = getattr(robot, "arm_motors", list(robot.bus.motors))
+    base_motors = getattr(robot, "base_motors", [])
 
     if args.joint not in robot.bus.motors:
         raise SystemExit(f"Unknown joint {args.joint!r}. Valid motors: {sorted(robot.bus.motors)}")
@@ -100,7 +126,7 @@ def main():
 
     robot.bus.connect()  # bus only: skip cameras and LeKiwi.connect()'s auto-full-calibrate path
     try:
-        is_wheel = args.joint in robot.base_motors
+        is_wheel = args.joint in base_motors
 
         if is_wheel:
             robot.bus.disable_torque([args.joint])
@@ -116,7 +142,7 @@ def main():
             # structure, which can spike current draw on the still-torqued motors and,
             # on a shared bus, corrupt reads for any motor (this caused an intermittent
             # "Incorrect status packet" error here in practice).
-            robot.bus.disable_torque(robot.arm_motors)
+            robot.bus.disable_torque(arm_motors)
             robot.bus.write("Operating_Mode", args.joint, OperatingMode.POSITION.value)
             input(f"Move '{args.joint}' to the middle of its range of motion and press ENTER...")
             homing_offsets = robot.bus.set_half_turn_homings([args.joint])
