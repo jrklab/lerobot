@@ -74,6 +74,12 @@ WATCHDOG_TIMEOUT_S = 0.4
 # Matches examples/lekiwi/teleoperate.py's single combined read+write loop rate.
 FPS = 30
 
+# Only one control source drives the robot at a time. "gamepad" and "web" feed
+# update_base()/update_jog() (jog deltas); "leader_keyboard" feeds update_base() (from
+# keyboard key state, same as "web") and set_arm_absolute() (direct position mirror from a
+# leader arm on the host PC -- see leader_keyboard_client.py).
+CONTROL_MODES = ("gamepad", "web", "leader_keyboard")
+
 # Stall detection, per examples/lekiwi/torque_feedback.md: a motor is "stalled" when it's
 # under significant load (Present_Load, raw 0-1000) while barely moving (Present_Velocity,
 # raw magnitude) -- high load alone can just mean fast acceleration, so the speed gate
@@ -88,6 +94,10 @@ STALL_LOAD_THRESHOLDS = {
     "arm_gripper": 0.2,
 }
 STALL_SPEED_THRESHOLD = 50  # raw Present_Velocity magnitude, matches torque_feedback.md's example
+
+# How long a leader-arm mode entry takes to ramp from the arm's current pose up to the
+# leader's live pose (see RobotBridge.set_arm_absolute()).
+LEADER_CATCHUP_S = 1.5
 
 
 def _stall_severity(joint: str, load: float, speed: float) -> float:
@@ -178,6 +188,8 @@ class RobotBridge:
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
 
+        self._control_mode = "gamepad"
+
         self._desired_base = {"x": 0.0, "y": 0.0, "theta": 0.0, "speed": "medium"}
         self._desired_jogs: dict[str, dict] = {}  # joint -> {"dir": -1|0|1, "speed": str}
         # Separate watchdog timestamps: arm jog traffic must never mask a stale base
@@ -190,6 +202,14 @@ class RobotBridge:
             joint: {"pos": 0.0, "load": 0.0, "stalled": False, "severity": 0.0} for joint in ARM_JOINTS
         }
         self._latest_jpeg: dict[str, bytes] = {}
+
+        # Leader-arm mirroring ramps in over LEADER_CATCHUP_S on entry to "leader_keyboard"
+        # instead of snapping straight to the leader's (possibly very different) live pose --
+        # see set_control_mode()/set_arm_absolute(). Deliberately NOT a blanket per-tick clamp
+        # (like max_relative_target) since that would also cap legitimate fast hand motion
+        # during normal teleoperation, not just the one-time mode-entry jump.
+        self._leader_catchup_start: dict[str, float] = {}
+        self._leader_catchup_until = 0.0
 
     def start(self) -> None:
         self._robot.connect()
@@ -216,19 +236,69 @@ class RobotBridge:
 
     # --- called from the FastAPI event loop (thread-safe) ---
 
-    def update_base(self, x: float, y: float, theta: float, speed: str) -> None:
+    def get_control_mode(self) -> str:
         with self._lock:
+            return self._control_mode
+
+    def set_control_mode(self, mode: str) -> None:
+        if mode not in CONTROL_MODES:
+            raise ValueError(f"Unknown control mode: {mode!r}")
+        with self._lock:
+            self._control_mode = mode
+            # Switching away from a source must not leave its last command latched in --
+            # the next thing to touch the base/arm should be whatever mode is now active.
+            self._desired_base = {"x": 0.0, "y": 0.0, "theta": 0.0, "speed": "medium"}
+            self._desired_jogs.clear()
+            if mode == "leader_keyboard":
+                self._leader_catchup_start = dict(self._joint_targets)
+                self._leader_catchup_until = time.monotonic() + LEADER_CATCHUP_S
+        logger.info("Control mode switched to: %s", mode)
+
+    def update_base(self, x: float, y: float, theta: float, speed: str, source: str) -> None:
+        with self._lock:
+            if source != self._control_mode:
+                return
             self._desired_base = {"x": x, "y": y, "theta": theta, "speed": speed}
             self._last_base_msg_time = time.monotonic()
 
-    def update_jog(self, joint: str, direction: float, speed: str) -> None:
+    def update_jog(self, joint: str, direction: float, speed: str, source: str) -> None:
         """direction is -1..1: the web UI's hold-to-jog buttons only ever send -1/0/1,
         but the gamepad passes a continuous analog stick value through this same path."""
         if joint not in ARM_JOINTS:
             raise ValueError(f"Unknown joint: {joint}")
         with self._lock:
+            if source != self._control_mode:
+                return
             self._desired_jogs[joint] = {"dir": direction, "speed": speed}
             self._last_jog_msg_time = time.monotonic()
+
+    def set_arm_absolute(self, positions: dict[str, float]) -> None:
+        """Mirrors a leader arm's positions directly onto the arm's targets (no jog delta).
+
+        Only takes effect in "leader_keyboard" mode. For LEADER_CATCHUP_S after entering that
+        mode, targets ramp linearly from wherever the arm was to the leader's live pose instead
+        of snapping there in one tick -- a leader/follower pose mismatch at the moment of the
+        switch is expected, not a bug, so this is a one-time smoothing, not a standing limit on
+        how fast normal teleoperation can move the arm afterward.
+        """
+        with self._lock:
+            if self._control_mode != "leader_keyboard":
+                return
+            self._desired_jogs.clear()
+
+            now = time.monotonic()
+            remaining = self._leader_catchup_until - now
+            alpha = 1.0 if remaining <= 0 else 1.0 - (remaining / LEADER_CATCHUP_S)
+
+            for joint, pos in positions.items():
+                if joint not in ARM_JOINTS:
+                    continue
+                lo, hi = JOINT_RANGE[joint]
+                pos = max(lo, min(hi, pos))
+                if alpha < 1.0:
+                    start = self._leader_catchup_start.get(joint, pos)
+                    pos = start + (pos - start) * alpha
+                self._joint_targets[joint] = pos
 
     def reset_arm(self) -> None:
         """Sends the arm to its neutral/rest pose (see ARM_NEUTRAL_POS)."""

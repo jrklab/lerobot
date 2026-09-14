@@ -252,9 +252,9 @@ class GamepadInput:
             self._mode = "arm" if self._mode == "base" else "base"
             logger.info("Gamepad mode: %s", self._mode.upper())
             # Release whatever the other mode was driving.
-            self._bridge.update_base(0.0, 0.0, 0.0, SPEED_NAMES[self._speed_index])
+            self._bridge.update_base(0.0, 0.0, 0.0, SPEED_NAMES[self._speed_index], source="gamepad")
             for joint in ARM_JOINTS:
-                self._bridge.update_jog(joint, 0.0, SPEED_NAMES[self._speed_index])
+                self._bridge.update_jog(joint, 0.0, SPEED_NAMES[self._speed_index], source="gamepad")
             self._active_base = False
             self._active_jogs = dict.fromkeys(ARM_JOINTS, False)
 
@@ -294,7 +294,7 @@ class GamepadInput:
     def _dispatch_base(self, x: float, y: float, theta: float, speed: str) -> None:
         is_active = bool(x or y or theta)
         if is_active or self._active_base:
-            self._bridge.update_base(x, y, theta, speed)
+            self._bridge.update_base(x, y, theta, speed, source="gamepad")
         self._active_base = is_active
 
     def _dispatch_arm(self, lx: float, ly: float, rx: float, ry: float, speed: str) -> None:
@@ -317,5 +317,5 @@ class GamepadInput:
         for joint, direction in dirs.items():
             is_active = direction != 0.0
             if is_active or self._active_jogs[joint]:
-                self._bridge.update_jog(joint, direction, speed)
+                self._bridge.update_jog(joint, direction, speed, source="gamepad")
             self._active_jogs[joint] = is_active

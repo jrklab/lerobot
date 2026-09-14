@@ -2851,9 +2851,11 @@ lekiwi-web = [
     { name = "deepdiff" },
     { name = "fastapi" },
     { name = "feetech-servo-sdk" },
+    { name = "pynput" },
     { name = "pyserial" },
     { name = "pyzmq" },
     { name = "uvicorn", extra = ["standard"] },
+    { name = "websockets" },
 ]
 libero = [
     { name = "av" },
@@ -3102,6 +3104,7 @@ requires-dist = [
     { name = "lerobot", extras = ["pygame-dep"], marker = "extra == 'hopejr'" },
     { name = "lerobot", extras = ["pygame-dep"], marker = "extra == 'unitree-g1'" },
     { name = "lerobot", extras = ["pynput-dep"], marker = "extra == 'hardware'" },
+    { name = "lerobot", extras = ["pynput-dep"], marker = "extra == 'lekiwi-web'" },
     { name = "lerobot", extras = ["pyserial-dep"], marker = "extra == 'dynamixel'" },
     { name = "lerobot", extras = ["pyserial-dep"], marker = "extra == 'feetech'" },
     { name = "lerobot", extras = ["pyserial-dep"], marker = "extra == 'hardware'" },
@@ -3191,6 +3194,7 @@ requires-dist = [
     { name = "transformers", marker = "extra == 'transformers-dep'", specifier = "==5.3.0" },
     { name = "uvicorn", extras = ["standard"], marker = "extra == 'lekiwi-web'", specifier = ">=0.34.0,<1.0.0" },
     { name = "wandb", marker = "extra == 'training'", specifier = ">=0.24.0,<0.25.0" },
+    { name = "websockets", marker = "extra == 'lekiwi-web'", specifier = ">=13.0,<17.0" },
 ]
 provides-extras = ["dataset", "training", "hardware", "viz", "core-scripts", "evaluation", "dataset-viz", "av-dep", "pygame-dep", "placo-dep", "transformers-dep", "grpcio-dep", "can-dep", "peft-dep", "scipy-dep", "diffusers-dep", "qwen-vl-utils-dep", "matplotlib-dep", "pyserial-dep", "deepdiff-dep", "pynput-dep", "pyzmq-dep", "feetech", "dynamixel", "damiao", "robstride", "openarms", "gamepad", "hopejr", "lekiwi", "lekiwi-web", "unitree-g1", "reachy2", "kinematics", "intelrealsense", "phone", "diffusion", "wallx", "pi", "smolvla", "multi-task-dit", "groot", "sarm", "xvla", "hilserl", "async", "peft", "dev", "notebook", "test", "video-benchmark", "aloha", "pusht", "libero", "metaworld", "all"]
 

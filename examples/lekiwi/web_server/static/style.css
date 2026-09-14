@@ -35,6 +35,23 @@ html, body {
 .status-connected { background: rgba(34,197,94,0.15); color: var(--ok); }
 .status-disconnected { background: rgba(239,68,68,0.15); color: var(--danger); }
 
+.mode-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 1rem;
+  padding: 0.5rem 1rem;
+  background: var(--panel);
+  border-bottom: 1px solid #2a303c;
+  font-size: 0.85rem;
+}
+.mode-bar label { display: flex; align-items: center; gap: 0.3rem; white-space: nowrap; }
+
+/* Only the currently-selected control mode's on-page inputs should do anything -- everything
+   else is a no-op on the server side anyway (RobotBridge ignores commands from a source that
+   isn't the active mode), but graying it out here makes that obvious instead of surprising. */
+.mode-locked { opacity: 0.35; pointer-events: none; }
+
 .tabs {
   display: flex;
   gap: 0.4rem;

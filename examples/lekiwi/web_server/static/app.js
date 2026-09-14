@@ -24,6 +24,7 @@ function connectWs() {
         setGamepadStatus(!!msg.gamepad_connected);
         updateJointLoads(msg.joints);
         updateStallTone(msg.joints);
+        updateModeUI(msg.control_mode);
       }
     } catch (_) {
       /* ignore malformed status messages */
@@ -131,6 +132,36 @@ function send(obj) {
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify(obj));
   }
+}
+
+// --- Control mode selector ---
+
+function setupModeSelector() {
+  document.querySelectorAll('input[name="mode"]').forEach((input) => {
+    input.addEventListener("change", (e) => {
+      if (e.target.checked) send({ type: "set_mode", mode: e.target.value });
+    });
+  });
+}
+
+// Grays out (and disables pointer interaction on) the on-page joystick/jog/speed controls
+// whenever "web" isn't the currently active control mode -- they'd be no-ops on the server
+// anyway (RobotBridge ignores commands from a source that isn't the active mode), but this
+// makes it visually obvious instead of just silently not working. Also keeps the mode radios
+// in sync in case another client (or the leader/keyboard script) changed the mode.
+let lastKnownMode = null;
+
+function updateModeUI(mode) {
+  if (!mode || mode === lastKnownMode) return;
+  lastKnownMode = mode;
+  const webActive = mode === "web";
+  document.querySelectorAll(".joystick, .jog-btn").forEach((el) => {
+    el.classList.toggle("mode-locked", !webActive);
+  });
+  document.querySelector(".speed-bar").classList.toggle("mode-locked", !webActive);
+  document.querySelectorAll('input[name="mode"]').forEach((input) => {
+    input.checked = input.value === mode;
+  });
 }
 
 // --- Tabs ---
@@ -296,6 +327,7 @@ window.addEventListener("DOMContentLoaded", () => {
   setupJogButtons();
   setupSpeedSelector();
   setupResetButton();
+  setupModeSelector();
   updateVideoStreams("base");
   connectWs();
 });

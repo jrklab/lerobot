@@ -1,9 +1,25 @@
-# LeKiwi Controls — Web App & Gamepad
+# LeKiwi Controls — Web App, Gamepad & Leader Arm
 
-How to drive LeKiwi right now, via the web app (phone or computer browser) and/or a
-Bluetooth/USB gamepad. Both control the same robot through the same server process — see
-`lekiwi_web_server.md` for the overall project spec and `networking_setup.md` for how the
-Pi's network is set up.
+How to drive LeKiwi right now, via the web app (phone or computer browser), a Bluetooth/USB
+gamepad, or a leader arm + keyboard. All three drive the same robot through the same server
+process — see `lekiwi_web_server.md` for the overall project spec and `networking_setup.md`
+for how the Pi's network is set up.
+
+## Control mode selector
+
+The web app has a **Control** selector (top of the page, under the status bar) with three
+options: **Gamepad**, **Web joystick/buttons**, and **Leader arm + keyboard**. Only one is
+ever active at a time — the server ignores commands from any source that isn't the currently
+selected mode, so e.g. moving the on-page joystick while "Gamepad" is selected does nothing.
+The inactive mode's on-page controls (joystick, jog buttons, speed selector) gray out to make
+this obvious. The mode is shared across every connected browser tab/device — switching it on
+one screen switches it everywhere.
+
+**Reset arm to neutral** and the gamepad's emergency stop remain available regardless of
+mode. Switching *into* Leader arm + keyboard mode ramps the arm smoothly from its current
+pose to the leader arm's live pose over ~1.5s instead of snapping there instantly, in case
+the leader isn't already in a matching pose when you switch (see `robot_bridge.py`'s
+`LEADER_CATCHUP_S`).
 
 ## Starting the server
 
@@ -155,10 +171,37 @@ paired controller — this differs from the SHANWAN reference mapping in the ori
 | Home | `KEY_MENU` (not currently used) |
 | Select / Start | dead buttons on this unit — no event at all |
 
+## Leader arm + keyboard
+
+For precise teleoperation: an SO101 leader arm mirrors directly onto LeKiwi's arm, and the
+keyboard drives the base. Unlike the gamepad (paired directly to the Pi), **the leader arm
+and keyboard connect to your own workstation** (host PC), not the Pi — a separate script
+there talks to the already-running web server over the network:
+
+```bash
+uv run python examples/lekiwi/web_server/leader_keyboard_client.py \
+    --server ws://raspberrypi.local:8000/ws/control \
+    --leader-port /dev/ttyUSB0 --leader-id leader_arm_1
+```
+
+This needs a real desktop session on the machine you run it from (keyboard capture uses
+`pynput`, which requires `DISPLAY` on Linux) — run it on your workstation, not the headless
+Pi. Running the script alone doesn't drive anything by itself: you still need to select
+**Leader arm + keyboard** in the web app's Control selector for its commands to take effect.
+
+### Base key mapping
+Same keys as `examples/lekiwi/teleoperate.py`'s reference mapping (`LeKiwiConfig.teleop_keys`):
+
+| Key | Action |
+|---|---|
+| W / S | Drive forward / backward |
+| A / D | Strafe left / right |
+| Z / X | Rotate left / right |
+| R / F | Cycle speed up / down (slow → medium → fast) |
+
 ### Safety notes
 - If the gamepad disconnects (Bluetooth drop, battery, etc.) mid-use, the server detects
   the silence and halts all motion automatically rather than continuing on the last
   received stick position.
-- The web app and gamepad can be used interchangeably at any time — both drive the same
-  robot through the same watchdog-protected control loop; whichever one is actively being
-  used takes effect, and going idle on one doesn't block the other.
+- Only the selected Control mode's commands take effect; the other two are fully inert
+  (not just visually grayed out) while a different mode is active.

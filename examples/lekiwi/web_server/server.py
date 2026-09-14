@@ -142,6 +142,7 @@ async def _status_pusher(websocket: WebSocket) -> None:
                             "type": "state",
                             "joints": bridge.get_joint_state(),
                             "gamepad_connected": gamepad.is_connected() if gamepad is not None else False,
+                            "control_mode": bridge.get_control_mode(),
                         }
                     )
                 )
@@ -164,11 +165,18 @@ def _handle_message(raw: str) -> None:
         speed = msg.get("speed", "medium")
         if speed not in BASE_SPEEDS:
             speed = "medium"
+        # "source" distinguishes the on-page joystick ("web") from the leader/keyboard
+        # companion script's WASD-derived base commands ("leader_keyboard") -- either way
+        # RobotBridge only applies it if that source is the currently active control mode.
+        source = msg.get("source", "web")
+        if source not in ("web", "leader_keyboard"):
+            source = "web"
         bridge.update_base(
             x=float(msg.get("x", 0.0)),
             y=float(msg.get("y", 0.0)),
             theta=float(msg.get("theta", 0.0)),
             speed=speed,
+            source=source,
         )
     elif msg_type == "jog":
         joint = msg.get("joint")
@@ -179,7 +187,22 @@ def _handle_message(raw: str) -> None:
         if speed not in JOG_SPEEDS:
             speed = "medium"
         direction = int(msg.get("dir", 0))
-        bridge.update_jog(joint, direction, speed)
+        bridge.update_jog(joint, direction, speed, source="web")
+    elif msg_type == "arm_pos":
+        positions = msg.get("positions")
+        if not isinstance(positions, dict):
+            logger.warning("Dropping malformed arm_pos message: %s", raw)
+            return
+        try:
+            bridge.set_arm_absolute({k: float(v) for k, v in positions.items()})
+        except (TypeError, ValueError):
+            logger.warning("Dropping arm_pos message with non-numeric positions: %s", raw)
+    elif msg_type == "set_mode":
+        mode = msg.get("mode")
+        try:
+            bridge.set_control_mode(mode)
+        except ValueError:
+            logger.warning("Dropping set_mode message with unknown mode: %s", mode)
     elif msg_type == "reset_arm":
         logger.info("Resetting arm to neutral pose.")
         bridge.reset_arm()
