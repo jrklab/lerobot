@@ -90,10 +90,19 @@ STALL_LOAD_THRESHOLDS = {
 STALL_SPEED_THRESHOLD = 50  # raw Present_Velocity magnitude, matches torque_feedback.md's example
 
 
-def _is_stalled(joint: str, load: float, speed: float) -> bool:
+def _stall_severity(joint: str, load: float, speed: float) -> float:
+    """0.0 = not stalled; up to 1.0 = load at the motor's full-scale limit.
+
+    Same normalisation as torque_feedback.md's Layer 2 (L_norm), reused here as a stall
+    *severity* metric instead of a torque-limit scale -- it's the same "how far past the
+    threshold is this load" question either way.
+    """
     if speed > STALL_SPEED_THRESHOLD:
-        return False
-    return load > STALL_LOAD_THRESHOLDS[joint] * 1000
+        return 0.0
+    threshold = STALL_LOAD_THRESHOLDS[joint] * 1000
+    if load <= threshold:
+        return 0.0
+    return min(1.0, (load - threshold) / (1000 - threshold))
 
 
 class RobotLike(Protocol):
@@ -178,7 +187,7 @@ class RobotBridge:
 
         self._joint_targets: dict[str, float] = dict.fromkeys(ARM_JOINTS, 0.0)
         self._latest_joint_state: dict[str, dict] = {
-            joint: {"pos": 0.0, "load": 0.0, "stalled": False} for joint in ARM_JOINTS
+            joint: {"pos": 0.0, "load": 0.0, "stalled": False, "severity": 0.0} for joint in ARM_JOINTS
         }
         self._latest_jpeg: dict[str, bytes] = {}
 
@@ -305,10 +314,12 @@ class RobotBridge:
                         continue
                     load = obs.get(f"{joint}.load", 0.0)
                     speed = obs.get(f"{joint}.speed", 0.0)
+                    severity = _stall_severity(joint, load, speed)
                     new_joint_state[joint] = {
                         "pos": obs[f"{joint}.pos"],
                         "load": load,
-                        "stalled": _is_stalled(joint, load, speed),
+                        "stalled": severity > 0.0,
+                        "severity": severity,
                     }
                 for cam_name in ("front", "wrist"):
                     frame = obs.get(cam_name)

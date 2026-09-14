@@ -23,6 +23,7 @@ function connectWs() {
       if (msg.type === "state") {
         setGamepadStatus(!!msg.gamepad_connected);
         updateJointLoads(msg.joints);
+        updateStallTone(msg.joints);
       }
     } catch (_) {
       /* ignore malformed status messages */
@@ -43,7 +44,7 @@ function setGamepadStatus(connected) {
   el.className = "status " + (connected ? "status-connected" : "status-disconnected");
 }
 
-// Per-joint load readout + stall coloring (see robot_bridge.py's _is_stalled(), which
+// Per-joint load readout + stall coloring (see robot_bridge.py's _stall_severity(), which
 // mirrors the stall condition documented in examples/lekiwi/torque_feedback.md).
 function updateJointLoads(joints) {
   if (!joints) return;
@@ -56,6 +57,75 @@ function updateJointLoads(joints) {
     el.classList.toggle("load-ok", !info.stalled);
   });
 }
+
+// --- Stall audio alert (gamepad has no vibration motor -- see CONTROLS.md -- so a beep
+// substitutes for haptic feedback). Pitch/volume track the worst-stalled joint's severity
+// (0-1, from robot_bridge.py) so the alert reflects how bad the stall is, not just that one
+// exists. A continuous tone (not a one-shot beep) so it's always current with live severity.
+
+let audioCtx = null;
+let stallOscillator = null;
+let stallGain = null;
+
+const STALL_TONE_MIN_HZ = 300;
+const STALL_TONE_MAX_HZ = 900;
+const STALL_TONE_MIN_GAIN = 0.12;
+const STALL_TONE_MAX_GAIN = 0.35;
+const STALL_TONE_RAMP_S = 0.05;
+
+function ensureAudioContext() {
+  if (!audioCtx) {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    audioCtx = new Ctx();
+  }
+  if (audioCtx.state === "suspended") audioCtx.resume();
+}
+
+function startStallTone() {
+  ensureAudioContext();
+  stallOscillator = audioCtx.createOscillator();
+  stallGain = audioCtx.createGain();
+  stallOscillator.type = "square";
+  stallGain.gain.value = 0;
+  stallOscillator.connect(stallGain).connect(audioCtx.destination);
+  stallOscillator.start();
+}
+
+function stopStallTone() {
+  if (!stallOscillator) return;
+  const osc = stallOscillator;
+  const gain = stallGain;
+  gain.gain.setTargetAtTime(0, audioCtx.currentTime, STALL_TONE_RAMP_S);
+  setTimeout(() => {
+    osc.stop();
+    osc.disconnect();
+    gain.disconnect();
+  }, STALL_TONE_RAMP_S * 1000 * 4);
+  stallOscillator = null;
+  stallGain = null;
+}
+
+function updateStallTone(joints) {
+  if (!joints) return;
+  let maxSeverity = 0;
+  for (const info of Object.values(joints)) {
+    if (info.severity > maxSeverity) maxSeverity = info.severity;
+  }
+
+  if (maxSeverity <= 0) {
+    stopStallTone();
+    return;
+  }
+  if (!stallOscillator) startStallTone();
+  const freq = STALL_TONE_MIN_HZ + maxSeverity * (STALL_TONE_MAX_HZ - STALL_TONE_MIN_HZ);
+  const gain = STALL_TONE_MIN_GAIN + maxSeverity * (STALL_TONE_MAX_GAIN - STALL_TONE_MIN_GAIN);
+  stallOscillator.frequency.setTargetAtTime(freq, audioCtx.currentTime, STALL_TONE_RAMP_S);
+  stallGain.gain.setTargetAtTime(gain, audioCtx.currentTime, STALL_TONE_RAMP_S);
+}
+
+// Browsers block audio playback until a user gesture -- create/resume the AudioContext on
+// the first tap/click anywhere so it's already unlocked by the time a stall can occur.
+window.addEventListener("pointerdown", () => ensureAudioContext(), { once: true });
 
 function send(obj) {
   if (ws && ws.readyState === WebSocket.OPEN) {
