@@ -168,7 +168,19 @@ def main():
         robot._save_calibration()
         print(f"Saved updated calibration to {robot.calibration_fpath}")
 
-        robot.configure()  # restore normal operating mode/torque for all motors
+        # The calibration data above is already saved -- this is just a nice-to-have to
+        # restore normal torque/PID settings immediately. It re-enables torque on every
+        # motor in one burst of writes (num_retry=0 each), so an occasional transient
+        # "no status packet" glitch here is a cosmetic bus hiccup, not a failed
+        # calibration -- the next connect() on this robot calls configure() again anyway.
+        try:
+            robot.configure()  # restore normal operating mode/torque for all motors
+        except ConnectionError as e:
+            print(
+                f"Warning: post-calibration reconfigure failed ({e}), but the calibration above was "
+                "already saved successfully. Motors will be reconfigured automatically the next time "
+                "this robot connects."
+            )
     finally:
         robot.bus.disconnect(robot.config.disable_torque_on_disconnect)
 
