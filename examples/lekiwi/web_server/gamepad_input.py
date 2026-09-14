@@ -285,7 +285,9 @@ class GamepadInput:
         rx, ry = self._deadzone(self._axes["ABS_RX"]), self._deadzone(self._axes["ABS_RY"])
 
         if self._mode == "base":
-            self._dispatch_base(x=-ly, y=lx, theta=-rx, speed=speed)
+            # y.vel is negative for rightward strafe (same convention as the web app's
+            # joystick: `y: -translate.x`) -- lx is positive when pushed right, so negate.
+            self._dispatch_base(x=-ly, y=-lx, theta=-rx, speed=speed)
         else:
             self._dispatch_arm(lx=lx, ly=ly, rx=rx, ry=ry, speed=speed)
 

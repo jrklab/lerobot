@@ -102,10 +102,8 @@ at a time — switching modes releases whatever the previous mode was doing.
 | Left stick, push left/right | Strafe left / right (`y.vel`) |
 | Right stick, push left/right | Rotate in place (`theta.vel`) |
 
-Directions follow directly from the code (`x = -stick_y`, `y = stick_x`, `theta = -right_stick_x`)
-but haven't been physically re-verified on hardware since the gamepad code changed — if
-strafe or rotation comes out backwards from what feels intuitive, swap the sign in
-`gamepad_input.py`'s `_dispatch()` (the `_dispatch_base(x=..., y=..., theta=..., ...)` call).
+Directions follow directly from the code (`x = -stick_y`, `y = -stick_x`, `theta = -right_stick_x`),
+verified on hardware.
 
 ### Motion mapping — Arm mode
 | Control | Joint | Direction |
