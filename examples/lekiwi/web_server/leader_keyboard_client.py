@@ -73,17 +73,18 @@ TELEOP_KEYS = {
     "speed_down": "f",
 }
 
-# Same recommended starting point as examples/lekiwi/teleoperate.py's torque_feedback_config.
+# Testing max resistance: per_motor_scales raised to 1.0 (ceiling) across the board, up from
+# examples/lekiwi/teleoperate.py's recommended starting point (0.5 / 0.3 for gripper).
 TORQUE_FEEDBACK_CONFIG = TorqueFeedbackConfig(
     enabled=False,  # starts disabled; toggle with 'b'
     global_scale_factor=1.0,
     per_motor_scales={
-        "shoulder_pan": 0.5,
-        "shoulder_lift": 0.5,
-        "elbow_flex": 0.5,
-        "wrist_flex": 0.5,
-        "wrist_roll": 0.5,
-        "gripper": 0.3,
+        "shoulder_pan": 1.0,
+        "shoulder_lift": 1.0,
+        "elbow_flex": 1.0,
+        "wrist_flex": 1.0,
+        "wrist_roll": 1.0,
+        "gripper": 1.0,
     },
     per_motor_thresholds={
         "shoulder_pan": 0.3,
@@ -168,7 +169,38 @@ async def _receive_loop(ws, state: _ServerState) -> None:
                     logger.info("Control mode is now '%s' -- this script's commands are ignored.", mode)
 
 
-def _apply_torque_feedback(leader: SO101Leader, state: _ServerState) -> None:
+class _StallHold:
+    """Experimental: on top of the usual Torque_Limit capping, snaps each stalled joint's
+    leader `Goal_Position` to the follower's position at the moment of the stall (not the
+    leader's own position -- the follower may lag behind the leader, so its actual stuck
+    point is the more meaningful target). Snapshotted once per stall onset (the 0 -> active
+    transition), not re-snapshotted every tick while still stalled, so the hold point
+    doesn't chase any further creep; released (no special action needed -- send_feedback
+    already disables torque once torque_limit returns to 0) and re-armed fresh next stall.
+    """
+
+    def __init__(self):
+        self._holding: set[str] = set()
+
+    def update(self, leader: SO101Leader, torque_limits: dict[str, float], state: _ServerState) -> None:
+        for motor, limit in torque_limits.items():
+            if limit > 0:
+                if motor not in self._holding:
+                    info = state.joints.get(f"arm_{motor}")
+                    if info is not None:
+                        q = info["pos"]
+                        leader.bus.write("Goal_Position", motor, q)
+                        logger.info("Stall hold engaged: %s -> follower's stalled position %.1f", motor, q)
+                    self._holding.add(motor)
+            elif motor in self._holding:
+                logger.info("Stall hold released: %s", motor)
+                self._holding.discard(motor)
+
+    def reset(self) -> None:
+        self._holding.clear()
+
+
+def _apply_torque_feedback(leader: SO101Leader, state: _ServerState, stall_hold: _StallHold) -> None:
     load_dict = {}
     speed_dict = {}
     for joint, info in state.joints.items():
@@ -181,11 +213,13 @@ def _apply_torque_feedback(leader: SO101Leader, state: _ServerState) -> None:
     torque_limits = map_load_to_torque_limit(
         load_dict, TORQUE_FEEDBACK_CONFIG, list(load_dict.keys()), speed_dict=speed_dict
     )
+    stall_hold.update(leader, torque_limits, state)
     leader.send_feedback({f"{motor}.torque": val for motor, val in torque_limits.items()})
 
 
 async def _control_loop(ws, leader: SO101Leader, keyboard: KeyboardTeleop, state: _ServerState) -> None:
     speed_cycle = _SpeedCycle()
+    stall_hold = _StallHold()
     prev_b_pressed = False
     period = 1.0 / FPS
     while True:
@@ -212,10 +246,11 @@ async def _control_loop(ws, leader: SO101Leader, keyboard: KeyboardTeleop, state
             else:
                 logger.info("Torque feedback: DISABLED")
                 leader.send_feedback({f"{m}.torque": 0 for m in ARM_MOTORS})
+                stall_hold.reset()
         prev_b_pressed = b_pressed
 
         if TORQUE_FEEDBACK_CONFIG.enabled:
-            _apply_torque_feedback(leader, state)
+            _apply_torque_feedback(leader, state, stall_hold)
 
         elapsed = time.monotonic() - loop_start
         await asyncio.sleep(max(period - elapsed, 0.0))
