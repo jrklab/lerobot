@@ -22,16 +22,26 @@ it (gamepad/web/leader arm) -- it just observes the same obs/action dicts RobotB
 control loop already computes every tick. Playback takes exclusive control of the robot for
 the duration of one episode's replay; that part is handled by RobotBridge itself (see its
 `_control_loop()`), not here -- this module only owns the dataset lifecycle.
+
+IMPORTANT: `lerobot.datasets`/`lerobot.utils.feature_utils` pull in torch transitively, and
+on some ARM boards (e.g. Raspberry Pi 4 -- confirmed on this project's hardware) the
+installed torch wheel SIGILLs on load: a hard process-killing signal, not a catchable Python
+exception, from inside torch's own compiled extension -- no try/except can survive it. So
+all lerobot-dataset imports here are deferred into __init__ (only reached if recording is
+actually enabled, i.e. not --no-recording) rather than sitting at module level, where they'd
+crash the whole web server on import even for users who never touch the Record tab.
 """
+
+from __future__ import annotations
 
 import logging
 import threading
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from lerobot.datasets.lerobot_dataset import LeRobotDataset
-from lerobot.utils.constants import ACTION, HF_LEROBOT_HOME, OBS_STR
-from lerobot.utils.feature_utils import build_dataset_frame, hw_to_dataset_features
+if TYPE_CHECKING:
+    from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +57,19 @@ class EpisodeRecorder:
     the FastAPI event loop (everything else), never both at once for the same call."""
 
     def __init__(self, repo_id: str, root: str | Path | None, fps: int):
+        # Deferred to here (not module level) -- see the module docstring for why: this is
+        # the first point a torch-dependent import executes, reached only if recording is
+        # actually enabled (server.py skips constructing this class entirely otherwise).
+        from lerobot.datasets.lerobot_dataset import LeRobotDataset
+        from lerobot.utils.constants import ACTION, HF_LEROBOT_HOME, OBS_STR
+        from lerobot.utils.feature_utils import build_dataset_frame, hw_to_dataset_features
+
+        self._LeRobotDataset = LeRobotDataset
+        self._ACTION = ACTION
+        self._OBS_STR = OBS_STR
+        self._build_dataset_frame = build_dataset_frame
+        self._hw_to_dataset_features = hw_to_dataset_features
+
         self.repo_id = repo_id
         self.root = Path(root) if root is not None else HF_LEROBOT_HOME / repo_id
         self.fps = fps
@@ -75,8 +98,8 @@ class EpisodeRecorder:
         """Must be called once (with the real robot's feature dicts) before recording can
         start. Deferred out of __init__ since RobotBridge only knows these after connect()."""
         self._dataset_features = {
-            **hw_to_dataset_features(action_features, ACTION),
-            **hw_to_dataset_features(observation_features, OBS_STR),
+            **self._hw_to_dataset_features(action_features, self._ACTION),
+            **self._hw_to_dataset_features(observation_features, self._OBS_STR),
         }
 
     def _load_existing_episodes(self) -> None:
@@ -122,11 +145,11 @@ class EpisodeRecorder:
             raise RuntimeError("configure_features() must be called before recording")
         try:
             if (self.root / "meta" / "info.json").exists():
-                self._dataset = LeRobotDataset.resume(
+                self._dataset = self._LeRobotDataset.resume(
                     repo_id=self.repo_id, root=self.root, vcodec=VCODEC, streaming_encoding=True
                 )
             else:
-                self._dataset = LeRobotDataset.create(
+                self._dataset = self._LeRobotDataset.create(
                     repo_id=self.repo_id,
                     fps=self.fps,
                     features=self._dataset_features,
@@ -154,8 +177,8 @@ class EpisodeRecorder:
         if not self._recording or self._dataset is None:
             return
         try:
-            obs_frame = build_dataset_frame(self._dataset.features, obs, OBS_STR)
-            action_frame = build_dataset_frame(self._dataset.features, action, ACTION)
+            obs_frame = self._build_dataset_frame(self._dataset.features, obs, self._OBS_STR)
+            action_frame = self._build_dataset_frame(self._dataset.features, action, self._ACTION)
             self._dataset.add_frame({**obs_frame, **action_frame, "task": self._task})
             self._frame_count += 1
         except Exception:
@@ -239,11 +262,11 @@ class EpisodeRecorder:
         if episode_index < 0 or episode_index >= len(self._episodes):
             return None
         try:
-            dataset = LeRobotDataset(self.repo_id, root=self.root, episodes=[episode_index])
-            names = dataset.features[ACTION]["names"]
-            actions_col = dataset.select_columns(ACTION)
+            dataset = self._LeRobotDataset(self.repo_id, root=self.root, episodes=[episode_index])
+            names = dataset.features[self._ACTION]["names"]
+            actions_col = dataset.select_columns(self._ACTION)
             return [
-                {name: float(actions_col[i][ACTION][j]) for j, name in enumerate(names)}
+                {name: float(actions_col[i][self._ACTION][j]) for j, name in enumerate(names)}
                 for i in range(dataset.num_frames)
             ]
         except Exception:
@@ -266,7 +289,7 @@ class EpisodeRecorder:
 
     def _upload_worker(self) -> None:
         try:
-            dataset = LeRobotDataset(self.repo_id, root=self.root)
+            dataset = self._LeRobotDataset(self.repo_id, root=self.root)
             dataset.push_to_hub()
             with self._upload_lock:
                 self._upload_status = "success"
