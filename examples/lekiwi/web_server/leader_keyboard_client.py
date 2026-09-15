@@ -53,7 +53,17 @@ from lerobot.teleoperators.keyboard.teleop_keyboard import KeyboardTeleop, Keybo
 from lerobot.teleoperators.so_leader import SO101Leader, SO101LeaderConfig
 from lerobot.teleoperators.torque_feedback import TorqueFeedbackConfig, map_load_to_torque_limit
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+
+# force=True: lerobot.utils.import_utils's `_pynput_available = is_package_available("pynput")`
+# (evaluated at import time, before this line runs, since it's pulled in transitively via
+# KeyboardTeleop) calls logging.debug() internally, which is the *first* bare logging.xxx()
+# call in the process -- Python auto-configures the root logger to level WARNING right there
+# if nothing's configured yet, which makes a later plain basicConfig() a silent no-op (per
+# the logging docs). Without force=True, every logger.info() below (including the startup
+# and mode-change lines) gets swallowed with no error, even though the script is running fine.
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s", force=True
+)
 logger = logging.getLogger(__name__)
 
 FPS = 30
