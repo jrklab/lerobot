@@ -156,8 +156,14 @@ lekiwi_web = [
     # leader_keyboard_client.py: WS client to the web server, keyboard capture for base control.
     "websockets>=13.0,<17.0",
     "lerobot[pynput-dep]",
-    # episode_recorder.py: LeRobotDataset-backed episode recording/playback/Hub upload.
-    "lerobot[dataset]",
+    # episode_recorder.py: writes a from-scratch replica of the LeRobotDataset v3.0 format
+    # directly (not via lerobot.datasets, which pulls in torch -- the installed torch wheel
+    # SIGILLs on this project's Raspberry Pi hardware). av/pandas/pyarrow are all confirmed
+    # torch-free; deliberately NOT using lerobot[dataset] here (pulls in datasets/torchcodec/
+    # jsonlines we don't need, for no benefit since we don't import lerobot.datasets anyway).
+    "lerobot[av-dep]",
+    "pandas>=2.0.0,<3.0.0",
+    "pyarrow>=21.0.0,<30.0.0",
 ]
 unitree_g1 = [
     # "unitree-sdk2==1.0.1",
