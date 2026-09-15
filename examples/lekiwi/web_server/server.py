@@ -32,7 +32,9 @@ import asyncio
 import contextlib
 import json
 import logging
+import socket
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -46,8 +48,9 @@ from fastapi.staticfiles import StaticFiles
 # module rather than part of the installed lerobot package.
 sys.path.insert(0, str(Path(__file__).parent))
 
+from episode_recorder import EpisodeRecorder  # noqa: E402
 from gamepad_input import GamepadInput  # noqa: E402
-from robot_bridge import ARM_JOINTS, BASE_SPEEDS, JOG_SPEEDS, MockLeKiwi, RobotBridge  # noqa: E402
+from robot_bridge import ARM_JOINTS, BASE_SPEEDS, FPS, JOG_SPEEDS, MockLeKiwi, RobotBridge  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -59,6 +62,23 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 bridge: RobotBridge | None = None
 gamepad: GamepadInput | None = None
+
+# Uploading to the Hub only works when the Pi has a route to the internet (only true when
+# Ethernet is plugged into the host -- the Pi's own hotspot mode, used for cordless ground
+# testing, has no upstream route at all). Checked periodically in the background rather than
+# on every status push, since a real check involves a network round-trip/timeout.
+_internet_reachable = False
+
+
+def _internet_check_loop() -> None:
+    global _internet_reachable
+    while True:
+        try:
+            with socket.create_connection(("huggingface.co", 443), timeout=3):
+                _internet_reachable = True
+        except OSError:
+            _internet_reachable = False
+        time.sleep(15)
 
 
 @app.get("/")
@@ -143,6 +163,8 @@ async def _status_pusher(websocket: WebSocket) -> None:
                             "joints": bridge.get_joint_state(),
                             "gamepad_connected": gamepad.is_connected() if gamepad is not None else False,
                             "control_mode": bridge.get_control_mode(),
+                            "recording": bridge.get_recording_status(),
+                            "internet_reachable": _internet_reachable,
                         }
                     )
                 )
@@ -206,6 +228,29 @@ def _handle_message(raw: str) -> None:
     elif msg_type == "reset_arm":
         logger.info("Resetting arm to neutral pose.")
         bridge.reset_arm()
+    elif msg_type == "start_recording":
+        task = str(msg.get("task", "")).strip()
+        if not task:
+            logger.warning("Dropping start_recording message with empty task.")
+            return
+        if not bridge.start_recording(task):
+            logger.warning("start_recording refused (already recording, playback active, or disabled).")
+    elif msg_type == "stop_recording":
+        bridge.stop_recording()
+    elif msg_type == "discard_recording":
+        bridge.discard_recording()
+    elif msg_type == "start_playback":
+        try:
+            episode = int(msg.get("episode"))
+        except (TypeError, ValueError):
+            logger.warning("Dropping start_playback message with invalid episode: %s", raw)
+            return
+        if not bridge.start_playback(episode):
+            logger.warning("start_playback refused for episode %d.", episode)
+    elif msg_type == "stop_playback":
+        bridge.stop_playback()
+    elif msg_type == "upload_to_hub":
+        bridge.upload_to_hub()
     else:
         logger.warning("Dropping WS message with unknown type: %s", msg_type)
 
@@ -222,6 +267,21 @@ def main():
         action="store_true",
         help="Disable Bluetooth/USB gamepad input (auto-detected and connected by default).",
     )
+    parser.add_argument(
+        "--repo-id",
+        default="jrkhf/lekiwi_recordings",
+        help="Hugging Face dataset repo id episodes are recorded into (one dataset per deployment).",
+    )
+    parser.add_argument(
+        "--dataset-root",
+        default=None,
+        help="Local directory for the recorded dataset. Defaults to $HF_LEROBOT_HOME/<repo-id>.",
+    )
+    parser.add_argument(
+        "--no-recording",
+        action="store_true",
+        help="Disable episode recording/playback (enabled by default).",
+    )
     args = parser.parse_args()
 
     global bridge, gamepad
@@ -234,12 +294,18 @@ def main():
 
         robot = LeKiwi(LeKiwiConfig(port=args.port_name, id=args.robot_id))
 
-    bridge = RobotBridge(robot)
+    recorder = None
+    if not args.no_recording:
+        recorder = EpisodeRecorder(repo_id=args.repo_id, root=args.dataset_root, fps=FPS)
+
+    bridge = RobotBridge(robot, recorder=recorder)
     bridge.start()
 
     if not args.no_gamepad:
         gamepad = GamepadInput(bridge)
         gamepad.start()
+
+    threading.Thread(target=_internet_check_loop, daemon=True).start()
 
     try:
         uvicorn.run(app, host=args.host, port=args.port, log_level="info")

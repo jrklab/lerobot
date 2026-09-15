@@ -24,7 +24,7 @@
   <nav class="tabs">
     <button class="tab-btn active" data-tab="base">Base</button>
     <button class="tab-btn" data-tab="arm">Arm</button>
-    <button class="tab-btn" data-tab="rec" disabled title="Coming soon">Record</button>
+    <button class="tab-btn" data-tab="rec">Record</button>
   </nav>
 
   <main>
@@ -117,9 +117,32 @@
       </div>
     </section>
 
-    <!-- RECORD TAB (stub) -->
+    <!-- RECORD TAB -->
     <section id="tab-rec" class="tab-panel">
-      <p class="stub-note">Recording &amp; replay is coming in a later phase.</p>
+      <div class="video-wrap video-compact">
+        <img id="video-rec" alt="front camera" />
+      </div>
+
+      <div class="rec-controls">
+        <input id="rec-task" type="text" placeholder="Task description (e.g. Pick up the block)" />
+        <div class="rec-btn-row">
+          <button id="rec-toggle-btn" class="rec-btn rec-btn-start">&#9679; Record</button>
+          <button id="rec-discard-btn" class="rec-btn rec-btn-discard" hidden>Discard</button>
+        </div>
+        <div id="rec-live-status" class="rec-live-status" hidden></div>
+      </div>
+
+      <div class="rec-section">
+        <div class="rec-section-header">
+          <span>Episodes</span>
+          <span id="internet-status" class="status status-disconnected">internet: --</span>
+        </div>
+        <div id="episode-list" class="episode-list">
+          <p class="stub-note">No episodes recorded yet.</p>
+        </div>
+        <button id="upload-btn" class="rec-btn rec-btn-upload">&#8593; Upload all to Hub</button>
+        <div id="upload-status" class="rec-upload-status"></div>
+      </div>
     </section>
   </main>
 

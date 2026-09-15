@@ -25,6 +25,7 @@ function connectWs() {
         updateJointLoads(msg.joints);
         updateStallTone(msg.joints);
         updateModeUI(msg.control_mode);
+        updateRecordingUI(msg.recording, msg.internet_reachable);
       }
     } catch (_) {
       /* ignore malformed status messages */
@@ -186,8 +187,10 @@ function setupTabs() {
 function updateVideoStreams(activeTab) {
   const baseImg = document.getElementById("video-base");
   const armImg = document.getElementById("video-arm");
+  const recImg = document.getElementById("video-rec");
   baseImg.src = activeTab === "base" ? "/video/front" : "";
   armImg.src = activeTab === "arm" ? "/video/wrist" : "";
+  recImg.src = activeTab === "rec" ? "/video/front" : "";
 }
 
 // --- Joystick widget (Pointer Events cover mouse + touch uniformly) ---
@@ -321,6 +324,138 @@ function setupResetButton() {
   });
 }
 
+// --- Record tab: episode recording, playback, and Hub upload ---
+
+let lastEpisodeCount = -1; // only re-render the episode list when it actually changes
+
+function setupRecordingUI() {
+  const toggleBtn = document.getElementById("rec-toggle-btn");
+  const discardBtn = document.getElementById("rec-discard-btn");
+  const uploadBtn = document.getElementById("upload-btn");
+  const taskInput = document.getElementById("rec-task");
+  const episodeList = document.getElementById("episode-list");
+
+  toggleBtn.addEventListener("click", () => {
+    if (toggleBtn.classList.contains("is-recording")) {
+      send({ type: "stop_recording" });
+    } else {
+      const task = taskInput.value.trim();
+      if (!task) {
+        taskInput.focus();
+        return;
+      }
+      send({ type: "start_recording", task });
+    }
+  });
+
+  discardBtn.addEventListener("click", () => send({ type: "discard_recording" }));
+  uploadBtn.addEventListener("click", () => send({ type: "upload_to_hub" }));
+
+  // Event delegation: episode rows are re-rendered on every list change, so a single
+  // listener on the container avoids having to re-attach/leak per-row handlers.
+  episodeList.addEventListener("click", (e) => {
+    const btn = e.target.closest(".episode-play-btn");
+    if (!btn) return;
+    const episode = parseInt(btn.dataset.episode, 10);
+    if (btn.classList.contains("is-playing")) {
+      send({ type: "stop_playback" });
+    } else {
+      send({ type: "start_playback", episode });
+    }
+  });
+}
+
+function updateRecordingUI(recording, internetReachable) {
+  if (!recording) return;
+
+  const toggleBtn = document.getElementById("rec-toggle-btn");
+  const discardBtn = document.getElementById("rec-discard-btn");
+  const taskInput = document.getElementById("rec-task");
+  const liveStatus = document.getElementById("rec-live-status");
+  const uploadBtn = document.getElementById("upload-btn");
+  const uploadStatus = document.getElementById("upload-status");
+  const internetBadge = document.getElementById("internet-status");
+  const episodeList = document.getElementById("episode-list");
+
+  const busy = recording.recording || recording.saving || recording.playback_active;
+
+  if (recording.recording) {
+    toggleBtn.textContent = "■ Stop";
+    toggleBtn.classList.add("is-recording");
+    taskInput.value = recording.task;
+    liveStatus.hidden = false;
+    liveStatus.textContent = `● REC  ${recording.elapsed_s.toFixed(1)}s  (${recording.frame_count} frames)`;
+  } else if (recording.saving) {
+    toggleBtn.textContent = "Saving…";
+    toggleBtn.classList.remove("is-recording");
+    liveStatus.hidden = false;
+    liveStatus.textContent = "Saving episode…";
+  } else {
+    toggleBtn.textContent = "● Record";
+    toggleBtn.classList.remove("is-recording");
+    liveStatus.hidden = true;
+  }
+  toggleBtn.disabled = recording.saving || recording.playback_active;
+  taskInput.disabled = recording.recording || recording.saving;
+  discardBtn.hidden = !recording.recording;
+
+  const canUpload = !busy && recording.episodes.length > 0 && recording.upload_status !== "uploading";
+  uploadBtn.disabled = !canUpload;
+  uploadBtn.textContent = recording.upload_status === "uploading" ? "Uploading…" : "↑ Upload all to Hub";
+  uploadStatus.textContent = recording.upload_message || "";
+  uploadStatus.className =
+    "rec-upload-status" +
+    (recording.upload_status === "success" ? " upload-success" : "") +
+    (recording.upload_status === "error" ? " upload-error" : "");
+
+  internetBadge.textContent = internetReachable ? "internet: connected" : "internet: disconnected";
+  internetBadge.className = "status " + (internetReachable ? "status-connected" : "status-disconnected");
+
+  // Full re-render only when the episode set itself changes (a new one saved); every other
+  // tick just syncs each row's play/stop button in place, to avoid flicker on every 0.2s
+  // status update while a replay is running.
+  if (recording.episodes.length !== lastEpisodeCount) {
+    lastEpisodeCount = recording.episodes.length;
+    renderEpisodeList(recording, episodeList);
+  }
+  episodeList.querySelectorAll(".episode-play-btn").forEach((btn) => {
+    const isThis =
+      recording.playback_active && parseInt(btn.dataset.episode, 10) === recording.playback_episode;
+    btn.classList.toggle("is-playing", isThis);
+    btn.textContent = isThis ? "■ Stop" : "▶ Play";
+    btn.disabled = recording.recording || recording.saving || (recording.playback_active && !isThis);
+  });
+}
+
+function renderEpisodeList(recording, container) {
+  if (recording.episodes.length === 0) {
+    container.innerHTML = '<p class="stub-note">No episodes recorded yet.</p>';
+    return;
+  }
+  container.innerHTML = recording.episodes
+    .map((ep) => {
+      const isPlaying = recording.playback_active && recording.playback_episode === ep.index;
+      const disabled = recording.recording || recording.saving || (recording.playback_active && !isPlaying);
+      return `
+        <div class="episode-row">
+          <div class="episode-row-info">
+            <span class="episode-row-task">Episode ${ep.index}: ${escapeHtml(ep.task)}</span>
+            <span class="episode-row-meta">${ep.duration_s.toFixed(1)}s &middot; ${ep.length} frames</span>
+          </div>
+          <button class="episode-play-btn${isPlaying ? " is-playing" : ""}" data-episode="${ep.index}" ${disabled ? "disabled" : ""}>
+            ${isPlaying ? "■ Stop" : "▶ Play"}
+          </button>
+        </div>`;
+    })
+    .join("");
+}
+
+function escapeHtml(str) {
+  const div = document.createElement("div");
+  div.textContent = str;
+  return div.innerHTML;
+}
+
 window.addEventListener("DOMContentLoaded", () => {
   setupTabs();
   setupBaseJoysticks();
@@ -328,6 +463,7 @@ window.addEventListener("DOMContentLoaded", () => {
   setupSpeedSelector();
   setupResetButton();
   setupModeSelector();
+  setupRecordingUI();
   updateVideoStreams("base");
   connectWs();
 });

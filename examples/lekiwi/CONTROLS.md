@@ -34,6 +34,11 @@ Useful flags:
 - `--no-gamepad` — disable gamepad auto-detection (on by default).
 - `--robot-id` / `--port-name` — override the LeKiwi calibration id / serial port
   (defaults: `kiwi_sn_0`, `/dev/ttyUSB0`).
+- `--repo-id` — Hugging Face dataset repo episodes are recorded into (default:
+  `jrkhf/lekiwi_recordings`; one dataset per deployment).
+- `--dataset-root` — local directory for the recorded dataset (default:
+  `$HF_LEROBOT_HOME/<repo-id>`).
+- `--no-recording` — disable the Record tab entirely (enabled by default).
 
 ## Web app
 
@@ -65,6 +70,27 @@ its folded rest pose in one action.
 
 ### Speed selector
 Slow / Medium / Fast, applies to whichever tab (Base or Arm) is active.
+
+### Record tab
+Records episodes in the standard LeRobot dataset format (`LeRobotDataset`) — the same
+format `lerobot-record` produces, usable for training/visualization with the rest of the
+lerobot ecosystem. Recording works **regardless of which Control mode is driving the
+robot** — gamepad, web, or leader arm — it just captures whatever's actually happening.
+
+- Type a task description, then **● Record**. Click **■ Stop** to save the episode, or
+  **Discard** to throw it away without saving.
+- Each saved episode appears in the list with a **▶ Play** button — playback takes
+  exclusive control of the robot for the duration of the replay (temporarily overriding
+  whichever Control mode is selected, restored automatically once it finishes or if you
+  click **■ Stop** on it), then hands control back.
+- **↑ Upload all to Hub** pushes every recorded episode to the configured `--repo-id`.
+  This only works while the Pi has an internet route — normally only when Ethernet is
+  connected to the host PC (the Pi's own hotspot mode, used for cordless ground testing,
+  has no upstream route) — the **internet: connected/disconnected** badge next to the
+  episode list shows this. Episodes are safe on local disk regardless; upload is a
+  deliberate, retryable action, not automatic.
+- One-time setup on the Pi before uploading works: `uv run hf auth login` (needs a
+  Hugging Face token with write access, and Ethernet connected to verify it).
 
 ## Gamepad (Bluetooth or USB)
 

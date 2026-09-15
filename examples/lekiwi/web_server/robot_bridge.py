@@ -31,6 +31,8 @@ from typing import Protocol
 import cv2
 import numpy as np
 
+from episode_recorder import EpisodeRecorder
+
 logger = logging.getLogger(__name__)
 
 ARM_JOINTS = [
@@ -121,6 +123,8 @@ class RobotLike(Protocol):
     def send_action(self, action: dict) -> dict: ...
     def get_observation(self) -> dict: ...
     def stop_base(self) -> None: ...
+    action_features: dict
+    observation_features: dict
 
 
 class MockLeKiwi:
@@ -138,6 +142,14 @@ class MockLeKiwi:
 
     def stop_base(self) -> None:
         pass
+
+    @property
+    def action_features(self) -> dict:
+        return dict.fromkeys([f"{j}.pos" for j in ARM_JOINTS] + ["x.vel", "y.vel", "theta.vel"], float)
+
+    @property
+    def observation_features(self) -> dict:
+        return {**self.action_features, "front": (480, 640, 3), "wrist": (480, 640, 3)}
 
     def send_action(self, action: dict) -> dict:
         for joint in ARM_JOINTS:
@@ -182,11 +194,18 @@ class RobotBridge:
     background thread.
     """
 
-    def __init__(self, robot: RobotLike):
+    def __init__(self, robot: RobotLike, recorder: EpisodeRecorder | None = None):
         self._robot = robot
+        self._recorder = recorder
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
+
+        # Playback: None means not replaying. While active, the control loop steps through
+        # these recorded actions instead of computing one from the current control mode.
+        self._playback_actions: list[dict] | None = None
+        self._playback_index = 0
+        self._playback_episode: int | None = None
 
         self._control_mode = "gamepad"
 
@@ -214,6 +233,14 @@ class RobotBridge:
 
     def start(self) -> None:
         self._robot.connect()
+
+        if self._recorder is not None:
+            try:
+                self._recorder.configure_features(self._robot.action_features, self._robot.observation_features)
+            except Exception:
+                logger.exception("Failed to configure episode recorder features -- recording disabled")
+                self._recorder = None
+
         obs = self._robot.get_observation()
         for joint in ARM_JOINTS:
             key = f"{joint}.pos"
@@ -330,6 +357,85 @@ class RobotBridge:
         with self._lock:
             return dict(self._latest_joint_state)
 
+    # --- recording / playback (thread-safe; see episode_recorder.py for the dataset side) ---
+
+    def start_recording(self, task: str) -> bool:
+        if self._recorder is None:
+            return False
+        with self._lock:
+            if self._playback_actions is not None:
+                return False  # can't record a replay
+        return self._recorder.start_recording(task)
+
+    def stop_recording(self) -> None:
+        if self._recorder is not None:
+            self._recorder.stop_recording()
+
+    def discard_recording(self) -> None:
+        if self._recorder is not None:
+            self._recorder.discard_recording()
+
+    def upload_to_hub(self) -> None:
+        if self._recorder is not None:
+            self._recorder.upload_to_hub()
+
+    def start_playback(self, episode_index: int) -> bool:
+        if self._recorder is None:
+            return False
+        with self._lock:
+            if self._recorder.is_recording or self._recorder.is_saving or self._playback_actions is not None:
+                return False
+        # Loading the episode (parsing the video/parquet index) can take a moment -- do it
+        # outside the lock so it doesn't stall update_base()/update_jog() callers meanwhile.
+        actions = self._recorder.load_episode_actions(episode_index)
+        if not actions:
+            return False
+        with self._lock:
+            self._playback_actions = actions
+            self._playback_index = 0
+            self._playback_episode = episode_index
+        logger.info("Playback started: episode %d (%d frames)", episode_index, len(actions))
+        return True
+
+    def stop_playback(self) -> None:
+        with self._lock:
+            self._finish_playback_locked()
+
+    def _finish_playback_locked(self) -> None:
+        """Caller must hold self._lock. Ends playback and clears any input latched during
+        it, so whichever control mode is active resumes from a clean, stopped state rather
+        than a stale command from before/during the replay."""
+        if self._playback_actions is None:
+            return
+        logger.info("Playback finished: episode %s", self._playback_episode)
+        self._playback_actions = None
+        self._playback_index = 0
+        self._playback_episode = None
+        self._desired_base = {"x": 0.0, "y": 0.0, "theta": 0.0, "speed": "medium"}
+        self._desired_jogs.clear()
+
+    def get_recording_status(self) -> dict:
+        status = (
+            self._recorder.get_status()
+            if self._recorder is not None
+            else {
+                "recording": False,
+                "task": "",
+                "elapsed_s": 0.0,
+                "frame_count": 0,
+                "episodes": [],
+                "upload_status": "idle",
+                "upload_message": "",
+            }
+        )
+        with self._lock:
+            status["playback_active"] = self._playback_actions is not None
+            status["playback_episode"] = self._playback_episode
+            status["playback_progress"] = (
+                self._playback_index / len(self._playback_actions) if self._playback_actions else 0.0
+            )
+        return status
+
     # --- background thread ---
 
     def _control_loop(self) -> None:
@@ -344,32 +450,51 @@ class RobotBridge:
             loop_start = time.monotonic()
 
             with self._lock:
-                base_stale = (loop_start - self._last_base_msg_time) > WATCHDOG_TIMEOUT_S
-                jogs_stale = (loop_start - self._last_jog_msg_time) > WATCHDOG_TIMEOUT_S
-                base_cmd = dict(self._desired_base)
-                jogs = dict(self._desired_jogs)
+                playback_frame = None
+                if self._playback_actions is not None:
+                    if self._playback_index < len(self._playback_actions):
+                        playback_frame = self._playback_actions[self._playback_index]
+                        self._playback_index += 1
+                    else:
+                        self._finish_playback_locked()
 
-            if base_stale:
-                base_cmd = {"x": 0.0, "y": 0.0, "theta": 0.0, "speed": "medium"}
-            if jogs_stale:
-                jogs = {}
+            if playback_frame is not None:
+                # Replaying a recorded episode: use its action verbatim instead of computing
+                # one from whichever control mode is selected (that input is ignored for the
+                # duration of playback, per RobotBridge's mode-gating design).
+                action = dict(playback_frame)
+                for joint in ARM_JOINTS:
+                    key = f"{joint}.pos"
+                    if key in action:
+                        self._joint_targets[joint] = action[key]
+            else:
+                with self._lock:
+                    base_stale = (loop_start - self._last_base_msg_time) > WATCHDOG_TIMEOUT_S
+                    jogs_stale = (loop_start - self._last_jog_msg_time) > WATCHDOG_TIMEOUT_S
+                    base_cmd = dict(self._desired_base)
+                    jogs = dict(self._desired_jogs)
 
-            base_speed = BASE_SPEEDS[base_cmd["speed"]]
-            action = {
-                "x.vel": base_cmd["x"] * base_speed["xy"],
-                "y.vel": base_cmd["y"] * base_speed["xy"],
-                "theta.vel": base_cmd["theta"] * base_speed["theta"],
-            }
+                if base_stale:
+                    base_cmd = {"x": 0.0, "y": 0.0, "theta": 0.0, "speed": "medium"}
+                if jogs_stale:
+                    jogs = {}
 
-            for joint, jog in jogs.items():
-                if jog["dir"] == 0:
-                    continue
-                delta = jog["dir"] * JOG_SPEEDS[jog["speed"]] * period
-                lo, hi = JOINT_RANGE[joint]
-                self._joint_targets[joint] = max(lo, min(hi, self._joint_targets[joint] + delta))
+                base_speed = BASE_SPEEDS[base_cmd["speed"]]
+                action = {
+                    "x.vel": base_cmd["x"] * base_speed["xy"],
+                    "y.vel": base_cmd["y"] * base_speed["xy"],
+                    "theta.vel": base_cmd["theta"] * base_speed["theta"],
+                }
 
-            for joint, target in self._joint_targets.items():
-                action[f"{joint}.pos"] = target
+                for joint, jog in jogs.items():
+                    if jog["dir"] == 0:
+                        continue
+                    delta = jog["dir"] * JOG_SPEEDS[jog["speed"]] * period
+                    lo, hi = JOINT_RANGE[joint]
+                    self._joint_targets[joint] = max(lo, min(hi, self._joint_targets[joint] + delta))
+
+                for joint, target in self._joint_targets.items():
+                    action[f"{joint}.pos"] = target
 
             try:
                 self._robot.send_action(action)
@@ -406,6 +531,13 @@ class RobotBridge:
                 with self._lock:
                     self._latest_joint_state.update(new_joint_state)
                     self._latest_jpeg.update(new_jpeg)
+
+                # Recording captures whatever's actually happening regardless of which
+                # control mode is driving it -- skipped during playback (recording a replay
+                # of itself isn't useful, and start_recording()/start_playback() already keep
+                # the two mutually exclusive).
+                if self._recorder is not None and playback_frame is None:
+                    self._recorder.add_frame(obs, action)
             except Exception:
                 logger.exception("get_observation failed")
 

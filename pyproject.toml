@@ -156,6 +156,8 @@ lekiwi_web = [
     # leader_keyboard_client.py: WS client to the web server, keyboard capture for base control.
     "websockets>=13.0,<17.0",
     "lerobot[pynput-dep]",
+    # episode_recorder.py: LeRobotDataset-backed episode recording/playback/Hub upload.
+    "lerobot[dataset]",
 ]
 unitree_g1 = [
     # "unitree-sdk2==1.0.1",
