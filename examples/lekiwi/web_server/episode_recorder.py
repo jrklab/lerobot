@@ -137,6 +137,7 @@ class EpisodeRecorder:
         self._buffer_lock = threading.Lock()
         self._recording = False
         self._saving = False
+        self._current_episode_index = 0
         self._task = ""
         self._record_start_t = 0.0
         self._frame_count = 0
@@ -169,15 +170,6 @@ class EpisodeRecorder:
     # --- metadata (re)loading ---
 
     def _load_existing_metadata(self) -> None:
-        info_path = self.root / "meta" / "info.json"
-        if not info_path.exists():
-            return  # Brand new dataset -- nothing to seed.
-        try:
-            info = json.loads(info_path.read_text())
-            self._total_frames = info.get("total_frames", 0)
-        except Exception:
-            logger.exception("Failed to read existing info.json at %s", info_path)
-
         tasks_path = self.root / "meta" / "tasks.parquet"
         if tasks_path.exists():
             try:
@@ -191,7 +183,9 @@ class EpisodeRecorder:
             try:
                 rows = []
                 for pq_file in sorted(episodes_dir.glob("*/*.parquet")):
-                    df = pd.read_parquet(pq_file, columns=["episode_index", "tasks", "length"])
+                    df = pd.read_parquet(
+                        pq_file, columns=["episode_index", "tasks", "length", "dataset_to_index"]
+                    )
                     rows.extend(df.to_dict("records"))
                 rows.sort(key=lambda r: r["episode_index"])
                 self._episodes = [
@@ -203,6 +197,12 @@ class EpisodeRecorder:
                     }
                     for r in rows
                 ]
+                # A high-water mark, not "current total frames" (which shrinks after a
+                # delete) -- must never go down, or a future episode's global `index` range
+                # could collide with a still-existing older episode's range. Derived fresh
+                # from on-disk episode metadata rather than trusted from info.json, so it
+                # stays correct even after episodes were deleted in a previous session.
+                self._total_frames = max((int(r["dataset_to_index"]) for r in rows), default=0)
                 logger.info("Loaded %d existing episode(s) from %s", len(self._episodes), self.root)
             except Exception:
                 logger.exception("Failed to load existing episode list from %s", self.root)
@@ -217,13 +217,21 @@ class EpisodeRecorder:
 
     # --- recording ---
 
+    def _next_episode_index(self) -> int:
+        # Not len(self._episodes): after a delete_episode(), that would reuse a retired
+        # index whose files may still exist on disk (or did until just now), and reusing it
+        # would also desync from dataset_from_index/to_index bookkeeping. Always advances,
+        # even across deletes.
+        return max((ep["index"] for ep in self._episodes), default=-1) + 1
+
     def start_recording(self, task: str) -> bool:
         if self._recording or self._saving:
             return False
         if self._state_names is None or self._camera_shapes is None:
             raise RuntimeError("configure_features() must be called before recording")
 
-        episode_index = len(self._episodes)
+        episode_index = self._next_episode_index()
+        self._current_episode_index = episode_index
         self._video_writers = {}
         self._video_paths = {}
         self._frame_queues = {}
@@ -332,7 +340,7 @@ class EpisodeRecorder:
             states = self._buf_state
             self._buf_action = []
             self._buf_state = []
-        episode_index = len(self._episodes)
+        episode_index = self._current_episode_index
         task = self._task
         frame_queues = self._frame_queues
         encoder_threads = self._encoder_threads
@@ -481,7 +489,10 @@ class EpisodeRecorder:
             "codebase_version": CODEBASE_VERSION,
             "robot_type": "lekiwi",
             "total_episodes": len(self._episodes),
-            "total_frames": self._total_frames,
+            # Actual current row count (shrinks after delete_episode()) -- NOT
+            # self._total_frames, which is a monotonic high-water mark for the next
+            # episode's global index range and must never go down.
+            "total_frames": sum(ep["length"] for ep in self._episodes),
             "total_tasks": len(self._task_index),
             "chunks_size": 1000,
             "data_files_size_in_mb": 100,
@@ -535,6 +546,29 @@ class EpisodeRecorder:
         finally:
             self._saving = False
             self._frame_count = 0
+
+    def delete_episode(self, episode_index: int) -> bool:
+        """Permanently removes one already-saved episode. Does not renumber the remaining
+        episodes or reuse the deleted index -- see _next_episode_index() -- so this never
+        needs to touch any other episode's files."""
+        if self._recording or self._saving:
+            return False
+        if not any(ep["index"] == episode_index for ep in self._episodes):
+            return False
+        try:
+            data_path = self.root / "data" / "chunk-000" / f"file-{episode_index:03d}.parquet"
+            data_path.unlink(missing_ok=True)
+            ep_meta_path = self.root / "meta" / "episodes" / "chunk-000" / f"file-{episode_index:03d}.parquet"
+            ep_meta_path.unlink(missing_ok=True)
+            for video_path in self.root.glob(f"videos/*/chunk-000/file-{episode_index:03d}.mp4"):
+                video_path.unlink(missing_ok=True)
+            self._episodes = [ep for ep in self._episodes if ep["index"] != episode_index]
+            self._write_info_json()
+            logger.info("Deleted episode %d", episode_index)
+            return True
+        except Exception:
+            logger.exception("Failed to delete episode %d", episode_index)
+            return False
 
     def get_status(self) -> dict:
         with self._upload_lock:

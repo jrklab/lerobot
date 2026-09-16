@@ -374,13 +374,22 @@ function setupRecordingUI() {
   // Event delegation: episode rows are re-rendered on every list change, so a single
   // listener on the container avoids having to re-attach/leak per-row handlers.
   episodeList.addEventListener("click", (e) => {
-    const btn = e.target.closest(".episode-play-btn");
-    if (!btn) return;
-    const episode = parseInt(btn.dataset.episode, 10);
-    if (btn.classList.contains("is-playing")) {
-      send({ type: "stop_playback" });
-    } else {
-      send({ type: "start_playback", episode });
+    const playBtn = e.target.closest(".episode-play-btn");
+    if (playBtn) {
+      const episode = parseInt(playBtn.dataset.episode, 10);
+      if (playBtn.classList.contains("is-playing")) {
+        send({ type: "stop_playback" });
+      } else {
+        send({ type: "start_playback", episode });
+      }
+      return;
+    }
+    const deleteBtn = e.target.closest(".episode-delete-btn");
+    if (deleteBtn) {
+      const episode = parseInt(deleteBtn.dataset.episode, 10);
+      if (confirm(`Delete episode ${episode}? This cannot be undone.`)) {
+        send({ type: "delete_episode", episode });
+      }
     }
   });
 }
@@ -445,6 +454,11 @@ function updateRecordingUI(recording, internetReachable) {
     btn.textContent = isThis ? "■ Stop" : "▶ Play";
     btn.disabled = recording.recording || recording.saving || (recording.playback_active && !isThis);
   });
+  episodeList.querySelectorAll(".episode-delete-btn").forEach((btn) => {
+    const isThis =
+      recording.playback_active && parseInt(btn.dataset.episode, 10) === recording.playback_episode;
+    btn.disabled = recording.recording || recording.saving || isThis;
+  });
 }
 
 function renderEpisodeList(recording, container) {
@@ -455,15 +469,19 @@ function renderEpisodeList(recording, container) {
   container.innerHTML = recording.episodes
     .map((ep) => {
       const isPlaying = recording.playback_active && recording.playback_episode === ep.index;
-      const disabled = recording.recording || recording.saving || (recording.playback_active && !isPlaying);
+      const playDisabled = recording.recording || recording.saving || (recording.playback_active && !isPlaying);
+      const deleteDisabled = recording.recording || recording.saving || isPlaying;
       return `
         <div class="episode-row">
           <div class="episode-row-info">
             <span class="episode-row-task">Episode ${ep.index}: ${escapeHtml(ep.task)}</span>
             <span class="episode-row-meta">${ep.duration_s.toFixed(1)}s &middot; ${ep.length} frames</span>
           </div>
-          <button class="episode-play-btn${isPlaying ? " is-playing" : ""}" data-episode="${ep.index}" ${disabled ? "disabled" : ""}>
+          <button class="episode-play-btn${isPlaying ? " is-playing" : ""}" data-episode="${ep.index}" ${playDisabled ? "disabled" : ""}>
             ${isPlaying ? "■ Stop" : "▶ Play"}
+          </button>
+          <button class="episode-delete-btn" data-episode="${ep.index}" ${deleteDisabled ? "disabled" : ""} title="Delete episode">
+            &#128465;
           </button>
         </div>`;
     })

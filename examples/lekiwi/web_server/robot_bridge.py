@@ -379,6 +379,14 @@ class RobotBridge:
         if self._recorder is not None:
             self._recorder.upload_to_hub()
 
+    def delete_episode(self, episode_index: int) -> bool:
+        if self._recorder is None:
+            return False
+        with self._lock:
+            if self._playback_episode == episode_index:
+                return False  # don't delete out from under an active playback
+        return self._recorder.delete_episode(episode_index)
+
     def start_playback(self, episode_index: int) -> bool:
         if self._recorder is None:
             return False

@@ -264,6 +264,19 @@ def _handle_message(raw: str) -> dict | None:
         bridge.stop_playback()
     elif msg_type == "upload_to_hub":
         bridge.upload_to_hub()
+    elif msg_type == "delete_episode":
+        try:
+            episode = int(msg.get("episode"))
+        except (TypeError, ValueError):
+            logger.warning("Dropping delete_episode message with invalid episode: %s", raw)
+            return {"type": "error", "message": "Invalid episode."}
+        if not bridge.delete_episode(episode):
+            logger.warning("delete_episode refused for episode %d.", episode)
+            return {
+                "type": "error",
+                "message": "Couldn't delete that episode -- it's currently being played back, "
+                "or a recording is in progress.",
+            }
     else:
         logger.warning("Dropping WS message with unknown type: %s", msg_type)
 
