@@ -57,8 +57,22 @@ logger = logging.getLogger(__name__)
 
 STATIC_DIR = Path(__file__).parent / "static"
 
+
+class NoCacheStaticFiles(StaticFiles):
+    """StaticFiles doesn't send Cache-Control by default, so browsers may cache app.js/
+    index.html/style.css aggressively enough to silently skip even checking for updates --
+    already bit us once (a deployed feature not appearing until a hard refresh). "no-cache"
+    (not "no-store") just forces revalidation on every load; combined with the ETag/
+    Last-Modified StaticFiles already sends, an unchanged file still gets a fast 304."""
+
+    def file_response(self, *args, **kwargs):
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
 app = FastAPI(title="LeKiwi Web Control")
-app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+app.mount("/static", NoCacheStaticFiles(directory=STATIC_DIR), name="static")
 
 bridge: RobotBridge | None = None
 gamepad: GamepadInput | None = None
@@ -83,7 +97,11 @@ def _internet_check_loop() -> None:
 
 @app.get("/")
 async def index():
-    return StreamingResponse(open(STATIC_DIR / "index.html", "rb"), media_type="text/html")
+    return StreamingResponse(
+        open(STATIC_DIR / "index.html", "rb"),
+        media_type="text/html",
+        headers={"Cache-Control": "no-cache"},
+    )
 
 
 @app.get("/video/{cam_name}")
