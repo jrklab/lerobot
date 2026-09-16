@@ -78,7 +78,16 @@ class _VideoWriter:
         self.stream.width = width
         self.stream.height = height
         self.stream.pix_fmt = "yuv420p"
-        self.stream.options = {"crf": "30"}
+        # "ultrafast" trades compression ratio (bigger files -- fine, disk is not scarce)
+        # for encode speed: confirmed on this project's Raspberry Pi 4 that recording pushed
+        # an already ~180%-CPU-busy process (camera capture + control loop + MJPEG streaming)
+        # to 300%+ on a 4-core machine (98%+ system-wide CPU, ~2% idle), which is what was
+        # causing visibly jerky teleoperated arm motion while recording -- not a threading
+        # bug (PyAV's encode() was confirmed, via a direct empirical GIL-release test, to
+        # already run on its own thread without blocking the control loop at the Python
+        # level). The libx264 "medium" default preset's extra compression effort was real,
+        # avoidable CPU cost on top of that.
+        self.stream.options = {"crf": "30", "preset": "ultrafast"}
 
     def write_frame(self, rgb_array: np.ndarray) -> None:
         frame = av.VideoFrame.from_ndarray(np.ascontiguousarray(rgb_array), format="rgb24")
