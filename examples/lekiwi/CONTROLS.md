@@ -242,3 +242,27 @@ recommended per-motor scales/thresholds as the reference script.
   received stick position.
 - Only the selected Control mode's commands take effect; the other two are fully inert
   (not just visually grayed out) while a different mode is active.
+
+## Troubleshooting
+
+### "LeKiwi is hanging" -- web app reachable but the robot doesn't move or update
+Check `sudo journalctl -u lekiwi-web.service --since '10 min ago'` for a wall of repeating
+`ConnectionError: ... [TxRxResult] Port is in use!` -- if every `send_action`/`get_observation`
+call is failing identically, forever, the service itself won't crash (it catches these per
+tick and keeps looping), so systemd shows it as healthy ("active/running") even though the
+robot is completely unresponsive.
+
+Root cause (confirmed via `dmesg`, once): the USB-to-serial adapter for the motor bus
+physically disconnected and reconnected (loose cable, brief power blip, etc.) --
+`ch341-uart ttyUSB0: ... urb stopped` followed by `USB disconnect` then the same device
+re-enumerating as `ttyUSB1`. The running process was still holding a handle to the now-gone
+`/dev/ttyUSB0` node. A plain restart wouldn't have been enough on its own, since the config
+still pointed at the old, now-nonexistent path.
+
+Fix applied: the systemd service's `--port-name` now points at the stable udev alias
+(`/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0`, found via `ls /dev/serial/by-id/`)
+instead of a raw `/dev/ttyUSBx` path, so it keeps working across future re-enumeration
+events regardless of which number the kernel assigns. If this happens again anyway (e.g. a
+different USB adapter with its own by-id name), `sudo systemctl restart lekiwi-web.service`
+after first confirming (`ls /dev/serial/by-id/`) the service's configured port still matches
+where the device actually landed.
