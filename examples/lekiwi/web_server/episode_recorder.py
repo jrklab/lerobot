@@ -592,7 +592,11 @@ class EpisodeRecorder:
         `action` dicts RobotBridge already sends to send_action()) for the given episode.
         None if it doesn't exist or fails to load. Video is never read back by this module --
         only the recorded action column is needed for playback."""
-        if episode_index < 0 or episode_index >= len(self._episodes):
+        # Existence check, not a range check: episode indices aren't contiguous once
+        # delete_episode() has ever retired one (by design -- see _next_episode_index()),
+        # so e.g. "index >= len(self._episodes)" would wrongly reject a real later episode
+        # after an earlier one was deleted.
+        if not any(ep["index"] == episode_index for ep in self._episodes):
             return None
         try:
             # Read the action names from info.json rather than relying on

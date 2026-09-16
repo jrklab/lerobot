@@ -387,23 +387,29 @@ class RobotBridge:
                 return False  # don't delete out from under an active playback
         return self._recorder.delete_episode(episode_index)
 
-    def start_playback(self, episode_index: int) -> bool:
+    def start_playback(self, episode_index: int) -> str | None:
+        """Returns None on success, or a user-facing reason string on failure -- distinct
+        reasons ("busy" vs. "episode failed to load") matter for the error the operator
+        sees; conflating them into a single bool made a real bug (a stale bounds check
+        rejecting valid episodes after a delete) look identical to normal contention."""
         if self._recorder is None:
-            return False
+            return "Recording is disabled on this server."
         with self._lock:
-            if self._recorder.is_recording or self._recorder.is_saving or self._playback_actions is not None:
-                return False
+            if self._recorder.is_recording or self._recorder.is_saving:
+                return "A recording is in progress."
+            if self._playback_actions is not None:
+                return "Another playback is already in progress."
         # Loading the episode (parsing the video/parquet index) can take a moment -- do it
         # outside the lock so it doesn't stall update_base()/update_jog() callers meanwhile.
         actions = self._recorder.load_episode_actions(episode_index)
         if not actions:
-            return False
+            return f"Episode {episode_index} has no recorded frames or failed to load."
         with self._lock:
             self._playback_actions = actions
             self._playback_index = 0
             self._playback_episode = episode_index
         logger.info("Playback started: episode %d (%d frames)", episode_index, len(actions))
-        return True
+        return None
 
     def stop_playback(self) -> None:
         with self._lock:

@@ -272,12 +272,10 @@ def _handle_message(raw: str) -> dict | None:
         except (TypeError, ValueError):
             logger.warning("Dropping start_playback message with invalid episode: %s", raw)
             return {"type": "error", "message": "Invalid episode."}
-        if not bridge.start_playback(episode):
-            logger.warning("start_playback refused for episode %d.", episode)
-            return {
-                "type": "error",
-                "message": "Couldn't start playback -- a recording or another playback is in progress.",
-            }
+        reason = bridge.start_playback(episode)
+        if reason is not None:
+            logger.warning("start_playback refused for episode %d: %s", episode, reason)
+            return {"type": "error", "message": f"Couldn't start playback -- {reason}"}
     elif msg_type == "stop_playback":
         bridge.stop_playback()
     elif msg_type == "upload_to_hub":
