@@ -26,11 +26,31 @@ function connectWs() {
         updateStallTone(msg.joints);
         updateModeUI(msg.control_mode);
         updateRecordingUI(msg.recording, msg.internet_reachable);
+      } else if (msg.type === "error") {
+        showToast(msg.message);
       }
     } catch (_) {
       /* ignore malformed status messages */
     }
   });
+}
+
+// Simple one-off notification for server-reported errors (e.g. a rejected start_recording/
+// start_playback) -- these are otherwise invisible: the UI would just silently not change.
+let toastTimer = null;
+
+function showToast(message) {
+  let el = document.getElementById("toast");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "toast";
+    el.className = "toast";
+    document.body.appendChild(el);
+  }
+  el.textContent = message;
+  el.classList.add("visible");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove("visible"), 4000);
 }
 
 function setConnStatus(connected) {

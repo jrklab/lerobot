@@ -142,7 +142,9 @@ async def ws_control(websocket: WebSocket):
                             gap_max_ms,
                             gap_total_ms / gap_count,
                         )
-                _handle_message(raw)
+                reply = _handle_message(raw)
+                if reply is not None:
+                    await websocket.send_text(json.dumps(reply))
         finally:
             status_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -173,9 +175,11 @@ async def _status_pusher(websocket: WebSocket) -> None:
         await asyncio.sleep(0.2)
 
 
-def _handle_message(raw: str) -> None:
+def _handle_message(raw: str) -> dict | None:
+    """Returns an optional message to send back to just this client (e.g. an error the
+    sender should see immediately, distinct from the broadcast periodic state message)."""
     if bridge is None:
-        return
+        return None
     try:
         msg = json.loads(raw)
     except json.JSONDecodeError:
@@ -232,9 +236,14 @@ def _handle_message(raw: str) -> None:
         task = str(msg.get("task", "")).strip()
         if not task:
             logger.warning("Dropping start_recording message with empty task.")
-            return
+            return {"type": "error", "message": "Enter a task description before recording."}
         if not bridge.start_recording(task):
             logger.warning("start_recording refused (already recording, playback active, or disabled).")
+            return {
+                "type": "error",
+                "message": "Couldn't start recording -- still saving the previous episode, or a "
+                "playback is in progress. Try again in a moment.",
+            }
     elif msg_type == "stop_recording":
         bridge.stop_recording()
     elif msg_type == "discard_recording":
@@ -244,9 +253,13 @@ def _handle_message(raw: str) -> None:
             episode = int(msg.get("episode"))
         except (TypeError, ValueError):
             logger.warning("Dropping start_playback message with invalid episode: %s", raw)
-            return
+            return {"type": "error", "message": "Invalid episode."}
         if not bridge.start_playback(episode):
             logger.warning("start_playback refused for episode %d.", episode)
+            return {
+                "type": "error",
+                "message": "Couldn't start playback -- a recording or another playback is in progress.",
+            }
     elif msg_type == "stop_playback":
         bridge.stop_playback()
     elif msg_type == "upload_to_hub":

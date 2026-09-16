@@ -47,8 +47,10 @@ all confirmed torch-free on this hardware.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
+import queue
 import threading
 import time
 from pathlib import Path
@@ -117,6 +119,13 @@ class EpisodeRecorder:
         self._state_names: list[str] | None = None
         self._camera_shapes: dict[str, tuple] | None = None
 
+        # Guards _recording/_buf_action/_buf_state/_frame_count, which add_frame() mutates
+        # from the control-loop thread while stop_recording()/discard_recording() (FastAPI
+        # event loop thread) read and reset them -- without this, a stop/discard racing a
+        # concurrent add_frame() could capture the action/state lists mid-append, producing
+        # mismatched lengths (this actually happened in production: "ValueError: All arrays
+        # must be of the same length" in _save_worker, losing the episode).
+        self._buffer_lock = threading.Lock()
         self._recording = False
         self._saving = False
         self._task = ""
@@ -124,8 +133,14 @@ class EpisodeRecorder:
         self._frame_count = 0
         self._buf_action: list[np.ndarray] = []
         self._buf_state: list[np.ndarray] = []
+        # Video encoding (libx264) happens on one background thread per camera, fed through a
+        # bounded queue, instead of inline in add_frame() -- encoding synchronously in the
+        # control-loop thread competed with send_action() timing and made teleoperated arm
+        # motion visibly jerky while recording.
         self._video_writers: dict[str, _VideoWriter] = {}
         self._video_paths: dict[str, Path] = {}
+        self._frame_queues: dict[str, queue.Queue] = {}
+        self._encoder_threads: dict[str, threading.Thread] = {}
 
         self._episodes: list[dict] = []
         self._total_frames = 0
@@ -202,6 +217,8 @@ class EpisodeRecorder:
         episode_index = len(self._episodes)
         self._video_writers = {}
         self._video_paths = {}
+        self._frame_queues = {}
+        self._encoder_threads = {}
         try:
             for cam_key, (height, width, _channels) in self._camera_shapes.items():
                 out_path = (
@@ -209,85 +226,165 @@ class EpisodeRecorder:
                     / f"file-{episode_index:03d}.mp4"
                 )
                 out_path.parent.mkdir(parents=True, exist_ok=True)
-                self._video_writers[cam_key] = _VideoWriter(out_path, width, height, self.fps)
+                writer = _VideoWriter(out_path, width, height, self.fps)
+                self._video_writers[cam_key] = writer
                 self._video_paths[cam_key] = out_path
+                # Bounded to ~2s of frames: if encoding falls behind that much, dropping
+                # frames (see add_frame()) is better than unbounded memory growth.
+                q: queue.Queue = queue.Queue(maxsize=2 * self.fps)
+                self._frame_queues[cam_key] = q
+                thread = threading.Thread(target=self._encoder_loop, args=(cam_key, q, writer), daemon=True)
+                self._encoder_threads[cam_key] = thread
+                thread.start()
         except Exception:
             logger.exception("Failed to start video encoders for recording")
             self._abort_video_writers()
             return False
 
-        self._task = task
-        self._buf_action = []
-        self._buf_state = []
+        with self._buffer_lock:
+            self._task = task
+            self._buf_action = []
+            self._buf_state = []
+            self._frame_count = 0
+            self._recording = True
         self._record_start_t = time.monotonic()
-        self._frame_count = 0
-        self._recording = True
         logger.info("Recording started: episode=%d task=%r", episode_index, task)
         return True
 
+    def _encoder_loop(self, cam_key: str, q: queue.Queue, writer: _VideoWriter) -> None:
+        """Runs on its own thread per camera so libx264 encoding never competes with the
+        control loop's send_action()/get_observation() timing."""
+        while True:
+            frame = q.get()
+            if frame is None:  # sentinel: shut down
+                return
+            try:
+                writer.write_frame(frame)
+            except Exception:
+                logger.exception("Video encode failed for %s", cam_key)
+
     def add_frame(self, obs: dict, action: dict) -> None:
         """Called every control-loop tick while recording is active. Any failure stops the
-        recording rather than crashing the caller's control loop."""
+        recording rather than crashing the caller's control loop. Fast: state/action are
+        cheap numpy ops, and video frames are only handed to a queue (real encoding happens
+        on the per-camera encoder threads), so this never meaningfully delays the next
+        send_action() call."""
         if not self._recording:
-            return
+            return  # fast path: no lock needed just to bail out when not recording
         try:
-            self._buf_state.append(np.array([obs[name] for name in self._state_names], dtype=np.float32))
-            self._buf_action.append(np.array([action[name] for name in self._state_names], dtype=np.float32))
-            for cam_key, writer in self._video_writers.items():
+            state_arr = np.array([obs[name] for name in self._state_names], dtype=np.float32)
+            action_arr = np.array([action[name] for name in self._state_names], dtype=np.float32)
+            with self._buffer_lock:
+                # Re-check inside the lock: stop_recording()/discard_recording() may have
+                # flipped this and swapped the buffer lists out from under us since the
+                # check above -- without this, we could append to lists no longer being
+                # tracked by the recording that just stopped.
+                if not self._recording:
+                    return
+                self._buf_state.append(state_arr)
+                self._buf_action.append(action_arr)
+                self._frame_count += 1
+            for cam_key, q in self._frame_queues.items():
                 frame = obs.get(cam_key)
-                if frame is not None:
-                    writer.write_frame(frame)
-            self._frame_count += 1
+                if frame is None:
+                    continue
+                try:
+                    q.put_nowait(np.ascontiguousarray(frame, dtype=np.uint8))
+                except queue.Full:
+                    logger.warning("Video encoder queue full for %s -- dropping a frame", cam_key)
         except Exception:
             logger.exception("add_frame failed -- stopping recording")
-            self._recording = False
+            with self._buffer_lock:
+                self._recording = False
             self._abort_video_writers()
 
     def _abort_video_writers(self) -> None:
+        for cam_key, q in self._frame_queues.items():
+            with contextlib.suppress(Exception):
+                q.put_nowait(None)
+        for thread in self._encoder_threads.values():
+            thread.join(timeout=5)
         for writer in self._video_writers.values():
             writer.abort()
         self._video_writers = {}
+        self._frame_queues = {}
+        self._encoder_threads = {}
 
     def stop_recording(self) -> None:
-        if not self._recording:
-            return
+        with self._buffer_lock:
+            if not self._recording:
+                return
+            self._recording = False
+            # Swap in fresh empty lists (rather than just capturing references to the old
+            # ones) so it's structurally impossible for a straggling add_frame() call to
+            # mutate what _save_worker is about to process -- see add_frame()'s own re-check
+            # inside the lock, which is what makes that straggler a no-op in the first place.
+            actions = self._buf_action
+            states = self._buf_state
+            self._buf_action = []
+            self._buf_state = []
         episode_index = len(self._episodes)
         task = self._task
-        frame_count = self._frame_count
-        actions = self._buf_action
-        states = self._buf_state
+        frame_queues = self._frame_queues
+        encoder_threads = self._encoder_threads
         video_writers = self._video_writers
         video_paths = self._video_paths
         # Stop accepting new frames immediately (synchronous) so add_frame() calls from the
-        # control-loop thread cease at once; the slow part (closing video encoders, writing
-        # parquet/metadata) happens on a background thread so it never blocks the FastAPI
-        # event loop for every connected client.
-        self._recording = False
+        # control-loop thread cease at once; the slow part (draining encoder queues, closing
+        # video writers, writing parquet/metadata) happens on a background thread so it never
+        # blocks the FastAPI event loop for every connected client.
         self._video_writers = {}
         self._video_paths = {}
+        self._frame_queues = {}
+        self._encoder_threads = {}
         self._saving = True
         threading.Thread(
             target=self._save_worker,
-            args=(episode_index, task, frame_count, actions, states, video_writers, video_paths),
+            args=(episode_index, task, actions, states, frame_queues, encoder_threads, video_writers, video_paths),
             daemon=True,
         ).start()
+
+    def _shutdown_encoders(
+        self,
+        frame_queues: dict[str, queue.Queue],
+        encoder_threads: dict[str, threading.Thread],
+        video_writers: dict[str, _VideoWriter],
+    ) -> None:
+        # Sentinel + join first: any frames already queued at stop/discard time must finish
+        # encoding before we close the writer, or they'd silently be lost.
+        for q in frame_queues.values():
+            with contextlib.suppress(Exception):
+                q.put(None)
+        for cam_key, thread in encoder_threads.items():
+            thread.join(timeout=30)
+            if thread.is_alive():
+                logger.warning("Encoder thread for %s did not finish in time", cam_key)
+        for cam_key, writer in video_writers.items():
+            try:
+                writer.close()
+            except Exception:
+                logger.exception("Failed to close video writer for %s", cam_key)
 
     def _save_worker(
         self,
         episode_index: int,
         task: str,
-        frame_count: int,
         actions: list[np.ndarray],
         states: list[np.ndarray],
+        frame_queues: dict[str, queue.Queue],
+        encoder_threads: dict[str, threading.Thread],
         video_writers: dict[str, _VideoWriter],
         video_paths: dict[str, Path],
     ) -> None:
+        frame_count = len(actions)
         try:
-            for cam_key, writer in video_writers.items():
-                try:
-                    writer.close()
-                except Exception:
-                    logger.exception("Failed to close video writer for %s", cam_key)
+            self._shutdown_encoders(frame_queues, encoder_threads, video_writers)
+
+            if frame_count == 0:
+                logger.warning("Recording stopped with 0 frames -- discarding episode %d", episode_index)
+                for path in video_paths.values():
+                    path.unlink(missing_ok=True)
+                return
 
             if task not in self._task_index:
                 self._task_index[task] = len(self._task_index)
@@ -391,15 +488,44 @@ class EpisodeRecorder:
         info_path.write_text(json.dumps(info, indent=2))
 
     def discard_recording(self) -> None:
-        if not self._recording:
-            return
-        self._recording = False
-        self._abort_video_writers()
-        for path in self._video_paths.values():
-            path.unlink(missing_ok=True)
+        with self._buffer_lock:
+            if not self._recording:
+                return
+            self._recording = False
+            self._buf_action = []
+            self._buf_state = []
+        frame_queues = self._frame_queues
+        encoder_threads = self._encoder_threads
+        video_writers = self._video_writers
+        video_paths = self._video_paths
+        self._video_writers = {}
         self._video_paths = {}
-        self._frame_count = 0
-        logger.info("Recording discarded")
+        self._frame_queues = {}
+        self._encoder_threads = {}
+        self._saving = True
+        threading.Thread(
+            target=self._discard_worker,
+            args=(frame_queues, encoder_threads, video_writers, video_paths),
+            daemon=True,
+        ).start()
+
+    def _discard_worker(
+        self,
+        frame_queues: dict[str, queue.Queue],
+        encoder_threads: dict[str, threading.Thread],
+        video_writers: dict[str, _VideoWriter],
+        video_paths: dict[str, Path],
+    ) -> None:
+        try:
+            self._shutdown_encoders(frame_queues, encoder_threads, video_writers)
+            for path in video_paths.values():
+                path.unlink(missing_ok=True)
+            logger.info("Recording discarded")
+        except Exception:
+            logger.exception("Failed to discard recording cleanly")
+        finally:
+            self._saving = False
+            self._frame_count = 0
 
     def get_status(self) -> dict:
         with self._upload_lock:

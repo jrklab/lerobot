@@ -185,6 +185,25 @@ main {
 
 .stub-note { color: var(--muted); padding: 2rem 0; text-align: center; }
 
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 5rem;
+  transform: translate(-50%, 0.5rem);
+  max-width: 90vw;
+  padding: 0.7rem 1.1rem;
+  background: var(--danger);
+  color: white;
+  border-radius: 8px;
+  font-size: 0.9rem;
+  text-align: center;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+  z-index: 100;
+}
+.toast.visible { opacity: 1; transform: translate(-50%, 0); }
+
 /* --- Record tab --- */
 .rec-controls { display: flex; flex-direction: column; gap: 0.5rem; margin-bottom: 1rem; }
 #rec-task {
