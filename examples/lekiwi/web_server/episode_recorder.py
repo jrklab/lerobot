@@ -64,6 +64,10 @@ logger = logging.getLogger(__name__)
 CODEBASE_VERSION = "v3.0"
 DEFAULT_ROOT = Path.home() / ".cache" / "huggingface" / "lerobot"
 
+# Hard ceiling on a whole upload_to_hub() attempt (see upload_to_hub()'s docstring/comments
+# for why huggingface_hub's own per-request timeouts don't already bound this).
+UPLOAD_TIMEOUT_S = 120
+
 # h264 (not the official writer's AV1 default): far cheaper to software-encode in real time
 # on a Raspberry Pi 4. GOP/crf don't need to be tuned for fast seeking (unlike the official
 # writer's g=2) since we never decode our own video -- any reasonable settings are fine.
@@ -160,6 +164,13 @@ class EpisodeRecorder:
         self._upload_lock = threading.Lock()
         self._upload_status = "idle"  # "idle" | "uploading" | "success" | "error"
         self._upload_message = ""
+        # huggingface_hub's own per-request timeouts (~10s) don't bound the *total* time
+        # upload_folder() can take -- with no internet at all (gateway reachable, nothing
+        # beyond it, so no fast connection-refused/DNS-failure signal) this hung indefinitely
+        # in practice, leaving the UI stuck on "Uploading..." forever. This attempt counter
+        # lets a watchdog timer declare a timeout without racing a later, real retry: the
+        # worker/watchdog only apply their result if they're still the current attempt.
+        self._upload_attempt = 0
 
     def configure_features(self, action_features: dict, observation_features: dict) -> None:
         """Must be called once (with the real robot's feature dicts) before recording can
@@ -625,9 +636,25 @@ class EpisodeRecorder:
                 return
             self._upload_status = "uploading"
             self._upload_message = ""
-        threading.Thread(target=self._upload_worker, daemon=True).start()
+            self._upload_attempt += 1
+            attempt_id = self._upload_attempt
+        threading.Thread(target=self._upload_worker, args=(attempt_id,), daemon=True).start()
+        timer = threading.Timer(UPLOAD_TIMEOUT_S, self._upload_timeout, args=(attempt_id,))
+        timer.daemon = True
+        timer.start()
 
-    def _upload_worker(self) -> None:
+    def _upload_timeout(self, attempt_id: int) -> None:
+        with self._upload_lock:
+            if self._upload_attempt != attempt_id or self._upload_status != "uploading":
+                return  # a later attempt started, or this one already finished -- not stale
+            self._upload_status = "error"
+            self._upload_message = (
+                f"Upload timed out after {UPLOAD_TIMEOUT_S}s -- check the internet connection "
+                "and try again."
+            )
+        logger.warning("Upload attempt %d timed out after %ds", attempt_id, UPLOAD_TIMEOUT_S)
+
+    def _upload_worker(self, attempt_id: int) -> None:
         try:
             from huggingface_hub import HfApi
 
@@ -635,11 +662,15 @@ class EpisodeRecorder:
             api.create_repo(repo_id=self.repo_id, repo_type="dataset", exist_ok=True)
             api.upload_folder(repo_id=self.repo_id, folder_path=str(self.root), repo_type="dataset")
             with self._upload_lock:
+                if self._upload_attempt != attempt_id:
+                    return  # superseded by a later attempt (e.g. after this one timed out)
                 self._upload_status = "success"
                 self._upload_message = f"Uploaded {len(self._episodes)} episode(s) to {self.repo_id}"
             logger.info("Upload to hub succeeded: %s", self.repo_id)
         except Exception as e:
             with self._upload_lock:
+                if self._upload_attempt != attempt_id:
+                    return
                 self._upload_status = "error"
                 self._upload_message = f"Upload failed: {e}"
             logger.exception("Upload to hub failed")
