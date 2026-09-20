@@ -208,12 +208,19 @@ class EpisodeRecorder:
                     }
                     for r in rows
                 ]
-                # A high-water mark, not "current total frames" (which shrinks after a
-                # delete) -- must never go down, or a future episode's global `index` range
-                # could collide with a still-existing older episode's range. Derived fresh
-                # from on-disk episode metadata rather than trusted from info.json, so it
-                # stays correct even after episodes were deleted in a previous session.
-                self._total_frames = max((int(r["dataset_to_index"]) for r in rows), default=0)
+                if [ep["index"] for ep in self._episodes] == list(range(len(self._episodes))):
+                    self._total_frames = sum(ep["length"] for ep in self._episodes)
+                else:
+                    # An older version of this code left gaps behind after delete_episode()
+                    # (it never renumbered -- see _compact_episodes()'s docstring for why
+                    # that broke compatibility with real LeRobotDataset consumers). Self-heal
+                    # once here rather than requiring a separate manual repair step.
+                    logger.warning(
+                        "Episode indices on disk are not contiguous (%s) -- compacting to 0..%d",
+                        [ep["index"] for ep in self._episodes],
+                        len(self._episodes) - 1,
+                    )
+                    self._compact_episodes()
                 logger.info("Loaded %d existing episode(s) from %s", len(self._episodes), self.root)
             except Exception:
                 logger.exception("Failed to load existing episode list from %s", self.root)
@@ -229,11 +236,10 @@ class EpisodeRecorder:
     # --- recording ---
 
     def _next_episode_index(self) -> int:
-        # Not len(self._episodes): after a delete_episode(), that would reuse a retired
-        # index whose files may still exist on disk (or did until just now), and reusing it
-        # would also desync from dataset_from_index/to_index bookkeeping. Always advances,
-        # even across deletes.
-        return max((ep["index"] for ep in self._episodes), default=-1) + 1
+        # The dataset is always kept contiguous 0..N-1 (delete_episode() compacts after
+        # every delete, and _load_existing_metadata() self-heals on load if it ever wasn't),
+        # so the next index is simply the current episode count.
+        return len(self._episodes)
 
     def start_recording(self, task: str) -> bool:
         if self._recording or self._saving:
@@ -500,9 +506,9 @@ class EpisodeRecorder:
             "codebase_version": CODEBASE_VERSION,
             "robot_type": "lekiwi",
             "total_episodes": len(self._episodes),
-            # Actual current row count (shrinks after delete_episode()) -- NOT
-            # self._total_frames, which is a monotonic high-water mark for the next
-            # episode's global index range and must never go down.
+            # Same value as self._total_frames (kept in sync by _compact_episodes()/
+            # _save_worker()), recomputed here directly so this is correct even if called
+            # from somewhere that hasn't touched self._total_frames.
             "total_frames": sum(ep["length"] for ep in self._episodes),
             "total_tasks": len(self._task_index),
             "chunks_size": 1000,
@@ -559,9 +565,11 @@ class EpisodeRecorder:
             self._frame_count = 0
 
     def delete_episode(self, episode_index: int) -> bool:
-        """Permanently removes one already-saved episode. Does not renumber the remaining
-        episodes or reuse the deleted index -- see _next_episode_index() -- so this never
-        needs to touch any other episode's files."""
+        """Permanently removes one already-saved episode, then renumbers every remaining
+        episode into a dense 0..N-1 range (see _compact_episodes()) -- required for
+        compatibility with any real LeRobotDataset consumer (HF's visualize_dataset space
+        included, which assumes contiguous 0-based episode indices), not just our own
+        playback UI (which only ever matched by existence, never by position)."""
         if self._recording or self._saving:
             return False
         if not any(ep["index"] == episode_index for ep in self._episodes):
@@ -574,12 +582,74 @@ class EpisodeRecorder:
             for video_path in self.root.glob(f"videos/*/chunk-000/file-{episode_index:03d}.mp4"):
                 video_path.unlink(missing_ok=True)
             self._episodes = [ep for ep in self._episodes if ep["index"] != episode_index]
+            self._compact_episodes()
             self._write_info_json()
-            logger.info("Deleted episode %d", episode_index)
+            logger.info("Deleted episode %d (remaining episodes renumbered to stay contiguous)", episode_index)
             return True
         except Exception:
             logger.exception("Failed to delete episode %d", episode_index)
             return False
+
+    def _compact_episodes(self) -> None:
+        """Renumbers every remaining episode (in current relative/recording order) to a
+        dense 0..N-1 range, and recomputes each episode's global frame `index` column to be
+        contiguous too -- restoring the exact state a fresh, deletion-free recording session
+        would produce. Called after every delete_episode(), and also from
+        _load_existing_metadata() to self-heal a dataset an older version of this code left
+        non-contiguous.
+
+        Purely a file-renaming/rewriting + in-memory-state operation -- deliberately doesn't
+        touch info.json (total_episodes/total_frames there are already correct regardless of
+        episode numbering; only `splits` implicitly assumes 0-based contiguity, and it's
+        always written that way already, so it becomes accurate again the moment the files
+        actually match, no info.json edit needed). That's what makes it safe to call from
+        _load_existing_metadata(), before configure_features() has ever run -- _write_info_json()
+        needs feature config this method doesn't.
+
+        A currently-mid-playback episode's frames are already fully loaded into memory
+        before playback starts (see load_episode_actions()), so renaming its files out from
+        under it doesn't affect that playback -- worst case is a cosmetic index-label
+        mismatch in the UI for the rest of that one playback.
+        """
+        global_start = 0
+        new_episodes = []
+        for new_index, ep in enumerate(self._episodes):
+            old_index = ep["index"]
+            length = ep["length"]
+
+            old_data_path = self.root / "data" / "chunk-000" / f"file-{old_index:03d}.parquet"
+            new_data_path = self.root / "data" / "chunk-000" / f"file-{new_index:03d}.parquet"
+            df = pd.read_parquet(old_data_path)
+            df["episode_index"] = new_index
+            df["index"] = range(global_start, global_start + length)
+            df.to_parquet(new_data_path, index=False)
+            if new_data_path != old_data_path:
+                old_data_path.unlink(missing_ok=True)
+
+            old_meta_path = self.root / "meta" / "episodes" / "chunk-000" / f"file-{old_index:03d}.parquet"
+            new_meta_path = self.root / "meta" / "episodes" / "chunk-000" / f"file-{new_index:03d}.parquet"
+            meta_row = pd.read_parquet(old_meta_path).iloc[0].to_dict()
+            meta_row["episode_index"] = new_index
+            meta_row["data/file_index"] = new_index
+            meta_row["dataset_from_index"] = global_start
+            meta_row["dataset_to_index"] = global_start + length
+            for col in list(meta_row.keys()):
+                if col.startswith("videos/") and col.endswith("/file_index"):
+                    meta_row[col] = new_index
+            pd.DataFrame([meta_row]).to_parquet(new_meta_path, index=False)
+            if new_meta_path != old_meta_path:
+                old_meta_path.unlink(missing_ok=True)
+
+            for old_video_path in self.root.glob(f"videos/*/chunk-000/file-{old_index:03d}.mp4"):
+                new_video_path = old_video_path.with_name(f"file-{new_index:03d}.mp4")
+                if new_video_path != old_video_path:
+                    old_video_path.rename(new_video_path)
+
+            new_episodes.append({**ep, "index": new_index})
+            global_start += length
+
+        self._episodes = new_episodes
+        self._total_frames = global_start
 
     def get_status(self) -> dict:
         with self._upload_lock:
@@ -603,10 +673,11 @@ class EpisodeRecorder:
         `action` dicts RobotBridge already sends to send_action()) for the given episode.
         None if it doesn't exist or fails to load. Video is never read back by this module --
         only the recorded action column is needed for playback."""
-        # Existence check, not a range check: episode indices aren't contiguous once
-        # delete_episode() has ever retired one (by design -- see _next_episode_index()),
-        # so e.g. "index >= len(self._episodes)" would wrongly reject a real later episode
-        # after an earlier one was deleted.
+        # Existence check, not a range check: this used to matter a lot more when episode
+        # indices could go non-contiguous after a delete (see _compact_episodes()) -- an
+        # "index >= len(self._episodes)" range check broke exactly that way once, rejecting
+        # a real later episode. Indices are always contiguous now, but the existence check
+        # is just as correct either way, so there's no reason to special-case it.
         if not any(ep["index"] == episode_index for ep in self._episodes):
             return None
         try:
