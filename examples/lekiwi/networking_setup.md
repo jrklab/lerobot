@@ -36,11 +36,12 @@ that range.
 |---|---|---|---|
 | Ethernet (`enxe8ea6a951df5` ↔ `eth0`) | Dev/management access + internet sharing | `10.55.0.1/24` | `10.55.0.102/24` |
 | Hotspot (`wlx9cefd5f874c4` ↔ `wlan0` AP `LeKiwi-RoboNet`) | Simulated student-device test path | `10.42.0.63/24` | `10.42.0.1/24` |
+| Pi's second Wi-Fi adapter (`wlan1` ↔ home router `AttIsBeter`) | Lets home-Wi-Fi devices (e.g. the Quest) reach the Pi directly, and gives the Pi a real internet route | n/a (Pi-only adapter) | `192.168.1.180/24` (DHCP, may change) |
 
 - Pi has internet access (DNS + HTTP verified) via the host's shared Ethernet connection.
 - Pi's `wlan0` broadcasts `LeKiwi-RoboNet` (WPA-PSK, password `lekiwi_test`), matching `lekiwi_web_server.md` §4.1.
 - Host's second Wi-Fi interface connects to that hotspot and can reach/SSH the Pi at `10.42.0.1`, standing in for a student's laptop/tablet/phone.
-- Pi is **no longer reachable over the home Wi-Fi** — `wlan0` can't be both an AP and a home-network client at once on this hardware, so that path was intentionally given up in favor of the Ethernet link as the new management path.
+- Pi is **not reachable over the home Wi-Fi via `wlan0`** — it can't be both an AP and a home-network client at once on this hardware. (Step 5 below adds a *second*, USB, Wi-Fi adapter specifically to restore home-network reachability without giving up the hotspot -- two adapters, not a limitation of `wlan0` itself.)
 
 ## Prerequisites: passwordless sudo for network commands
 
@@ -154,6 +155,40 @@ sudo nmcli device wifi connect LeKiwi-RoboNet password lekiwi_test ifname wlx9ce
 
 Result: `wlx9cefd5f874c4` → `10.42.0.63/24`, confirmed `ping`/`ssh` to
 `10.42.0.1` (the Pi).
+
+## Step 5 — Raspberry Pi: second Wi-Fi adapter for direct home-network access
+
+Added later, for the Quest 2 VR page (`CONTROLS.md`'s "Quest 2 VR" section): a USB Wi-Fi
+dongle on the Pi, joined to the home Wi-Fi (`AttIsBeter`), so the headset can reach the web
+server's HTTPS port while staying on the home network instead of having to switch onto the
+isolated `LeKiwi-RoboNet` hotspot. `wlan0` keeps running the hotspot exactly as before --
+this is a genuinely separate interface (`wlan1`), not a mode change to `wlan0`.
+
+```bash
+sudo nmcli connection add type wifi ifname wlan1 con-name AttIsBeter \
+  ssid AttIsBeter wifi-sec.key-mgmt wpa-psk wifi-sec.psk '<password>'
+sudo nmcli connection up AttIsBeter
+```
+
+Gotcha: plain `nmcli device wifi connect AttIsBeter password '<password>' ifname wlan1`
+failed with `802-11-wireless-security.key-mgmt: property is missing` -- `device wifi
+connect`'s auto-detection of the security type didn't work reliably for this adapter/AP
+combination. Creating the connection profile directly with `wifi-sec.key-mgmt`/`wifi-sec.psk`
+explicit (as above) worked first try.
+
+Result: `wlan1` → `192.168.1.180/24` (DHCP from the home router; may change on lease
+renewal), reachable from any other device on the same home Wi-Fi. The self-signed TLS cert
+(`examples/lekiwi/web_server/certs/`) was regenerated to add this IP to its `subjectAltName`
+list, avoiding an extra hostname-mismatch note on top of the usual self-signed warning.
+
+Removing the dongle is safe at any time, including across a reboot: the `AttIsBeter`
+connection is bound to the interface *name* `wlan1`, so with the dongle absent NetworkManager
+has nothing to activate for that profile -- no retry loop, no boot delay. `lekiwi-web.service`
+only depends on `network.target` (generic "networking subsystem present"), not
+`network-online.target` (which actually waits for a live connection and could stall on a
+missing device), so the service starts immediately regardless. Falls back to hotspot-only
+access exactly as it was before this step. Plugging the dongle back in reconnects
+automatically (`autoconnect` defaults to on).
 
 ## Known rough edges
 
