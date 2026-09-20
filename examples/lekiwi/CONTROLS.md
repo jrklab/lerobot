@@ -1,7 +1,7 @@
-# LeKiwi Controls — Web App, Gamepad & Leader Arm
+# LeKiwi Controls — Web App, Gamepad, Leader Arm & Quest VR
 
-How to drive LeKiwi right now, via the web app (phone or computer browser), a Bluetooth/USB
-gamepad, or a leader arm + keyboard. All three drive the same robot through the same server
+How to drive LeKiwi via the web app (phone or computer browser), a Bluetooth/USB gamepad, a
+leader arm + keyboard, or a Meta Quest 2. All drive the same robot through the same server
 process — see `lekiwi_web_server.md` for the overall project spec and `networking_setup.md`
 for how the Pi's network is set up.
 
@@ -129,13 +129,17 @@ Pi image needs the same fix):**
   removing and re-pairing before assuming it's a deeper system issue.
 
 ### Mode toggle
-The gamepad has two modes for what the two analog sticks control. Only one is ever active
-at a time — switching modes releases whatever the previous mode was doing.
+The gamepad has two top-level modes for what the two analog sticks control, plus a sub-mode
+within Arm mode. Only one is ever active at a time — switching releases whatever was
+previously being driven.
 
 - **Base mode** (default on startup): left stick = translate, right stick X = rotate.
-- **Arm mode**: left stick = shoulder pan/lift, right stick = elbow/wrist tilt.
+- **Arm mode**: has two sub-modes, see below.
 
 **A button** — toggle between Base mode and Arm mode.
+**"-" / "+" buttons** (`BTN_TL`/`BTN_TR`) — toggle Arm mode's sub-mode: **Joint** (default)
+or **Cartesian/IK**. Harmless to press from Base mode too (it just changes which sub-mode
+Arm mode will be in next time you switch to it).
 
 ### Motion mapping — Base mode
 | Control | Motion |
@@ -147,7 +151,7 @@ at a time — switching modes releases whatever the previous mode was doing.
 Directions follow directly from the code (`x = -stick_y`, `y = -stick_x`, `theta = -right_stick_x`),
 verified on hardware.
 
-### Motion mapping — Arm mode
+### Motion mapping — Arm mode, Joint sub-mode
 | Control | Joint | Direction |
 |---|---|---|
 | Left stick, left/right | `shoulder_pan` | stick right → pan positive |
@@ -164,7 +168,47 @@ Same caveat as base mode — these directions come from the code's sign conventi
 `gamepad_teleoperate.py` mapping, but not yet re-confirmed by hand on this specific unit
 since the code changed. Verify on hardware and flip any sign that feels backwards.
 
-### Always-active controls (either mode)
+### Motion mapping — Arm mode, Cartesian/IK sub-mode
+Drives the end-effector's position and orientation directly (via `so101_kinematics.py`'s
+inverse kinematics) instead of jogging individual joints. **Entering this sub-mode first
+ramps the arm to a fixed, more open mid-range pose over ~1.5s** (all 5 arm joints at
+normalized 0) rather than jogging from wherever it was — starting cartesian jogging from a
+deeply-folded pose needs disproportionately large joint swings for small hand motions, which
+looks like a bug but isn't (see `robot_bridge.py`'s `CARTESIAN_READY_POSE`). Jog input is
+ignored while this ramp is in progress.
+
+| Control | Motion | Frame |
+|---|---|---|
+| Left stick, up/down | Translate x | Arm base frame |
+| Left stick, left/right | Translate y | Arm base frame |
+| Right stick, up/down | Translate z | Arm base frame |
+| D-pad, left/right | Roll | End-effector's own axes |
+| D-pad, up/down | Pitch | End-effector's own axes |
+| Right stick, left/right | Yaw | End-effector's own axes |
+| LT | `gripper` open (proportional) | |
+| RT | `gripper` close (proportional) | |
+
+Rotation is about the end-effector's *own* axes (e.g. "roll" always spins the gripper about
+its own pointing direction, whatever direction that currently is), not the arm's fixed base
+frame. Y/X (`wrist_roll` direct jog in Joint sub-mode) are inert here — `wrist_roll` is part
+of the IK chain in this sub-mode, so driving it directly at the same time as the IK solve
+would fight over the same joint every tick.
+
+The arm has only 5 joints, so it cannot hit an arbitrary position *and* orientation target
+simultaneously (a 6-value target from a 5-value system is rank-deficient by one degree of
+freedom) — position keeps priority if the two conflict, so heavy simultaneous
+translate+rotate input can make rotation lag a little. This is an inherent hardware limit,
+not a bug.
+
+Jog speeds (`robot_bridge.py`'s `CARTESIAN_JOG_SPEEDS` / `CARTESIAN_ROT_JOG_SPEEDS`):
+
+| Speed | Translation | Rotation |
+|---|---|---|
+| Slow | 0.05 m/s | 1.5 rad/s |
+| Medium | 0.12 m/s | 3.0 rad/s |
+| Fast | 0.22 m/s | 5.0 rad/s |
+
+### Always-active controls (any mode/sub-mode)
 | Input | Action |
 |---|---|
 | LB | Cycle speed: slow → medium → fast |
@@ -184,7 +228,7 @@ paired controller — this differs from the SHANWAN reference mapping in the ori
 |---|---|
 | Left stick | `ABS_X` / `ABS_Y` |
 | Right stick | `ABS_RX` / `ABS_RY` |
-| D-pad | `ABS_HAT0X` / `ABS_HAT0Y` (not currently used) |
+| D-pad | `ABS_HAT0X` / `ABS_HAT0Y` (roll/pitch in Cartesian/IK sub-mode; unused in Joint sub-mode) |
 | Y | `BTN_C` |
 | X | `BTN_NORTH` |
 | A | `BTN_B` |
@@ -193,7 +237,7 @@ paired controller — this differs from the SHANWAN reference mapping in the ori
 | RB | `BTN_Z` |
 | LT | `ABS_Z` (proportional) |
 | RT | `ABS_RZ` (proportional) |
-| "-" / "+" (separate small buttons, unused) | `BTN_TL` / `BTN_TR` |
+| "-" / "+" (arm sub-mode toggle) | `BTN_TL` / `BTN_TR` |
 | Home | `KEY_MENU` (not currently used) |
 | Select / Start | dead buttons on this unit — no event at all |
 
@@ -243,7 +287,141 @@ recommended per-motor scales/thresholds as the reference script.
 - Only the selected Control mode's commands take effect; the other two are fully inert
   (not just visually grayed out) while a different mode is active.
 
+## Quest 2 VR
+
+A 4th control mode, driving the arm's end-effector (position + orientation) from a Quest 2
+controller's tracked pose, with the headset displaying the `front`/`wrist` camera feeds (the
+same MJPEG streams the web app's Arm/Base tabs already use) on two flat panels — both shown
+at once, side by side, unlike the flat web app which only streams whichever tab is active —
+in a WebXR session.
+
+Has two top-level modes, toggled by the **right thumbstick click**:
+- **Motor Control mode** (default on entry) — direct joint/base jogging, mirroring the
+  gamepad's controls exactly (`gamepad_input.py`'s `_dispatch_base()`/`_dispatch_arm()`), just
+  split across two hands instead of one gamepad's two sticks. Has its own base/arm sub-mode,
+  toggled by the **left thumbstick click** (mirrors the gamepad's joint/cartesian toggle).
+  Needs no dedicated server-side logic at all -- it just sends the same `"jog"`/`"base"` WS
+  messages the gamepad and flat web app already use, with `source: "vr"`.
+- **IK mode** — absolute end-effector pose + clutch (see below). The original VR control
+  scheme, still available but no longer the default since direct jogging turned out to give
+  more reliable control while the IK tuning is still being refined.
+
+### Opening it on the headset
+WebXR requires a "secure context" (HTTPS, or `localhost`) — the plain `http://...:8000`
+address the flat web app uses does **not** qualify, so `/vr` is served on a separate HTTPS
+port instead: **`https://<pi-ip>:8443/vr`**. Port 8000 (plain HTTP) is unaffected and still
+serves the regular flat app for phone/laptop browsers.
+
+Two ways to reach it, depending on which network the Quest is on (see
+`networking_setup.md`'s Step 5 for how the second path was set up):
+
+- **Quest on the `LeKiwi-RoboNet` hotspot** (always available): `https://10.42.0.1:8443/vr`
+  or `https://raspberrypi.local:8443/vr`.
+- **Quest on the home Wi-Fi** (only when the Pi's USB Wi-Fi dongle is plugged in and
+  connected to it): `https://192.168.1.180:8443/vr` (this IP comes from the home router's
+  DHCP and may change — check `ip -4 addr show wlan1` on the Pi if it stops responding). Lets
+  the headset stay on the home network instead of switching onto the isolated hotspot, and as
+  a side effect gives the Pi a real internet route (Hub uploads work whenever this link is
+  up). If the dongle is removed, this path simply stops working — the hotspot path above is
+  unaffected either way, and the Pi's own startup isn't affected by the dongle's presence or
+  absence at all (see `networking_setup.md`).
+
+The cert is self-signed (generated once on the Pi, `examples/lekiwi/web_server/certs/`,
+gitignored, with both IPs above in its `subjectAltName` list), so the Quest Browser will show
+a certificate warning the first time on each network — tap **Advanced** → **proceed
+(unsafe)** (wording varies by browser version). This is a one-time step per device per
+network path; the browser remembers the exception afterward. If `navigator.xr` still isn't
+available after that, check the page's own status line (split into a WebXR line and a
+WebSocket line specifically so a "not supported" error can't get silently overwritten by an
+unrelated "Connected" message) for the actual reason.
+
+### Why absolute + clutch, not jogging
+The gamepad drives the arm by *rate* (hold a stick, it keeps moving). A hand-tracked
+controller instead drives by *absolute pose* — the end-effector tracks your hand's motion
+directly, like a leader arm. Since your hand's reachable volume doesn't match the arm's
+workspace, this needs a clutch, same idea as lifting a mouse to reposition it:
+
+- **Grip held down** = enabled. On the press, latch two references: the controller's current
+  pose, and the arm's current end-effector pose.
+- While held, target pose = latched EE pose + (current controller pose − latched controller
+  pose) — the *delta* your hand has moved, not its absolute position.
+- **Release grip** = arm freezes in place. Squeezing again re-latches wherever your hand
+  physically is now.
+
+### Button mapping
+Right controller always drives the arm; left always drives the base/e-stop. Not
+configurable. Buttons that are always active, regardless of mode/sub-mode (mirrors the
+gamepad's "always-active controls"):
+
+| Control | Action |
+|---|---|
+| Left grip (hold) | Emergency stop. Not a trigger, because Motor Control's arm sub-mode needs both triggers for the gripper -- grip is unused everywhere else, so it works identically and always |
+| A (right controller) | Cycle speed: slow → medium → fast |
+| B (right controller) | Reset arm to neutral pose |
+| Right thumbstick click | Toggle IK mode ↔ Motor Control mode |
+| Left thumbstick click | Toggle Motor Control's base/arm sub-mode (no effect in IK mode) |
+
+**Motor Control mode:**
+
+| Control | Base sub-mode | Arm sub-mode |
+|---|---|---|
+| Left stick | Translate (forward/back/left/right) | `shoulder_pan` / `shoulder_lift` |
+| Right stick | Rotate (X axis) | `wrist_flex` / `elbow_flex` |
+| Left Y / X | -- | `wrist_roll` +/− |
+| Left trigger / Right trigger | -- | Gripper open / close (rate, like the gamepad -- not absolute like IK mode's gripper) |
+
+**IK mode:**
+
+| Control | Action |
+|---|---|
+| Grip (right controller) | Hold = enable arm tracking (clutch); release = freeze in place |
+| Trigger (right controller) | Analog position → gripper position: released = open, fully squeezed = closed |
+| Left stick | Drive the base: forward/back/left/right |
+| X (left controller) | Rotate base left |
+| Y (left controller) | Rotate base right |
+
+Speed affects two different things depending on which control: for the base and Motor
+Control's joint jogging it's a rate (m/s or normalized-units/s, same `BASE_SPEEDS`/
+`JOG_SPEEDS` as every other control mode); for IK mode's arm it's a **motion scale**
+(`robot_bridge.py`'s `VR_MOTION_SCALE`) applied to hand motion, since that control is
+absolute-pose tracking, not rate-based jogging — "fast" (1.0) is full 1:1 hand tracking,
+"slow"/"medium" deliberately under-track hand motion (0.3x/0.6x) for finer control. There's
+no in-headset display of the current mode/speed yet (the status lines showing them live on
+the 2D overlay, only visible before entering VR / after taking the headset off) — toggle and
+cycle by feel and watch the robot's response.
+
+Axis mapping from the controller's WebXR-frame pose to the arm's base frame
+(`robot_bridge.py`'s `WEBXR_TO_ARM_FRAME`, IK mode only), rotate directions (X/Y → left/right
+in IK mode; Y/X → wrist_roll +/− in Motor Control), and the camera panels' placement/size
+(`vr.js`) are first guesses, not yet confirmed by hand on the headset — expect to retune by
+feel, same as the gamepad's sign conventions were.
+
+### Stall haptics
+The right controller (the one driving the arm in both modes) vibrates when an arm joint is
+detected as stalled (per `robot_bridge.py`'s existing `_stall_severity()` -- same load/speed
+thresholds the flat web app's per-joint load readout already uses), at an intensity matching
+the worst-stalled joint's severity. Needs no server-side changes -- the periodic `"state"`
+broadcast every client already receives (every 200ms) already carries this; the VR client
+just wasn't listening to incoming messages before.
+
 ## Troubleshooting
+
+### Camera feed freezes mid-session (joint load/position readout freezes too)
+A USB UVC camera can wedge -- its background read thread blocks inside the OS/driver, or
+keeps delivering a frame whose timestamp never advances -- without `send_action()` ever
+noticing, so arm/base motor control keeps working throughout. `LeKiwi.get_observation()`
+reads motor state *then* cameras in the same call, so a wedged camera also freezes the
+joint-state/load readout in the web UI, not just the video.
+
+This now self-heals: if `get_observation()` keeps failing for more than
+`robot_bridge.py`'s `CAMERA_WATCHDOG_TIMEOUT_S` (2s), `RobotBridge` disconnects and
+reconnects every camera on a background thread (so arm/base control isn't stalled during the
+reconnect, which can itself take several seconds). `CAMERA_RECONNECT_COOLDOWN_S` (8s) caps
+how often it'll retry, so a genuinely-dead camera doesn't get hammered. Watch
+`sudo journalctl -u lekiwi-web.service` for `"attempting reconnect"` / `"reconnected"` lines
+to confirm it's working. A full Pi reboot should no longer be necessary for this specific
+failure mode -- if it still is, that's worth reporting, since it'd mean this recovery path
+isn't actually fixing whatever state the camera/driver is stuck in.
 
 ### "LeKiwi is hanging" -- web app reachable but the robot doesn't move or update
 Check `sudo journalctl -u lekiwi-web.service --since '10 min ago'` for a wall of repeating

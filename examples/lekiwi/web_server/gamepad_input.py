@@ -37,15 +37,25 @@ one button/axis at a time) reports different codes than that reference script as
 
 Mode toggle ("A" button / BTN_B): switches which mode the two analog sticks drive.
   - Base mode (default at startup): left stick = translate (x, y), right stick X = rotate.
-  - Arm mode: left stick = shoulder_pan/lift, right stick = elbow_flex/wrist_flex (unchanged
-    from the original script). Only one mode is ever "live" at a time, matching the base/arm
-    tab split already used in the web UI -- switching modes releases whichever was active.
+  - Arm mode: has two sub-modes (see below), toggled independently of base/arm.
+    Only one top-level mode is ever "live" at a time, matching the base/arm tab split
+    already used in the web UI -- switching modes releases whichever was active.
+
+Arm sub-mode toggle (the "-"/"+" button pair, BTN_TL/BTN_TR -- previously unused):
+  - Joint mode (default): left stick = shoulder_pan/lift, right stick = elbow_flex/wrist_flex
+    (unchanged from the original script) -- each stick axis jogs one joint directly.
+  - Cartesian/IK mode: left stick = end-effector x/y, right stick Y = end-effector z, D-pad =
+    end-effector roll/pitch, right stick X = end-effector yaw (rotation is about the
+    end-effector's own axes, not the arm's base frame) -- all solved via so101_kinematics'
+    IK (see robot_bridge.RobotBridge._apply_cartesian_jog). This is the first step toward VR
+    teleop (mapping a controller's pose to the end-effector), tried here with a gamepad first
+    since it's much faster to iterate on than a full WebXR setup.
 
 Other buttons (active in both modes): LB cycles speed slow/medium/fast, RB is emergency
 stop (zero all motion; does NOT move the arm to any position), B resets the arm to its
 neutral pose. Select/Start would have been the more conventional choice for speed/e-stop,
 but they're dead on this controller.
-Arm-mode-only: LT/RT (gripper), Y/X (wrist_roll).
+Arm-mode-only (both sub-modes): LT/RT (gripper), Y/X (wrist_roll).
 """
 
 import logging
@@ -79,7 +89,8 @@ SPEED_NAMES = ["slow", "medium", "fast"]
 #   Y -> BTN_C   X -> BTN_NORTH   A -> BTN_B   B -> BTN_A
 AXIS_CODES = {"ABS_X", "ABS_Y", "ABS_RX", "ABS_RY"}
 TRIGGER_CODES = {"ABS_Z", "ABS_RZ"}
-ALL_TRACKED_AXES = AXIS_CODES | TRIGGER_CODES
+DPAD_CODES = {"ABS_HAT0X", "ABS_HAT0Y"}
+ALL_TRACKED_AXES = AXIS_CODES | TRIGGER_CODES | DPAD_CODES
 
 
 class GamepadInput:
@@ -95,10 +106,12 @@ class GamepadInput:
         self._buttons: dict[str, bool] = {}
 
         self._mode = "base"  # "base" | "arm"
+        self._arm_submode = "joint"  # "joint" | "cartesian" -- see module docstring
         self._speed_index = 1  # start at medium
         self._prev_buttons: dict[str, bool] = {}
         self._active_base = False
         self._active_jogs: dict[str, bool] = dict.fromkeys(ARM_JOINTS, False)
+        self._active_cartesian = False
 
     def start(self) -> None:
         try:
@@ -245,6 +258,7 @@ class GamepadInput:
         self._bridge.emergency_stop()
         self._active_base = False
         self._active_jogs = dict.fromkeys(ARM_JOINTS, False)
+        self._active_cartesian = False
 
     def _dispatch(self) -> None:
         # A -> BTN_B (mode toggle)
@@ -255,8 +269,25 @@ class GamepadInput:
             self._bridge.update_base(0.0, 0.0, 0.0, SPEED_NAMES[self._speed_index], source="gamepad")
             for joint in ARM_JOINTS:
                 self._bridge.update_jog(joint, 0.0, SPEED_NAMES[self._speed_index], source="gamepad")
+            self._bridge.update_cartesian_jog(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, SPEED_NAMES[self._speed_index], source="gamepad")
             self._active_base = False
             self._active_jogs = dict.fromkeys(ARM_JOINTS, False)
+            self._active_cartesian = False
+
+        # "-"/"+"  -> BTN_TL/BTN_TR (arm sub-mode toggle: joint jog <-> cartesian/IK jog).
+        # Only meaningful in arm mode, but harmless to toggle from base mode too.
+        if self._pressed_edge("BTN_TL") or self._pressed_edge("BTN_TR"):
+            self._arm_submode = "cartesian" if self._arm_submode == "joint" else "joint"
+            logger.info("Gamepad arm sub-mode: %s", self._arm_submode.upper())
+            for joint in ARM_JOINTS:
+                self._bridge.update_jog(joint, 0.0, SPEED_NAMES[self._speed_index], source="gamepad")
+            self._bridge.update_cartesian_jog(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, SPEED_NAMES[self._speed_index], source="gamepad")
+            # Entering cartesian mode ramps the arm to a more open, mid-range pose first
+            # instead of jogging immediately from wherever it was -- see
+            # robot_bridge.CARTESIAN_READY_POSE's comment for why.
+            self._bridge.set_arm_submode(self._arm_submode, source="gamepad")
+            self._active_jogs = dict.fromkeys(ARM_JOINTS, False)
+            self._active_cartesian = False
 
         # This controller's Select/Start buttons are dummies (confirmed: no evdev event at
         # all), so speed-cycle/e-stop live on LB/RB instead. Verified via isolated testing
@@ -278,6 +309,7 @@ class GamepadInput:
             self._bridge.emergency_stop()
             self._active_base = False
             self._active_jogs = dict.fromkeys(ARM_JOINTS, False)
+            self._active_cartesian = False
             return
 
         speed = SPEED_NAMES[self._speed_index]
@@ -298,6 +330,10 @@ class GamepadInput:
         self._active_base = is_active
 
     def _dispatch_arm(self, lx: float, ly: float, rx: float, ry: float, speed: str) -> None:
+        if self._arm_submode == "cartesian":
+            self._dispatch_arm_cartesian(lx=lx, ly=ly, rx=rx, ry=ry, speed=speed)
+            return
+
         lt = self._axes.get("ABS_Z", 0.0)
         rt = self._axes.get("ABS_RZ", 0.0)
         # Y -> BTN_C (wrist_roll+), X -> BTN_NORTH (wrist_roll-)
@@ -319,3 +355,33 @@ class GamepadInput:
             if is_active or self._active_jogs[joint]:
                 self._bridge.update_jog(joint, direction, speed, source="gamepad")
             self._active_jogs[joint] = is_active
+
+    def _dispatch_arm_cartesian(self, lx: float, ly: float, rx: float, ry: float, speed: str) -> None:
+        """IK-driven end-effector jog (see so101_kinematics.py / RobotBridge._apply_cartesian_jog).
+
+        Left stick + right-stick-Y = translation (x/y/z); D-pad + right-stick-X = rotation
+        (roll/pitch/yaw, about the end-effector's own axes, not the arm's base frame) -- the
+        only sticks/buttons not already spent on translation, gripper, or mode toggles. Y/X
+        (wrist_roll's joint-mode buttons) are deliberately left unused here since wrist_roll
+        is part of the IK chain in this sub-mode -- directly jogging it too would fight the
+        IK solve over the same joint every tick. Only the gripper (not part of the chain)
+        stays on LT/RT. Axis-to-direction signs are a first guess; expect to retune by feel.
+        """
+        lt = self._axes.get("ABS_Z", 0.0)
+        rt = self._axes.get("ABS_RZ", 0.0)
+        dx, dy, dz = lx, -ly, ry
+
+        dpad_x = self._deadzone(self._axes.get("ABS_HAT0X", 0.0))
+        dpad_y = self._deadzone(self._axes.get("ABS_HAT0Y", 0.0))
+        droll, dpitch, dyaw = dpad_x, -dpad_y, rx
+
+        is_active = bool(dx or dy or dz or droll or dpitch or dyaw)
+        if is_active or self._active_cartesian:
+            self._bridge.update_cartesian_jog(dx, dy, dz, droll, dpitch, dyaw, speed, source="gamepad")
+        self._active_cartesian = is_active
+
+        gripper_dir = lt - rt
+        is_gripper_active = gripper_dir != 0.0
+        if is_gripper_active or self._active_jogs["arm_gripper"]:
+            self._bridge.update_jog("arm_gripper", gripper_dir, speed, source="gamepad")
+        self._active_jogs["arm_gripper"] = is_gripper_active

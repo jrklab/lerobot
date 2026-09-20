@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>LeKiwi VR Control</title>
+  <style>
+    body { margin: 0; background: #111; color: #eee; font-family: sans-serif; }
+    #overlay { position: fixed; top: 0; left: 0; right: 0; padding: 16px; text-align: center; }
+    #enter-vr-btn { font-size: 1.2em; padding: 12px 24px; }
+    #xr-status, #ws-status, #speed-status, #mode-status { margin-top: 8px; font-size: 0.9em; color: #aaa; }
+    canvas { display: block; }
+    /* Hidden source images for the two MJPEG camera feeds -- drawn into WebGL textures
+       each frame, never shown directly (see vr.js's texture-update code). */
+    #cam-front, #cam-wrist { display: none; }
+  </style>
+</head>
+<body>
+  <div id="overlay">
+    <button id="enter-vr-btn">Enter VR</button>
+    <div id="xr-status">Checking WebXR support...</div>
+    <div id="ws-status">Connecting...</div>
+    <!-- Only visible on the flat/mirror screen, not inside the headset (no in-VR HUD yet) --
+         still useful for whoever's watching from outside, and right after taking the headset
+         off. Right controller's A button cycles speed; right stick click toggles IK/Motor
+         Control mode; left stick click toggles Motor Control's base/arm sub-mode. -->
+    <div id="mode-status">Mode: Motor Control -- base</div>
+    <div id="speed-status">Speed: medium</div>
+  </div>
+  <canvas id="gl-canvas"></canvas>
+  <img id="cam-front" alt="front camera" crossorigin="anonymous" />
+  <img id="cam-wrist" alt="wrist camera" crossorigin="anonymous" />
+  <script src="/static/vr.js"></script>
+</body>
+</html>

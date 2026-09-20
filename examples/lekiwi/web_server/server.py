@@ -50,7 +50,15 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from episode_recorder import EpisodeRecorder  # noqa: E402
 from gamepad_input import GamepadInput  # noqa: E402
-from robot_bridge import ARM_JOINTS, BASE_SPEEDS, FPS, JOG_SPEEDS, MockLeKiwi, RobotBridge  # noqa: E402
+from robot_bridge import (  # noqa: E402
+    ARM_JOINTS,
+    BASE_SPEEDS,
+    FPS,
+    JOG_SPEEDS,
+    VR_MOTION_SCALE,
+    MockLeKiwi,
+    RobotBridge,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -99,6 +107,15 @@ def _internet_check_loop() -> None:
 async def index():
     return StreamingResponse(
         open(STATIC_DIR / "index.html", "rb"),
+        media_type="text/html",
+        headers={"Cache-Control": "no-cache"},
+    )
+
+
+@app.get("/vr")
+async def vr_page():
+    return StreamingResponse(
+        open(STATIC_DIR / "vr.html", "rb"),
         media_type="text/html",
         headers={"Cache-Control": "no-cache"},
     )
@@ -210,10 +227,11 @@ def _handle_message(raw: str) -> dict | None:
         if speed not in BASE_SPEEDS:
             speed = "medium"
         # "source" distinguishes the on-page joystick ("web") from the leader/keyboard
-        # companion script's WASD-derived base commands ("leader_keyboard") -- either way
-        # RobotBridge only applies it if that source is the currently active control mode.
+        # companion script's WASD-derived base commands ("leader_keyboard") and the Quest's
+        # left-controller stick ("vr") -- either way RobotBridge only applies it if that
+        # source is the currently active control mode.
         source = msg.get("source", "web")
-        if source not in ("web", "leader_keyboard"):
+        if source not in ("web", "leader_keyboard", "vr"):
             source = "web"
         bridge.update_base(
             x=float(msg.get("x", 0.0)),
@@ -230,8 +248,17 @@ def _handle_message(raw: str) -> dict | None:
         speed = msg.get("speed", "medium")
         if speed not in JOG_SPEEDS:
             speed = "medium"
-        direction = int(msg.get("dir", 0))
-        bridge.update_jog(joint, direction, speed, source="web")
+        # float, not int: the flat web UI's hold-to-jog buttons only ever send -1/0/1, but
+        # the Quest's Motor Control mode passes a continuous analog stick value through this
+        # same path (like the gamepad, which calls update_jog() directly and was never
+        # affected by this WS handler's now-removed int() truncation).
+        direction = float(msg.get("dir", 0))
+        # "source" distinguishes the on-page jog buttons ("web") from the Quest's Motor
+        # Control mode ("vr") -- see "base"'s identical comment above.
+        source = msg.get("source", "web")
+        if source not in ("web", "vr"):
+            source = "web"
+        bridge.update_jog(joint, direction, speed, source=source)
     elif msg_type == "arm_pos":
         positions = msg.get("positions")
         if not isinstance(positions, dict):
@@ -293,6 +320,33 @@ def _handle_message(raw: str) -> dict | None:
                 "message": "Couldn't delete that episode -- it's currently being played back, "
                 "or a recording is in progress.",
             }
+    elif msg_type == "vr_pose":
+        position = msg.get("position")
+        quaternion = msg.get("quaternion")
+        if (
+            not isinstance(position, list)
+            or len(position) != 3
+            or not isinstance(quaternion, list)
+            or len(quaternion) != 4
+        ):
+            logger.warning("Dropping malformed vr_pose message: %s", raw)
+            return
+        speed = msg.get("speed", "medium")
+        if speed not in VR_MOTION_SCALE:
+            speed = "medium"
+        try:
+            bridge.update_vr_pose(
+                position=[float(v) for v in position],
+                quaternion=[float(v) for v in quaternion],
+                grip=bool(msg.get("grip", False)),
+                trigger=float(msg.get("trigger", 0.0)),
+                speed=speed,
+                source="vr",
+            )
+        except (TypeError, ValueError):
+            logger.warning("Dropping vr_pose message with non-numeric fields: %s", raw)
+    elif msg_type == "emergency_stop":
+        bridge.emergency_stop()
     else:
         logger.warning("Dropping WS message with unknown type: %s", msg_type)
 
@@ -324,6 +378,24 @@ def main():
         action="store_true",
         help="Disable episode recording/playback (enabled by default).",
     )
+    parser.add_argument(
+        "--ssl-keyfile",
+        default=None,
+        help="TLS private key file. Required for the Quest VR page (/vr) to work at all -- "
+        "WebXR requires a secure context (HTTPS or localhost), which a plain http:// LAN "
+        "address doesn't satisfy. A self-signed cert is fine; see CONTROLS.md's Quest VR "
+        "section for how to generate one and accept it on the headset.",
+    )
+    parser.add_argument("--ssl-certfile", default=None, help="TLS certificate file (paired with --ssl-keyfile).")
+    parser.add_argument(
+        "--ssl-port",
+        type=int,
+        default=8443,
+        help="Bind port for the HTTPS listener (only started if --ssl-keyfile/--ssl-certfile are given). "
+        "Kept separate from --port so the existing plain-HTTP flat web app keeps working unchanged -- "
+        "switching --port itself to HTTPS-only would break every bookmark/shortcut already pointed at "
+        "http://<pi>:8000.",
+    )
     args = parser.parse_args()
 
     global bridge, gamepad
@@ -350,11 +422,35 @@ def main():
     threading.Thread(target=_internet_check_loop, daemon=True).start()
 
     try:
-        uvicorn.run(app, host=args.host, port=args.port, log_level="info")
+        asyncio.run(_run_servers(args))
     finally:
         if gamepad is not None:
             gamepad.stop()
         bridge.stop()
+
+
+async def _run_servers(args: argparse.Namespace) -> None:
+    """Runs the plain-HTTP server (--port, always) and, if a cert is configured, a second
+    HTTPS server (--ssl-port) concurrently in the same process/event loop -- both serve the
+    same `app` and share the one RobotBridge/GamepadInput. HTTPS is only needed for the Quest
+    VR page (/vr), since WebXR requires a secure context; everything else (including /vr's
+    own WebSocket traffic) works the same over either."""
+    servers = [uvicorn.Server(uvicorn.Config(app, host=args.host, port=args.port, log_level="info"))]
+    if args.ssl_keyfile and args.ssl_certfile:
+        servers.append(
+            uvicorn.Server(
+                uvicorn.Config(
+                    app,
+                    host=args.host,
+                    port=args.ssl_port,
+                    log_level="info",
+                    ssl_keyfile=args.ssl_keyfile,
+                    ssl_certfile=args.ssl_certfile,
+                )
+            )
+        )
+        logger.info("Serving HTTP on port %d, HTTPS (for Quest VR) on port %d", args.port, args.ssl_port)
+    await asyncio.gather(*(s.serve() for s in servers))
 
 
 if __name__ == "__main__":
