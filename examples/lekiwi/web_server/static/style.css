@@ -94,6 +94,15 @@ main {
 }
 .video-wrap img { width: 100%; height: 100%; object-fit: cover; }
 
+/* Arm tab: wrist + front feeds side by side (both are live tools while jogging, not one
+   primary + one decorative, so neither should be occluded by a picture-in-picture inset). */
+.video-row {
+  display: flex;
+  gap: 0.5rem;
+  margin: 0.75rem 0;
+}
+.video-row .video-wrap { margin: 0; min-width: 0; flex: 1 1 0; }
+
 .joystick-row {
   display: flex;
   justify-content: space-around;
@@ -320,12 +329,14 @@ main {
   .joystick { width: 160px; height: 160px; }
   .joystick-knob { width: 64px; height: 64px; }
 
-  /* Arm tab: keep the same single-column stacked flow as phone (video, then reset,
+  /* Arm tab: keep the same single-column stacked flow as phone (video row, then reset,
      then joint grid) instead of the video|sidebar split used for Base -- the reset
-     button and jog grid don't belong crammed into a narrow sidebar next to the video. */
+     button and jog grid don't belong crammed into a narrow sidebar next to the video.
+     Wider than the phone layout's implicit width so the two side-by-side camera feeds
+     stay legible instead of shrinking to fit a single-video-width column. */
   #tab-arm.active {
     grid-template-columns: 1fr;
-    max-width: 520px;
+    max-width: 760px;
     margin: 0 auto;
   }
   #tab-arm .video-compact { aspect-ratio: 16 / 9; max-height: 40vh; }

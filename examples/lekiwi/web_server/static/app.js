@@ -207,9 +207,11 @@ function setupTabs() {
 function updateVideoStreams(activeTab) {
   const baseImg = document.getElementById("video-base");
   const armImg = document.getElementById("video-arm");
+  const armFrontImg = document.getElementById("video-arm-front");
   const recImg = document.getElementById("video-rec");
   baseImg.src = activeTab === "base" ? "/video/front" : "";
   armImg.src = activeTab === "arm" ? "/video/wrist" : "";
+  armFrontImg.src = activeTab === "arm" ? "/video/front" : "";
   recImg.src = activeTab === "rec" ? "/video/front" : "";
 }
 
