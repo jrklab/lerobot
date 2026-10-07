@@ -333,13 +333,14 @@ main {
      then joint grid) instead of the video|sidebar split used for Base -- the reset
      button and jog grid don't belong crammed into a narrow sidebar next to the video.
      Wider than the phone layout's implicit width so the two side-by-side camera feeds
-     stay legible instead of shrinking to fit a single-video-width column. */
+     stay legible instead of shrinking to fit a single-video-width column. 760px -> 1140px
+     (+50%) since desktop has the room and the feeds are more useful larger. */
   #tab-arm.active {
     grid-template-columns: 1fr;
-    max-width: 760px;
+    max-width: 1140px;
     margin: 0 auto;
   }
-  #tab-arm .video-compact { aspect-ratio: 16 / 9; max-height: 40vh; }
+  #tab-arm .video-compact { aspect-ratio: 16 / 9; max-height: 60vh; }
   #tab-arm .jog-grid { max-width: 420px; margin: 0 auto; width: 100%; }
 
   /* Record tab: same single-column stacked flow as Arm -- video, then recording controls,
