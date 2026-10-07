@@ -20,10 +20,21 @@ from lerobot.cameras.opencv import OpenCVCameraConfig
 from ..config import RobotConfig
 
 
+_CAMERA_BY_PATH = "/dev/v4l/by-path/platform-fd500000.pcie-pci-0000:01:00.0-usb-0:{port}:1.0-video-index0"
+
+
 def lekiwi_cameras_config() -> dict[str, CameraConfig]:
     return {
         "front": OpenCVCameraConfig(
-            index_or_path="/dev/video2",
+            # Stable USB-topology-keyed path (physical port 1.2), not a raw /dev/videoN index
+            # -- both cameras are the same model and report the identical USB serial number,
+            # so /dev/v4l/by-id/ can't tell them apart (it silently collides/aliases), unlike
+            # the motor bus's /dev/serial/by-id/ path elsewhere in this project. by-path is
+            # keyed by physical port position instead, which stays stable across a USB
+            # disconnect/reconnect re-enumeration event (confirmed to happen on this hardware
+            # -- see index_or_path="/dev/video0" below/dmesg history) even though the raw
+            # /dev/videoN index it points to can change.
+            index_or_path=_CAMERA_BY_PATH.format(port="1.2"),
             fps=30,
             width=640,
             height=480,
@@ -37,7 +48,10 @@ def lekiwi_cameras_config() -> dict[str, CameraConfig]:
             connect_retry_interval_s=3,
         ),
         "wrist": OpenCVCameraConfig(
-            index_or_path="/dev/video0",
+            # Physical port 1.1 -- was hardcoded as /dev/video0 until a real USB
+            # disconnect/reconnect re-enumerated it to /dev/video1, which then made every
+            # connect attempt fail against the now-stale /dev/video0 path until fixed here.
+            index_or_path=_CAMERA_BY_PATH.format(port="1.1"),
             fps=30,
             width=640,
             height=480,

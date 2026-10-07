@@ -213,6 +213,7 @@ class GamepadInput:
                 if r:
                     for event in self._device.read():
                         self._handle_event(event)
+                self._poll_abs_state()
             except Exception as e:
                 logger.warning("Gamepad disconnected (%s); will keep retrying.", e)
                 self._handle_disconnect()
@@ -232,18 +233,47 @@ class GamepadInput:
         self._device = None
 
     def _handle_event(self, event) -> None:
+        # Buttons only -- axes are handled by _poll_abs_state() instead (see its docstring
+        # for why: relying on the EV_ABS event stream for axis *values* is what caused a
+        # real stuck-driving-forever bug).
         ecodes = self._evdev.ecodes
-        if event.type == ecodes.EV_ABS:
-            names = ecodes.ABS.get(event.code, [])
-            name = names[0] if isinstance(names, list) else names
-            if name in self._axes:
-                self._axes[name] = self._normalize(name, event.value)
-        elif event.type == ecodes.EV_KEY:
+        if event.type == ecodes.EV_KEY:
             raw = ecodes.BTN.get(event.code) or ecodes.KEY.get(event.code, [])
             aliases = list(raw) if isinstance(raw, (list, tuple)) else ([raw] if raw else [])
             for name in aliases:
                 if name:
                     self._buttons[name] = bool(event.value)
+
+    def _poll_abs_state(self) -> None:
+        """Refreshes every tracked axis from the device's actual current value (an
+        EVIOCGABS ioctl via evdev's InputDevice.absinfo()), not from the EV_ABS event
+        stream.
+
+        This is the fix for a real bug: self._axes used to be updated only when an EV_ABS
+        event arrived, so if the one event carrying "the stick is back at center" was ever
+        lost (observed over this Bluetooth gamepad -- plausible any time a packet drops,
+        and more likely the longer/more actively a stick is held, since a longer hold means
+        more individual events and more chances for one to be lost), the cached value stayed
+        stuck at whatever non-zero reading arrived last, forever. _dispatch() trusted that
+        stale cache every tick afterward, so the robot kept being driven long after the
+        stick was physically released -- and each of those sends refreshed the server-side
+        watchdog, so it never looked stale from RobotBridge's side either. absinfo() queries
+        the kernel's current value directly and doesn't depend on any event ever having been
+        read, so a dropped event can no longer leave a stale reading behind -- confirmed via
+        a virtual (uinput) test device: absinfo() reported the correct up-to-date value even
+        with an unread, pending event still sitting in the same device's queue.
+        """
+        ecodes = self._evdev.ecodes
+        for name in ALL_TRACKED_AXES:
+            code = getattr(ecodes, name, None)
+            if code is None:
+                continue
+            try:
+                info = self._device.absinfo(code)
+            except Exception:
+                continue
+            if info is not None:
+                self._axes[name] = self._normalize(name, info.value)
 
     def _pressed_edge(self, name: str) -> bool:
         """True only on the press transition (not while held), so toggles fire once."""
