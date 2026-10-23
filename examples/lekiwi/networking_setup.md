@@ -11,15 +11,15 @@ server, without the two networks colliding.
 ```
 Home Wi-Fi router (AttIsBeter)
         │
-        │ wlo1 (192.168.1.120/24) — host's internet source
+        │ 2.4GHz, wlx9cefd5f874c4 (RT5370 USB dongle, 192.168.1.180/24) — host's internet source
         ▼
  ┌─────────────────┐   eth (10.55.0.0/24, host=.1, pi=.102)   ┌─────────────────┐
  │     Host PC     │ ───────────────────────────────────────▶ │  Raspberry Pi   │
  │                 │   host shares wlo1 internet over this    │   (LeKiwi)      │
  │                 │   link via NAT (ipv4.method=shared)      │                 │
  │                 │                                          │                 │
- │ wlx9cefd5f874c4 │◀──── wlan0 hotspot LeKiwi-RoboNet ────────│  wlan0 (AP)     │
- │ (10.42.0.63/24) │      (10.42.0.0/24, pi=.1)                │  10.42.0.1/24   │
+ │ wlo1 (built-in) │◀──── wlan0 hotspot LeKiwi-RoboNet ────────│  wlan0 (AP)     │
+ │ (10.42.0.x/24)  │      5GHz ch 149, 10.42.0.0/24, pi=.1     │  10.42.0.1/24   │
  └─────────────────┘      "student device" test path           └─────────────────┘
 ```
 
@@ -35,7 +35,8 @@ that range.
 | Link | Purpose | Host-side IP | Pi-side IP |
 |---|---|---|---|
 | Ethernet (`enxe8ea6a951df5` ↔ `eth0`) | Dev/management access + internet sharing | `10.55.0.1/24` | `10.55.0.102/24` |
-| Hotspot (`wlx9cefd5f874c4` ↔ `wlan0` AP `LeKiwi-RoboNet`) | Simulated student-device test path | `10.42.0.63/24` | `10.42.0.1/24` |
+| Hotspot (`wlo1` ↔ `wlan0` AP `LeKiwi-RoboNet`, 5GHz channel 149) | Simulated student-device test path | `10.42.0.x/24` (DHCP) | `10.42.0.1/24` |
+| Home Wi-Fi (`wlx9cefd5f874c4` RT5370 dongle ↔ `AttIsBeter`, 2.4GHz) | Host's internet | `192.168.1.180/24` (DHCP) | n/a |
 | Pi's second Wi-Fi adapter (`wlan1` ↔ home router `AttIsBeter`) | Lets home-Wi-Fi devices (e.g. the Quest) reach the Pi directly, and gives the Pi a real internet route | n/a (Pi-only adapter) | `192.168.1.180/24` (DHCP, may change) |
 
 - Pi has internet access (DNS + HTTP verified) via the host's shared Ethernet connection.
@@ -119,7 +120,8 @@ sudo nmcli connection add type wifi ifname wlan0 con-name LeKiwi-RoboNet \
 
 sudo nmcli connection modify LeKiwi-RoboNet \
   802-11-wireless.mode ap \
-  802-11-wireless.band bg \
+  802-11-wireless.band a \
+  802-11-wireless.channel 149 \
   ipv4.method shared \
   ipv4.addresses 10.42.0.1/24
 
@@ -129,6 +131,23 @@ sudo nmcli connection modify LeKiwi-RoboNet \
 
 sudo nmcli connection up LeKiwi-RoboNet
 ```
+
+**5GHz, channel 149** (changed from the original 2.4GHz `band bg` on 2026-10-23). The Pi's
+Wi-Fi country must match where it runs -- it was `GB`, which doesn't allow channel 149; set it
+to `US` first, or the AP won't start on that channel:
+
+```bash
+sudo raspi-config nonint do_wifi_country US
+sudo iw reg set US
+```
+
+Why 149: a scan from the Pi (`nmcli -f SSID,CHAN,SIGNAL dev wifi list --rescan yes`) showed
+2.4GHz crowded (~10 networks on channels 1/6/9/10/11) and 5GHz in use at 44 (home router,
+TP-Link) and 132/136 (DFS), but nothing on 149-165. 149 is non-DFS (no radar wait, never
+forced off-channel) and full power in the US. The Pi 4's built-in radio runs the AP at 20MHz
+width. Rescan and move if the room changes. Devices without 5GHz can't join any more; going
+back is `802-11-wireless.band bg 802-11-wireless.channel 0`. Both bands at once would need a
+second AP-capable adapter on the Pi -- `wlan0` serves one band at a time.
 
 Gotcha: `wifi-sec.*` is *not* a valid shorthand for `nmcli connection
 modify` in this NetworkManager version — it must be the full property name
@@ -146,15 +165,32 @@ boot:
 sudo nmcli connection modify LeKiwi-RoboNet connection.autoconnect yes
 ```
 
-## Step 4 — Host PC: connect the second Wi-Fi interface to the hotspot
+## Step 4 — Host PC: connect a Wi-Fi interface to the hotspot
+
+The hotspot is 5GHz, so the host joins it with its built-in dual-band `wlo1`; the RT5370
+USB dongle (`wlx9cefd5f874c4`, 2.4GHz only) took over the host's home Wi-Fi instead.
 
 ```bash
-sudo nmcli device wifi rescan ifname wlx9cefd5f874c4
-sudo nmcli device wifi connect LeKiwi-RoboNet password lekiwi_test ifname wlx9cefd5f874c4
+sudo nmcli device wifi connect AttIsBeter password '<password>' ifname wlx9cefd5f874c4
+sudo nmcli device wifi connect LeKiwi-RoboNet password lekiwi_test ifname wlo1
+sudo nmcli connection modify "LeKiwi-RoboNet 2" ipv4.never-default yes ipv6.never-default yes
+sudo nmcli connection up "LeKiwi-RoboNet 2"
 ```
 
-Result: `wlx9cefd5f874c4` → `10.42.0.63/24`, confirmed `ping`/`ssh` to
-`10.42.0.1` (the Pi).
+`never-default`: the hotspot's DHCP also hands out a default route (via the Pi, which may
+have no internet), only one metric point behind the home Wi-Fi's -- if the dongle drops,
+internet traffic would go to the Pi. With it set, only `10.42.0.0/24` goes over `wlo1`.
+(`LeKiwi-RoboNet 2` is the profile name NetworkManager generated here; check with
+`nmcli con show`.)
+
+Result: `wlo1` → `10.42.0.182/24` on channel 149 at 117 Mbit/s, ping to `10.42.0.1`
+~6 ms average, no loss.
+
+A dual-band AIC8800D80 USB dongle (`a69c:8d80`, ships in "driver CD" mode `a69c:5723`) was
+tried first and abandoned: it needs an out-of-tree driver (signed for Secure Boot), and with
+the radxa-pkg driver its firmware upload always timed out at `0x170400` (this chip reports
+`chip_id=7, chip_mcu_id=1`, which needs the `legacy-mcu1` branch of
+`shenmintao/aic8800d80`, not tried).
 
 ## Step 5 — Raspberry Pi: second Wi-Fi adapter for direct home-network access
 
@@ -203,7 +239,7 @@ automatically (`autoconnect` defaults to on).
   accepted with `-o StrictHostKeyChecking=accept-new`. Fine for a lab
   setup; revisit if this machine's identity needs to be pinned down for
   anything security-sensitive later.
-- **Hotspot is 2.4GHz `bg`-only** (`802-11-wireless.band bg`), and this is
+- **Hotspot was 2.4GHz `bg`-only** until 2026-10-23 (now 5GHz, Step 3), and that was
   a likely contributor to jerky real-time control over the web app: driving
   the base from a phone connected to `LeKiwi-RoboNet` showed real WebSocket
   message delivery gaps (target ~33ms at 30Hz, observed gaps up to ~245ms
@@ -213,7 +249,4 @@ automatically (`autoconnect` defaults to on).
   stream sharing the same link, or phone-side browser/CPU throttling) —
   deprioritized for now since it doesn't block development, but worth
   revisiting before this goes in front of students.
-  **The Pi does support 5GHz** (`Raspberry Pi 4 Model B`, BCM43438 chip;
-  `nmcli -f WIFI-PROPERTIES.5GHZ device show wlan0` → `yes`), so switching
-  the hotspot to `802-11-wireless.band a` is a real option to try — no
-  hardware limitation in the way.
+  Not yet re-measured from a phone on the 5GHz hotspot.
