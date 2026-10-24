@@ -33,6 +33,7 @@ import cv2
 import numpy as np
 
 import so101_kinematics as kin
+from auto_control import AutoController
 from episode_recorder import EpisodeRecorder
 
 logger = logging.getLogger(__name__)
@@ -141,7 +142,9 @@ CAMERA_RECONNECT_COOLDOWN_S = 8.0
 # keyboard key state, same as "web") and set_arm_absolute() (direct position mirror from a
 # leader arm on the host PC -- see leader_keyboard_client.py); "vr" feeds update_vr_pose()
 # (absolute end-effector pose with a clutch -- see that method and _apply_vr_target()).
-CONTROL_MODES = ("gamepad", "web", "leader_keyboard", "vr")
+# "auto" runs motion primitives submitted over HTTP by an off-board planner (see
+# auto_control.py); any gamepad input, e-stop or arm reset takes control back from it.
+CONTROL_MODES = ("gamepad", "web", "leader_keyboard", "vr", "auto")
 
 # Rotates a WebXR-frame vector/rotation into the arm's base frame. WebXR's `local`/
 # `local-floor` reference space is +X=right, +Y=up, +Z=toward the user (so -Z=forward); the
@@ -300,6 +303,11 @@ class RobotBridge:
             for joint in ARM_JOINTS
         }
         self._latest_jpeg: dict[str, bytes] = {}
+        # Wall-clock capture time of each camera's latest JPEG, so the auto planner can ask for
+        # a frame taken after a motion finished (see get_jpeg_frame_after()).
+        self._latest_jpeg_time: dict[str, float] = {}
+        self._latest_base_vel = {"x.vel": 0.0, "y.vel": 0.0, "theta.vel": 0.0}
+        self._auto = AutoController(self._joint_norm_to_rad)
 
         # Leader-arm mirroring ramps in over LEADER_CATCHUP_S on entry to "leader_keyboard"
         # instead of snapping straight to the leader's (possibly very different) live pose --
@@ -380,6 +388,7 @@ class RobotBridge:
         if mode not in CONTROL_MODES:
             raise ValueError(f"Unknown control mode: {mode!r}")
         with self._lock:
+            previous = self._control_mode
             self._control_mode = mode
             # Switching away from a source must not leave its last command latched in --
             # the next thing to touch the base/arm should be whatever mode is now active.
@@ -393,9 +402,19 @@ class RobotBridge:
             if mode == "leader_keyboard":
                 self._leader_catchup_start = dict(self._joint_targets)
                 self._leader_catchup_until = time.monotonic() + LEADER_CATCHUP_S
+        if previous == "auto" and mode != "auto":
+            self._auto.abort(f"control mode switched to {mode}")
         logger.info("Control mode switched to: %s", mode)
 
+    def _gamepad_takeover(self, source: str, active: bool) -> None:
+        """Real gamepad input (not the all-zero release messages it also sends) while the
+        auto planner is driving hands control straight back to the gamepad."""
+        if source == "gamepad" and active and self.get_control_mode() == "auto":
+            logger.warning("Gamepad input during auto mode -- taking over from the planner.")
+            self.set_control_mode("gamepad")
+
     def update_base(self, x: float, y: float, theta: float, speed: str, source: str) -> None:
+        self._gamepad_takeover(source, bool(x or y or theta))
         with self._lock:
             if source != self._control_mode:
                 return
@@ -407,6 +426,7 @@ class RobotBridge:
         but the gamepad passes a continuous analog stick value through this same path."""
         if joint not in ARM_JOINTS:
             raise ValueError(f"Unknown joint: {joint}")
+        self._gamepad_takeover(source, bool(direction))
         with self._lock:
             if source != self._control_mode:
                 return
@@ -428,6 +448,7 @@ class RobotBridge:
         frame; droll/dpitch/dyaw are -1..1 rotation about the end-effector's own (body-frame)
         axes -- analogous to update_jog()'s per-joint direction but applied via
         so101_kinematics instead."""
+        self._gamepad_takeover(source, any((dx, dy, dz, droll, dpitch, dyaw)))
         with self._lock:
             if source != self._control_mode:
                 return
@@ -448,6 +469,7 @@ class RobotBridge:
         comment); leaving cancels any ramp still in progress."""
         if submode not in ("joint", "cartesian"):
             raise ValueError(f"Unknown arm submode: {submode!r}")
+        self._gamepad_takeover(source, True)
         with self._lock:
             if source != self._control_mode:
                 return
@@ -613,6 +635,8 @@ class RobotBridge:
 
     def reset_arm(self) -> None:
         """Sends the arm to its neutral/rest pose (see ARM_NEUTRAL_POS)."""
+        if self.get_control_mode() == "auto":
+            self.set_control_mode("gamepad")
         with self._lock:
             self._desired_jogs.clear()
             self._desired_cartesian_jog = None
@@ -629,7 +653,11 @@ class RobotBridge:
         Deliberately does NOT move the arm to any position (neutral or otherwise) -- an
         e-stop must never itself cause a large, sudden, potentially unsafe motion. Position
         control already holds the arm wherever it currently is with no action needed.
+
+        In auto mode this also ends autonomous control: the planner has to re-enable it.
         """
+        if self.get_control_mode() == "auto":
+            self.set_control_mode("gamepad")
         with self._lock:
             self._desired_base = {"x": 0.0, "y": 0.0, "theta": 0.0, "speed": "medium"}
             self._last_base_msg_time = time.monotonic()
@@ -646,9 +674,39 @@ class RobotBridge:
         with self._lock:
             return self._latest_jpeg.get(cam_name)
 
+    def get_jpeg_frame_after(self, cam_name: str, after: float, timeout_s: float = 1.0) -> tuple[bytes, float] | None:
+        """Latest JPEG of cam_name captured strictly after wall-clock time `after`, waiting up
+        to timeout_s for one. Returns (jpeg, capture_time) or None."""
+        deadline = time.monotonic() + timeout_s
+        while True:
+            with self._lock:
+                frame = self._latest_jpeg.get(cam_name)
+                captured = self._latest_jpeg_time.get(cam_name, 0.0)
+            if frame is not None and captured > after:
+                return frame, captured
+            if time.monotonic() > deadline:
+                return None
+            time.sleep(0.01)
+
     def get_joint_state(self) -> dict[str, dict]:
         with self._lock:
             return dict(self._latest_joint_state)
+
+    # --- auto mode (see auto_control.py; called from HTTP request threads) ---
+
+    @property
+    def auto(self) -> AutoController:
+        return self._auto
+
+    def get_arm_calibration(self) -> dict[str, dict]:
+        """Per-joint calibration the planner needs to convert normalized joint units to
+        radians exactly like _joint_norm_to_rad() does. Empty when uncalibrated (mock)."""
+        calib = getattr(self._robot, "calibration", None) or {}
+        return {
+            j: {"range_min": c.range_min, "range_max": c.range_max, "drive_mode": c.drive_mode}
+            for j, c in calib.items()
+            if j in ARM_JOINTS
+        }
 
     # --- recording / playback (thread-safe; see episode_recorder.py for the dataset side) ---
 
@@ -860,6 +918,13 @@ class RobotBridge:
                     key = f"{joint}.pos"
                     if key in action:
                         self._joint_targets[joint] = action[key]
+            elif self.get_control_mode() == "auto":
+                with self._lock:
+                    joint_state = {j: dict(s) for j, s in self._latest_joint_state.items()}
+                    base_vel = dict(self._latest_base_vel)
+                action = self._auto.step(loop_start, self._joint_targets, joint_state, base_vel)
+                for joint, target in self._joint_targets.items():
+                    action[f"{joint}.pos"] = target
             else:
                 with self._lock:
                     base_stale = (loop_start - self._last_base_msg_time) > WATCHDOG_TIMEOUT_S
@@ -955,9 +1020,13 @@ class RobotBridge:
                         ok, buf = cv2.imencode(".jpg", bgr_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
                         if ok:
                             new_jpeg[cam_name] = buf.tobytes()
+                captured = time.time()
                 with self._lock:
                     self._latest_joint_state.update(new_joint_state)
                     self._latest_jpeg.update(new_jpeg)
+                    for cam_name in new_jpeg:
+                        self._latest_jpeg_time[cam_name] = captured
+                    self._latest_base_vel = {k: float(obs.get(k, 0.0)) for k in ("x.vel", "y.vel", "theta.vel")}
 
                 # Recording captures whatever's actually happening regardless of which
                 # control mode is driving it -- skipped during playback (recording a replay

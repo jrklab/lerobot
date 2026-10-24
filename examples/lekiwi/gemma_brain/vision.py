@@ -1,0 +1,131 @@
+#!/usr/bin/env python
+
+# Copyright 2025 The HuggingFace Inc. team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Classical image geometry on top of Gemma's boxes: Gemma finds the brick (an axis-aligned
+box), OpenCV measures what a box can't say, its in-plane orientation."""
+
+from __future__ import annotations
+
+import cv2
+import numpy as np
+
+
+def brick_angle(jpeg: bytes, box, pad: float = 0.25) -> dict | None:
+    """Long-axis angle of the brick inside `box` (x0, y0, x1, y1 image fractions), in degrees
+    from image vertical, in (-90, 90], positive = clockwise in the image (top leaning right).
+
+    The crop around the box is segmented by colour distance from the floor around it (the
+    median L*a*b* of the crop's border ring), Otsu-thresholded, and the largest blob's
+    minimum-area rectangle gives the angle. Works for any brick colour that differs from the
+    floor. Returns None if no plausible blob is found.
+    """
+    img = cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_COLOR)
+    if img is None:
+        return None
+    h, w = img.shape[:2]
+    x0, y0, x1, y1 = box
+    bw, bh = x1 - x0, y1 - y0
+    X0, Y0 = int(max(0, (x0 - pad * bw) * w)), int(max(0, (y0 - pad * bh) * h))
+    X1, Y1 = int(min(w, (x1 + pad * bw) * w)), int(min(h, (y1 + pad * bh) * h))
+    crop = img[Y0:Y1, X0:X1]
+    if crop.size == 0 or min(crop.shape[:2]) < 8:
+        return None
+    lab = cv2.GaussianBlur(cv2.cvtColor(crop, cv2.COLOR_BGR2LAB).astype(float), (5, 5), 0)
+    ring = np.concatenate([lab[:3].reshape(-1, 3), lab[-3:].reshape(-1, 3), lab[:, :3].reshape(-1, 3), lab[:, -3:].reshape(-1, 3)])
+    bg = np.median(ring, axis=0)
+    score = np.linalg.norm(lab - bg, axis=2)
+    score = cv2.normalize(score, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+    _, mask = cv2.threshold(score, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((5, 5), np.uint8))
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return None
+    c = max(contours, key=cv2.contourArea)
+    (cx, cy), (rw, rh), a = cv2.minAreaRect(c)
+    # OpenCV 4.5+: a in (0, 90], rw measured along the rotated x axis.
+    long_angle = a if rw < rh else a - 90.0
+    long_angle = (long_angle + 90.0) % 180.0 - 90.0
+    box_area = bw * w * bh * h
+    return {
+        "angle_deg": round(float(long_angle), 1),
+        "aspect": round(float(max(rw, rh) / max(1.0, min(rw, rh))), 2),
+        "fill": round(float(cv2.contourArea(c) / max(1.0, box_area)), 2),
+        "center": [round((X0 + cx) / w, 4), round((Y0 + cy) / h, 4)],
+    }
+
+
+def plausible_brick(jpeg: bytes, box) -> tuple[bool, str]:
+    """Is Gemma's box really a brick on the floor in a wrist frame? Gemma's own yes/no is
+    unreliable here both ways (2026-10-23: false negatives on a plainly visible brick, and a
+    box invented on the blue gripper jaw when nothing was there), so check geometry instead:
+    the box must not touch the image border and must be mostly free of the jaws' saturated
+    blue. (A brick-shaped-blob test was tried too and rejected: the whiteness segmentation
+    spills onto the light floor in about half of the real-brick frames.)"""
+    x0, y0, x1, y1 = box
+    if min(x0, y0) < 0.01 or max(x1, y1) > 0.99:
+        return False, "box touches the image border"
+    img = cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_COLOR)
+    h, w = img.shape[:2]
+    roi = img[int(y0 * h) : int(y1 * h), int(x0 * w) : int(x1 * w)]
+    hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+    blue = (hsv[..., 0] > 95) & (hsv[..., 0] < 135) & (hsv[..., 1] > 120) & (hsv[..., 2] > 50)
+    if blue.mean() > 0.15:
+        return False, f"box is {100 * blue.mean():.0f}% gripper blue"
+    return True, "ok"
+
+
+def crop_around(jpeg: bytes, box, pad: float = 0.6, min_px: int = 160) -> bytes:
+    """JPEG of the box with `pad` x its size of context on each side, upscaled so its short
+    side is at least min_px (far objects are only ~20 px across in the front camera)."""
+    img = cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_COLOR)
+    h, w = img.shape[:2]
+    x0, y0, x1, y1 = box
+    bw, bh = max(x1 - x0, 0.05), max(y1 - y0, 0.05)
+    cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+    X0, Y0 = int(max(0, (cx - (0.5 + pad) * bw) * w)), int(max(0, (cy - (0.5 + pad) * bh) * h))
+    X1, Y1 = int(min(w, (cx + (0.5 + pad) * bw) * w)), int(min(h, (cy + (0.5 + pad) * bh) * h))
+    c = img[Y0:Y1, X0:X1]
+    scale = max(1.0, min_px / max(1, min(c.shape[:2])))
+    c = cv2.resize(c, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+    return cv2.imencode(".jpg", c)[1].tobytes()
+
+
+def jaw_tip_row(jpeg: bytes) -> float | None:
+    """Image row (fraction, 0 = top) of the gripper's jaw tips in a wrist frame: the highest
+    point of the two largest saturated-blue blobs in the lower half (the jaws are blue and
+    enter from the bottom of the image). The average of both tips, or the one found."""
+    img = cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_COLOR)
+    if img is None:
+        return None
+    h, w = img.shape[:2]
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    blue = ((hsv[..., 0] > 95) & (hsv[..., 0] < 135) & (hsv[..., 1] > 120) & (hsv[..., 2] > 50)).astype(np.uint8)
+    blue[: h // 2] = 0
+    blue = cv2.morphologyEx(blue, cv2.MORPH_OPEN, np.ones((5, 5), np.uint8))
+    n, labels, stats, _ = cv2.connectedComponentsWithStats(blue)
+    blobs = sorted((stats[i] for i in range(1, n) if stats[i][cv2.CC_STAT_AREA] > 0.004 * h * w), key=lambda s: -s[cv2.CC_STAT_AREA])[:2]
+    if not blobs:
+        return None
+    return float(np.mean([b[cv2.CC_STAT_TOP] for b in blobs])) / h
+
+
+def outside_fraction(box, tip_row: float) -> float:
+    """Share of the brick's box (along the image vertical: its length, with the wrist rolled
+    to put the long side vertical) that lies beyond the jaw tips, i.e. outside the gripper."""
+    y0, y1 = box[1], box[3]
+    if y1 <= y0:
+        return 0.0
+    return float(np.clip((tip_row - y0) / (y1 - y0), 0.0, 1.0))

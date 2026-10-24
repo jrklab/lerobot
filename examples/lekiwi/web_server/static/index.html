@@ -19,6 +19,10 @@
     <label><input type="radio" name="mode" value="gamepad" checked /> Gamepad</label>
     <label><input type="radio" name="mode" value="web" /> Web App</label>
     <label><input type="radio" name="mode" value="leader_keyboard" /> Leader Arm</label>
+    <!-- Indicators only: VR is entered by the Quest's /vr page, Auto by the off-board planner
+         (gemma_brain) via /auto/enable. Picking any mode above takes control back. -->
+    <label class="mode-indicator" title="Active while the Quest's /vr page is driving"><input type="radio" name="mode" value="vr" disabled /> VR</label>
+    <label class="mode-indicator" title="Active while the Gemma brain on the host is driving"><input type="radio" name="mode" value="auto" disabled /> Auto</label>
   </div>
 
   <nav class="tabs">

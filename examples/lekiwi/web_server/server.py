@@ -39,8 +39,8 @@ import time
 from pathlib import Path
 
 import uvicorn
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import StreamingResponse
+from fastapi import Body, FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 # Allow running this script directly (`python server.py` or `python examples/.../server.py`)
@@ -48,6 +48,7 @@ from fastapi.staticfiles import StaticFiles
 # module rather than part of the installed lerobot package.
 sys.path.insert(0, str(Path(__file__).parent))
 
+from auto_control import CommandRefused  # noqa: E402
 from episode_recorder import EpisodeRecorder  # noqa: E402
 from gamepad_input import GamepadInput  # noqa: E402
 from robot_bridge import (  # noqa: E402
@@ -55,6 +56,7 @@ from robot_bridge import (  # noqa: E402
     BASE_SPEEDS,
     FPS,
     JOG_SPEEDS,
+    MOTOR_RESOLUTION,
     VR_MOTION_SCALE,
     MockLeKiwi,
     RobotBridge,
@@ -142,6 +144,78 @@ async def video_feed(cam_name: str):
             await asyncio.sleep(1 / 15)
 
     return StreamingResponse(mjpeg_stream(), media_type="multipart/x-mixed-replace; boundary=frame")
+
+
+# --- auto mode: the off-board planner's API (see auto_control.py) ---
+# Plain HTTP rather than the WebSocket, so the planner needs nothing beyond an HTTP client.
+# Sync `def` handlers run on FastAPI's threadpool, so a command's IK planning never blocks
+# the event loop (or the 30Hz control loop, which is a separate thread).
+
+
+@app.post("/auto/enable")
+def auto_enable():
+    bridge.auto.heartbeat()
+    bridge.set_control_mode("auto")
+    return {"ok": True, "mode": bridge.get_control_mode()}
+
+
+@app.post("/auto/disable")
+def auto_disable():
+    if bridge.get_control_mode() == "auto":
+        bridge.set_control_mode("gamepad")
+    return {"ok": True, "mode": bridge.get_control_mode()}
+
+
+@app.post("/auto/heartbeat")
+def auto_heartbeat():
+    bridge.auto.heartbeat()
+    return {"ok": True, "mode": bridge.get_control_mode()}
+
+
+@app.post("/auto/cmd")
+def auto_cmd(cmd: dict = Body(...)):
+    if bridge.get_control_mode() != "auto":
+        return JSONResponse(
+            {"ok": False, "reason": f"not in auto mode (mode is {bridge.get_control_mode()})"}, status_code=409
+        )
+    bridge.auto.heartbeat()
+    try:
+        cmd_id = bridge.auto.submit(cmd)
+    except CommandRefused as e:
+        logger.warning("auto: refused %s: %s", cmd.get("cmd"), e)
+        return JSONResponse({"ok": False, "reason": str(e)}, status_code=409)
+    return {"ok": True, "id": cmd_id}
+
+
+@app.post("/auto/stop")
+def auto_stop():
+    bridge.auto.abort("stop requested by the planner")
+    return {"ok": True}
+
+
+@app.get("/auto/status")
+def auto_status():
+    measured = {j: st["pos"] for j, st in bridge.get_joint_state().items()}
+    return {"mode": bridge.get_control_mode(), **bridge.auto.status(measured)}
+
+
+@app.get("/auto/calibration")
+def auto_calibration():
+    """Per-joint calibration, so the planner's IK uses the same unit conversion as the Pi."""
+    return {"motor_resolution": MOTOR_RESOLUTION, "joints": bridge.get_arm_calibration()}
+
+
+@app.get("/auto/frame/{cam_name}")
+def auto_frame(cam_name: str, after: float = 0.0):
+    """One JPEG captured after wall-clock time `after` (e.g. a command's finish time), so the
+    planner never reasons about a frame taken mid-motion."""
+    if cam_name not in ("front", "wrist"):
+        return Response(status_code=404)
+    got = bridge.get_jpeg_frame_after(cam_name, after)
+    if got is None:
+        return Response(status_code=504)
+    jpeg, captured = got
+    return Response(jpeg, media_type="image/jpeg", headers={"X-Capture-Time": f"{captured:.4f}"})
 
 
 @app.websocket("/ws/control")

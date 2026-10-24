@@ -55,6 +55,10 @@ html, body {
   text-overflow: ellipsis;
 }
 
+/* VR / Auto can't be picked here (see index.html), only shown: dim unless active. */
+.mode-indicator { opacity: 0.45; }
+.mode-indicator:has(input:checked) { opacity: 1; color: var(--accent, #60a5fa); font-weight: 600; }
+
 /* Only the currently-selected control mode's on-page inputs should do anything -- everything
    else is a no-op on the server side anyway (RobotBridge ignores commands from a source that
    isn't the active mode), but graying it out here makes that obvious instead of surprising. */

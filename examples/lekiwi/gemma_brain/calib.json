@@ -1,0 +1,93 @@
+{
+  "floor_z_m": {
+    "value": -0.1,
+    "unit": "m",
+    "frame": "arm base (so101_kinematics)",
+    "method": "owner's tape measure: LeKiwi base top 100 mm above the floor",
+    "date": "2026-10-23"
+  },
+  "floor_tcp_z_m": {
+    "value": -0.1145,
+    "unit": "m",
+    "frame": "arm base (so101_kinematics), TCP pointing straight down, gripper closed",
+    "method": "calibrate_floor.py probe 2 (fixed contact rule: measured TCP held above its free-air sag by > 1.5 mm, 3 mm steps); value at x 0.22 m",
+    "date": "2026-10-23",
+    "probes": [
+      {
+        "x": 0.22,
+        "floor_tcp_z": -0.1145,
+        "free_air_sag_mm": 2.2,
+        "run": "probe 2"
+      },
+      {
+        "x": 0.27,
+        "floor_tcp_z": -0.1194,
+        "free_air_sag_mm": 4.4,
+        "run": "probe 2"
+      },
+      {
+        "x": 0.22,
+        "floor_tcp_z": -0.1119,
+        "free_air_sag_mm": 2.3,
+        "run": "probe 1, re-scored offline (live run missed contact)"
+      }
+    ],
+    "validity": "the model's floor reading drops ~1 mm per cm of reach (-0.1145 at x 0.22, -0.1194 at 0.27): arm-model/sag error, not floor tilt; final grasp heights must close on contact or the wrist camera"
+  },
+  "wrist_image_jacobian": {
+    "value": [
+      [
+        3.143,
+        1.374
+      ],
+      [
+        1.549,
+        -7.365
+      ]
+    ],
+    "unit": "image fraction (u right, v down) per metre of measured TCP motion (arm base x, y)",
+    "pose": "TCP pointing straight down, roll 0, near (0.22, 0, 0.0): jaw tips ~10 cm above the floor",
+    "method": "wrist_calib.py: +/-0.02 m moves, Gemma E4B box centres, least squares over 6 frames (rms 4.9 px)",
+    "date": "2026-10-23",
+    "log": "runs/20261023T172118-wrist-calib",
+    "validity": "one height; pixel motion scales roughly with 1/height, so re-measure or scale for other heights"
+  },
+  "wrist_grasp_pixel": {
+    "value": [
+      {
+        "height_m": 0.0085,
+        "center": [
+          0.4905,
+          0.798
+        ]
+      },
+      {
+        "height_m": 0.0322,
+        "center": [
+          0.4975,
+          0.707
+        ]
+      },
+      {
+        "height_m": 0.0617,
+        "center": [
+          0.545,
+          0.608
+        ]
+      },
+      {
+        "height_m": 0.0986,
+        "center": [
+          0.536,
+          0.5105
+        ]
+      }
+    ],
+    "unit": "wrist image fraction (u right, v down) of the Gemma box centre; height = measured TCP z - floor_tcp_z",
+    "meaning": "where the block appears when it sits where the jaws will grip it (flush against the fixed jaw, centred on the jaw blades), at each gripper height; TCP pointing straight down, roll 0",
+    "method": "teach 2026-10-23: owner placed the block between the open jaws; the first close nudged it flush against the fixed jaw (no grip: jaws too high); frames from the closed pose and straight lifts of 3, 6, 10 cm",
+    "date": "2026-10-23",
+    "log": "runs/20261023T172949-teach",
+    "validity": "single teach; the block's long side along robot y (left-right)"
+  }
+}
