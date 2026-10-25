@@ -87,7 +87,10 @@ cd examples/lekiwi/gemma_brain
 ```
 
 Options: `--model gemma4:26b` (any Ollama vision+tools model), `--no-think` (faster planning,
-worse recovery), `--robot http://<pi>:8000` (default: found automatically). Every turn, frame and number is logged under
+worse recovery), `--robot http://<pi>:8000` (default: found automatically), `--no-turn-scan`
+(scan never turns the robot: overhead camera if attached, else one look straight ahead; if that
+finds none of the objects, the run reports it and stops), `--no-base` (wheels locked; arm-only
+pick and place within reach), `--holding "green block"` (already in the gripper at start). Every turn, frame and number is logged under
 `runs/<timestamp>-brain/`.
 
 **Stopping:** Ctrl-C here, any gamepad input, or the gamepad's e-stop (RB). The robot also stops

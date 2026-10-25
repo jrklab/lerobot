@@ -149,8 +149,11 @@ def _text(v, name: str) -> str:
 
 
 class Brain:
-    def __init__(self, sk: Skills, gemma: Gemma, log: Log, think: bool = False):
+    def __init__(self, sk: Skills, gemma: Gemma, log: Log, think: bool = False, quit_if_scan_empty: bool = False):
         self.sk, self.gemma, self.log, self.think = sk, gemma, log, think
+        # True (--no-turn-scan): a scan that finds none of its objects ends the run right away,
+        # instead of leaving Gemma to try something else.
+        self.quit_if_scan_empty = quit_if_scan_empty
 
     def call(self, name: str, args: dict) -> Result:
         """Run one tool call. Arguments are checked here: the tool schema isn't enforced by
@@ -233,6 +236,10 @@ class Brain:
                 out["note"] = "only the first skill call was run; call one skill per reply"
             self.log.ev("tool_result", name=name, args=args, **out)
             print(f"<<< {'OK' if res.ok else 'FAILED'}: {out['message']}")
+            if name == "scan" and not res.ok and self.quit_if_scan_empty:
+                summary = f"nothing found, so stopping: {out['message']}"
+                self.log.ev("finish", success=False, summary=summary)
+                return False, summary
             messages.append({"role": "tool", "tool_name": name, "content": json.dumps(out, default=str)})
         return False, f"stopped after {MAX_CALLS} skill calls without finishing"
 
@@ -244,6 +251,12 @@ def main() -> int:
     ap.add_argument("--robot", default=None, help="LeKiwi web service URL (default: the first that answers of "
                     + ", ".join(CANDIDATE_URLS) + ")")
     ap.add_argument("--holding", default=None, help="what the gripper already holds at start, e.g. 'green block'")
+    ap.add_argument(
+        "--no-turn-scan",
+        action="store_true",
+        help="scan never turns the robot around: it uses the overhead camera if attached, else one look "
+        "straight ahead; if that finds none of the objects, report it and quit",
+    )
     ap.add_argument(
         "--no-base",
         action="store_true",
@@ -271,12 +284,13 @@ def main() -> int:
         # "already holding" made Gemma refuse to pick. Say it with --holding instead.
         if args.holding:
             sk.holding = args.holding
+        sk.turn_scan = not args.no_turn_scan
         try:
             goal = args.goal
             if args.no_base:
                 goal += ("\n(The robot's base is locked: it cannot drive or turn. Objects must already be in "
                          "front of it, within the arm's reach. Don't scan; call pick directly.)")
-            ok, summary = Brain(sk, gemma, log, think=not args.no_think).run(goal)
+            ok, summary = Brain(sk, gemma, log, think=not args.no_think, quit_if_scan_empty=args.no_turn_scan).run(goal)
         except OperatorTookOver as e:
             summary = f"stopped: {e}"
         except OSError as e:

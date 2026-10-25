@@ -299,6 +299,9 @@ class Skills:
         self.floor_tcp = FLOOR_TCP_Z
         # The base can be locked (robot.base_enabled False): then the arm alone lines up.
         self.base_ok = getattr(robot, "base_enabled", True)
+        # False: scan never turns the robot around; without the overhead camera it takes one
+        # look straight ahead.
+        self.turn_scan = True
 
     # --- sensing ---
 
@@ -564,8 +567,9 @@ class Skills:
         r = self.scan_overhead(objects)
         if r is not None:
             return r
-        if not self.base_ok:
-            return Result(False, "the base is locked, so it can't turn to scan; objects must be in front, within reach")
+        if not self.turn_scan or not self.base_ok:
+            # No full turn (turn_scan off, or the base locked): one look straight ahead.
+            return self.scan_rotate(objects, stops=1)
         return self.scan_rotate(objects)
 
     def scan_overhead(self, objects: list[str]) -> Result | None:
@@ -665,15 +669,17 @@ class Skills:
             msg += ("; " if found else "") + "not seen: " + ", ".join(missing)
         return Result(bool(found), msg, {"method": method, **summary})
 
-    def scan_rotate(self, objects: list[str]) -> Result:
-        """Turn a full circle in SCAN_STEP_DEG stops, boxing every object at every stop, and
-        keep a map: for each object, its candidates (bearing, rough range, number of views),
-        best first. Gemma's box is the only judge here, so a candidate can be wrong (E4B has
-        boxed a backpack as a "short paper cup"); approach() confirms up close."""
+    def scan_rotate(self, objects: list[str], stops: int | None = None) -> Result:
+        """Turn a full circle in SCAN_STEP_DEG stops (or look `stops` times; 1 = only straight
+        ahead, no turning), boxing every object at every stop, and keep a map: for each object,
+        its candidates (bearing, rough range, number of views), best first. Gemma's box is the
+        only judge here, so a candidate can be wrong (E4B has boxed a backpack as a "short paper
+        cup"); approach() confirms up close."""
         self.arm.reset()
         self.map = {o: [] for o in objects}
         sightings = {o: [] for o in objects}
-        stops = int(round(360.0 / SCAN_STEP_DEG))
+        full = stops is None
+        stops = int(round(360.0 / SCAN_STEP_DEG)) if full else stops
         for k in range(stops):
             if k:
                 res = self.robot.base(dtheta_deg=-SCAN_STEP_DEG)
@@ -711,7 +717,7 @@ class Skills:
                 c["tried"] = False
             cands.sort(key=lambda c: (-len(c["views"]), c["range_m"]))
             self.map[o] = cands
-        return self._map_result(objects, "360-degree turn")
+        return self._map_result(objects, "360-degree turn" if full else "one look straight ahead")
 
     def classify(self, jpeg: bytes, box, what: str) -> str:
         """Which CLASS_OPTIONS entry Gemma picks for the zoomed crop of `box` (lowercase)."""
