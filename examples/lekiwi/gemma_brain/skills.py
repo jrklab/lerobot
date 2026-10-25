@@ -187,7 +187,10 @@ DROP_TOL_PX = 20.0
 # Wrist roll for the drop, owner's rule (2026-10-24): not the pick's roll (a drop at roll 0
 # missed the cup, run 010904) but the rest pose's wrist angle: skill roll -80 = joint +79 deg.
 DROP_ROLL_DEG = -80.0
-DROP_ITERS = 5
+DROP_ITERS = 6
+DROP_MAX_BOX_AREA = 0.8  # a container box bigger than this share of the wrist frame = not found
+DROP_ARM_STEP_M = 0.05  # largest single arm correction while lining up over a container
+FRONT_GUESS_DEPTH_M = 0.04  # from where an object meets the floor (its near edge) to its middle
 # Release by opening only this much past the held position: the moving jaw swings wide when
 # opened fully, and on Oct 23 (run 225755) it carried the brick out over the cup's rim.
 RELEASE_OPEN_BY = 12.0
@@ -918,6 +921,23 @@ class Skills:
         self.holding = self.target
         return Result(True, f"holding the {self.target}")
 
+    def front_guess(self, what: str) -> tuple[float, float] | None:
+        """Rough arm-frame (x, y) of `what` on the floor from one front-camera look: bearing
+        from the box's column, range from its bottom edge (RANGE_K fit) plus a few cm to the
+        object's middle; clamped to where the arm can point down. The front camera sits just
+        below the arm's base, so the camera's range is taken as the arm's. None if not seen."""
+        self.arm.reset()
+        got = self.see_front("front_guess", what)
+        if got is None:
+            return None
+        (u, bottom), _ = got
+        rng = float(np.clip(RANGE_K / max(0.005, bottom - RANGE_HORIZON_V), 0.12, 0.40)) + FRONT_GUESS_DEPTH_M
+        bearing = math.radians(-(u - FRONT_U_TARGET) / FRONT_U_PER_DEG)
+        x = float(np.clip(rng * math.cos(bearing), 0.15, 0.27))
+        y = float(np.clip(rng * math.sin(bearing), -0.18, 0.18))
+        self.log.ev("front_guess", what=what, u=u, bottom=bottom, range_m=round(rng, 3), bearing_deg=round(math.degrees(bearing), 1), xy=[x, y])
+        return x, y
+
     def place_in(self, container: str) -> Result:
         """Drop what the gripper holds into `container` (an open container on the floor, in
         reach: run approach(container) first). Gripper pointing down with its tips
@@ -926,10 +946,17 @@ class Skills:
         opens."""
         self.roll = DROP_ROLL_DEG
         z = self.floor_tcp + DROP_TIP_HEIGHT_M
-        self.arm.move_direct([ABOVE_XY[0], ABOVE_XY[1], z], pitch_deg=PITCH, roll_deg=self.roll)
+        xy = ABOVE_XY
+        if not self.base_ok:
+            # Base locked: nothing can drive to the container, so start above where the front
+            # camera puts it (direction from the box's column, rough range from where it meets
+            # the floor) and let the arm do all the lining up.
+            xy = self.front_guess(container) or ABOVE_XY
+        self.arm.move_direct([xy[0], xy[1], z], pitch_deg=PITCH, roll_deg=self.roll)
         # The camera looks down at the rim: its height above that plane sets the pixel target
         # and scale (the taught grasp-pixel curve, without the fixed-jaw clearance shift).
         h = DROP_TIP_HEIGHT_M - DROP_RIM_HEIGHT_M
+        err_px = float("inf")
         for k in range(DROP_ITERS):
             jpeg = self.wrist(f"drop_{k}")
             a = self.gemma.box(jpeg, f"the {container}")
@@ -937,6 +964,11 @@ class Skills:
             if a.value is None:
                 return Result(False, f"no {container} in the wrist camera above the drop point")
             x0, y0, x1, y1 = a.value
+            if (x1 - x0) * (y1 - y0) > DROP_MAX_BOX_AREA:
+                # Gemma boxes the whole frame when it doesn't find the container (Oct 24 run
+                # 190856: [0, 0, 1, 1] twice, and the base moved twice on it). Look again.
+                self.log.ev("drop_box_rejected", k=k, why="covers most of the frame")
+                continue
             c = np.array([(x0 + x1) / 2, (y0 + y1) / 2])
             target = grasp_pixel(h) + jacobian(h, 0.0)[:, 0] * GRASP_CLEAR_FIXED_JAW_M  # camera frame: roll-free
             d = np.linalg.solve(jacobian(h, self.roll), target - c)
@@ -944,9 +976,14 @@ class Skills:
             self.log.ev("drop_lineup", k=k, center=c, target=target, dxy=d, err_px=round(err_px, 1))
             if err_px < DROP_TOL_PX:
                 break
-            if np.linalg.norm(d) <= ARM_REACH_M:
+            if np.linalg.norm(d) <= ARM_REACH_M or not self.base_ok:
+                # The arm takes it (all of it when the base is locked, up to 5 cm per step).
+                step = 0.8 * d
+                n = float(np.linalg.norm(step))
+                if n > DROP_ARM_STEP_M:
+                    step *= DROP_ARM_STEP_M / n
                 p = self.cmd_tcp()
-                self.move_tcp([p[0] + 0.8 * d[0], p[1] + 0.8 * d[1], p[2]], speed=SERVO_EE_SPEED, z_min=self.arm.z_min)
+                self.move_tcp([p[0] + step[0], p[1] + step[1], p[2]], speed=SERVO_EE_SPEED, z_min=self.arm.z_min)
             else:
                 d = np.clip(d, -0.15, 0.15)
                 res = self.robot.base(dx=float(d[0]), dy=float(d[1]))

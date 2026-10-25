@@ -243,6 +243,7 @@ def main() -> int:
     ap.add_argument("--model", default=DEFAULT_MODEL, help=f"Ollama model (default {DEFAULT_MODEL})")
     ap.add_argument("--robot", default=None, help="LeKiwi web service URL (default: the first that answers of "
                     + ", ".join(CANDIDATE_URLS) + ")")
+    ap.add_argument("--holding", default=None, help="what the gripper already holds at start, e.g. 'green block'")
     ap.add_argument(
         "--no-base",
         action="store_true",
@@ -267,7 +268,9 @@ def main() -> int:
         sk = Skills(robot, arm, gemma, log)
         # No guess about holding something at start: a closed, empty gripper can read inside
         # the range a held brick does (Oct 24: 3.0-4 empty vs 4.7-6.8 held), and a wrong
-        # "already holding" made Gemma refuse to pick.
+        # "already holding" made Gemma refuse to pick. Say it with --holding instead.
+        if args.holding:
+            sk.holding = args.holding
         try:
             goal = args.goal
             if args.no_base:
@@ -276,14 +279,19 @@ def main() -> int:
             ok, summary = Brain(sk, gemma, log, think=not args.no_think).run(goal)
         except OperatorTookOver as e:
             summary = f"stopped: {e}"
+        except OSError as e:
+            # The robot stopped answering (timeouts on every request): e.g. the Pi rebooted
+            # (a power dip) or the link dropped. Nothing more can be sent; it stops by itself
+            # once heartbeats are gone.
+            summary = f"robot unreachable ({e}): the Pi may have rebooted or the link dropped"
         except KeyboardInterrupt:
             summary = "stopped with Ctrl-C"
             robot.stop()
         finally:
-            if "Ctrl-C" not in summary and "operator" not in summary:
+            if "Ctrl-C" not in summary and "operator" not in summary and "unreachable" not in summary:
                 try:
                     arm.reset()
-                except (RobotError, PlanError) as e:
+                except (RobotError, PlanError, OSError) as e:
                     log.ev("reset", ok=False, reason=str(e))
     log.ev("result", success=ok, summary=summary)
     print(f"\n{'SUCCESS' if ok else 'NOT DONE'}: {summary}\nlog: {out}")
