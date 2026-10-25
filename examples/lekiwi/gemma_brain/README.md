@@ -17,14 +17,25 @@ goal ──> brain.py (Gemma E4B, tool calls) ──> skills.py ──> arm.py (
 boot (systemd, enabled, restarts on failure); its USB cameras can take up to ~90 s after that to
 deliver frames.
 
-**2. Connect the Ethernet cable** between the Pi and the Mac's USB LAN adapter (`en7`). Both ends
-have fixed addresses (Mac `10.55.0.1`, Pi `10.55.0.102`), nothing to set up. Check:
+**2. Connect the Mac to the robot**, one of:
+
+- **Ethernet cable** between the Pi and the Mac's USB LAN adapter (`en7`): fixed addresses (Mac
+  `10.55.0.1`, Pi `10.55.0.102`), nothing to set up. The fastest and steadiest link (~17 ms).
+- **The robot's own Wi-Fi hotspot `LeKiwi-RoboNet`**: join it from the Mac's Wi-Fi; the Pi is at
+  `10.42.0.1`. A direct link, but the Mac has no internet while on it (Ollama runs locally, so
+  the brain doesn't need any). Its password is in the Pi's network profile:
+  `ssh lekiwi 'sudo nmcli -s -g 802-11-wireless-security.psk con show LeKiwi-RoboNet'`.
+
+The scripts find the robot on whichever link is up (they try `10.55.0.102`, `10.42.0.1`, then
+`raspberrypi.local`). A shared office/home Wi-Fi is not recommended for driving: on LatentSpace
+(Oct 24) replies took 0.2-1.5 s, and the Pi stops any motion that goes 0.6 s without the Mac's
+heartbeat. Check the link:
 
 ```bash
-curl -s -m 3 http://10.55.0.102:8000/auto/status | head -c 120; echo
+curl -s -m 3 http://10.42.0.1:8000/auto/status | head -c 120; echo    # or 10.55.0.102 on the cable
 ```
 
-It should print `{"mode":"gamepad",...`. If not: `ping 10.55.0.102`, then `ssh lekiwi 'systemctl status lekiwi-web'`.
+It should print `{"mode":"gamepad",...`. If not: `ssh lekiwi 'systemctl status lekiwi-web'`.
 
 **3. Start Ollama** on the Mac, in its own terminal window (leave it running):
 
@@ -76,7 +87,7 @@ cd examples/lekiwi/gemma_brain
 ```
 
 Options: `--model gemma4:26b` (any Ollama vision+tools model), `--no-think` (faster planning,
-worse recovery), `--robot http://<pi>:8000`. Every turn, frame and number is logged under
+worse recovery), `--robot http://<pi>:8000` (default: found automatically). Every turn, frame and number is logged under
 `runs/<timestamp>-brain/`.
 
 **Stopping:** Ctrl-C here, any gamepad input, or the gamepad's e-stop (RB). The robot also stops
@@ -90,9 +101,9 @@ First-time setup of the Mac venv: `python3 -m venv .venv && .venv/bin/pip instal
 |---|---|
 | `scan(objects)` | find every listed object: from the **overhead camera** if one is attached and sees the whole robot, else by turning a full circle in 30° stops; candidates checked by a multiple-choice crop question to E4B |
 | `approach(object)` | face the best scan candidate, drive until it's in arm reach (front camera), confirm it with the wrist camera; on a wrong candidate, try the next |
-| `pick(object)` | approach, line the base up (wrist camera), roll the wrist to the brick's angle, centre at 10/6/3 cm, touch the floor, close, lift and check it's held |
+| `pick(object)` | approach, line the base up (wrist camera), roll the wrist (within ±90°) so the jaws close on the brick's long faces, centre at 10/(6)/3/1.5 cm, find the floor by touch (one descent the Pi stops itself on contact, so no stored floor height is needed), check about half the brick sticks out past the jaw tips, close, lift and check it's held |
 | `place_in(container)` | gripper 3 cm above the rim, line up over the opening (arm, then base), open gently, check the object landed inside |
-| `reset_arm()` | lift clear of the floor, then fold to rest |
+| `reset_arm()` | fold to rest: one joint move when that sweep clears the floor and the robot body, else lift and go via "ready" |
 | `finish(success, summary)` | stop |
 
 ## Overhead camera (optional)
@@ -106,16 +117,32 @@ is fine. Requirements: the camera roughly straight down, the robot fully in its 
 Privacy & Security -> Camera). Without the camera, or if it can't see the whole robot, `scan`
 falls back to the 360° turn by itself.
 
+## Arm-only pick (base locked)
+
+When the robot must not drive (e.g. tethered to power), `pick_here.py` picks a brick within the
+arm's reach in front of it, with every wheel command refused in the client:
+
+```bash
+.venv/bin/python pick_here.py "green Lego brick"     # the brick ~15-25 cm in front of the arm
+```
+
+It prints the time of each phase. On Oct 24: 50.6 s and 53.0 s (was ~165 s for the same steps),
+about two thirds of it Gemma looking (~2.2 s per box) and ~14 s arm motion.
+
 ## Other scripts
 
 `fetch_test.py` (one scripted drive-and-pick), `grasp_test.py` (pick from in front),
 `calibrate_floor.py`, `wrist_calib.py` (the robot's calibrations in `calib.json`), `overhead.py` (overhead camera),
 `test_arm.py` and `../web_server/test_auto_control.py` (offline tests).
 
-## Known limits (2026-10-23)
+## Known limits (2026-10-24)
 
-- Few trials so far: pick 3/3 on the red brick after the roll/clearance fixes; the first
-  place-in-cup missed (the brick rode off on the opening jaw; fixed, not yet re-run).
+- Few trials so far: drive-and-pick and pick-and-place work, several picks in a row on red
+  and green bricks; arm-only picks 2/2. Small samples, not a success rate.
 - Gemma's yes/no answers about these objects are unreliable; presence and success are
   checked geometrically instead (box position, the gripper's stall, image motion).
-- Calibrations are for this robot, this floor, a 2x4 brick and a ~10 cm cup.
+- The grasp is brick-specific (taught target pixel, 2x4 dimensions, long-face grip); the wrist
+  camera calibration (`calib.json`) is for this robot. The floor height no longer needs
+  calibrating for a new floor: the pick finds it by touch.
+- The Pi's power supply sags under load (under-voltage, CPU throttled to 600 MHz): slower, and
+  USB devices can drop. Give the Pi a solid 5.1 V / 3 A supply.

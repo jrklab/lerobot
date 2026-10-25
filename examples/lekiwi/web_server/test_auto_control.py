@@ -44,7 +44,8 @@ def norm_to_rad(joint, norm):
 
 
 class Sim:
-    def __init__(self, start=None):
+    def __init__(self, start=None, floor_z=None):
+        self.floor_z = floor_z  # if set, the TCP can't go below it (the arm stops, like on a floor)
         self.pos = dict(start or {**READY, GRIPPER: 50.0})
         self.targets = dict(self.pos)
         self.walls = {}  # joint -> (lo, hi): the joint can't move outside this (contact)
@@ -67,10 +68,14 @@ class Sim:
             if heartbeat:
                 self.auto.heartbeat()
             self.base_cmd = self.auto.step(self.t, self.targets, self.joint_state(), self.base_cmd)
+            new = dict(self.pos)
             for j, target in self.targets.items():
                 step = max(-4.0, min(4.0, target - self.pos[j]))  # a 120 units/s servo
                 lo, hi = self.walls.get(j, (-1e9, 1e9))
-                self.pos[j] = max(lo, min(hi, self.pos[j] + step))
+                new[j] = max(lo, min(hi, self.pos[j] + step))
+            if self.floor_z is not None and self._tcp_z(new) < self.floor_z:
+                new = {j: (new[j] if j == GRIPPER else self.pos[j]) for j in new}  # blocked by the floor
+            self.pos = new
 
     def run_until_done(self, limit_s=60.0):
         for _ in range(round(limit_s / 0.1)):
@@ -86,6 +91,9 @@ class Sim:
 
     def command(self):
         return self.auto.status(dict(self.pos))["command"]
+
+    def _tcp_z(self, pos):
+        return float(kin.forward_kinematics(np.array([norm_to_rad(j, pos[j]) for j in IK_ARM_JOINTS]))[2, 3])
 
     def tcp(self):
         return kin.forward_kinematics(np.array([norm_to_rad(j, self.pos[j]) for j in IK_ARM_JOINTS]))

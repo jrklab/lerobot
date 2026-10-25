@@ -20,6 +20,7 @@ AutoController in the web_server test simulation.
     .venv/bin/python test_arm.py
 """
 
+import math
 import sys
 from pathlib import Path
 
@@ -28,7 +29,7 @@ import numpy as np
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "web_server"))
 
-from arm import NAMED_POSES, Arm, Calibration, PlanError, plan_ee_line, tool_orientation, tool_pitch_roll  # noqa: E402
+from arm import FLOOR_CLEARANCE_M, IK_ARM_JOINTS, NAMED_POSES, Arm, Calibration, PlanError, arm_points, plan_ee_line, tool_orientation, tool_pitch_roll  # noqa: E402
 from test_auto_control import Sim, run_tests  # noqa: E402
 
 CAL = Calibration()  # uncalibrated: the same +/-100 = +/-180 deg mapping as the Sim
@@ -67,7 +68,7 @@ def test_tool_orientation_round_trip():
 
 def test_top_down_move_reaches_goal():
     sim = Sim()
-    arm = Arm(SimRobot(sim), CAL, floor_z=-0.25)
+    arm = Arm(SimRobot(sim), CAL, floor_z=-0.25, body_check=False)
     goal = [0.24, 0.05, 0.02]
     arm.move_to(goal, pitch_deg=90, roll_deg=0, speed=0.06)
     pose = sim.tcp()
@@ -100,25 +101,65 @@ def test_planned_speeds_pass_the_pi_check():
     sim.submit({"cmd": "trajectory", "waypoints": wps, "durations": durs, "z_min": -0.2})
 
 
-def test_reset_lifts_then_goes_home():
+def test_reset_goes_home_clear_of_the_floor():
+    """From a low pose, reset ends at rest, every arm point clear of the floor on the way
+    (a direct joint move when that's clear, else lift + "ready" + rest)."""
     sim = Sim()
-    arm = Arm(SimRobot(sim), CAL, floor_z=-0.25)
+    arm = Arm(SimRobot(sim), CAL, floor_z=-0.25, body_check=False)
     arm.move_to([0.24, 0.0, 0.0], pitch_deg=90)
-    low = sim.tcp()[:3, 3]
-    zs = []
+    lows = []
     orig_run = sim.run
 
     def tracking_run(seconds, heartbeat=True):
         orig_run(seconds, heartbeat)
-        zs.append(sim.tcp()[:3, 3].copy())
+        lows.append(arm_points(np.array([math.radians(sim.pos[j] / 100 * 180) for j in IK_ARM_JOINTS]))[:, 2].min())
 
     sim.run = tracking_run
     arm.reset()
     for j, v in NAMED_POSES["rest"].items():
         assert abs(sim.pos[j] - v) < 1.0, (j, sim.pos[j])
-    # It went straight up first: z rose 5 cm while x, y stayed within 1 cm.
-    lifted = next(i for i, p in enumerate(zs) if p[2] > low[2] + 0.05)
-    assert all(np.linalg.norm(p[:2] - low[:2]) < 0.01 for p in zs[:lifted]), zs[:lifted]
+    assert min(lows) >= arm.floor_z + FLOOR_CLEARANCE_M - 0.002, min(lows)
+
+
+def test_trapezoid_timing():
+    # Short moves aren't padded: a 2 cm move at 3 cm/s, accel 0.15 m/s^2 takes ~0.73 s
+    # (triangular profile), not 3x its constant-speed time.
+    from arm import _trapezoid_time
+    total = _trapezoid_time(0.02, 0.02, 0.03, 0.15)
+    assert 0.6 < total < 0.9, total
+    # A long move cruises: 30 cm at 3 cm/s ~ 10.2 s.
+    assert 10.0 < _trapezoid_time(0.3, 0.3, 0.03, 0.15) < 10.5
+
+
+def _descent(sim, depth, speed=0.01):
+    arm = Arm(SimRobot(sim), CAL, floor_z=-0.5, body_check=False)
+    arm.move_to([0.24, 0.0, 0.0], pitch_deg=90)
+    p = sim.tcp()[:3, 3]
+    wps, durs = plan_ee_line(CAL, dict(sim.targets), [p[0], p[1], p[2] - depth], pitch_deg=90, speed=speed, z_min=-0.5)
+    sim.submit({"cmd": "trajectory", "waypoints": wps, "durations": durs, "z_min": -0.5, "contact_stop": True})
+    return p, sim.run_until_done()
+
+
+def test_contact_stop_finds_the_floor():
+    sim = Sim(floor_z=-0.03)
+    p0, st = _descent(Sim.__new__(Sim) if False else sim, 0.06)
+    r = st["result"]
+    assert st["state"] == "done" and r["contact"], st
+    assert abs(r["z_meas"] - (-0.03)) < 0.004, r  # stopped at the floor
+    # Holding the measured pose: not pushing on.
+    assert abs(sim.tcp()[2, 3] - (-0.03)) < 0.004
+
+
+def test_contact_stop_without_floor_reports_no_contact():
+    sim = Sim()
+    _, st = _descent(sim, 0.04)
+    assert st["state"] == "done" and st["result"]["contact"] is False, st
+
+
+def test_contact_stop_when_starting_on_the_floor():
+    sim = Sim(floor_z=-0.0005)  # the move to the start pose ends right at the floor
+    _, st = _descent(sim, 0.04)
+    assert st["state"] == "done" and st["result"]["contact"], st
 
 
 if __name__ == "__main__":

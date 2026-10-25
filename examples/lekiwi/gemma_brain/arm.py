@@ -65,6 +65,15 @@ IK_RETRY_ITERS = 60
 IK_POS_TOL_M = 0.005
 IK_ROT_TOL_DEG = 6.0
 DEFAULT_EE_SPEED = 0.04  # m/s
+EE_ACCEL_MPS2 = 0.15  # straight-line moves speed up and slow down at this rate
+# Joint-space moves through free space (direct pose changes, reset): ~53 deg/s, under the
+# Pi's 60 units/s cap with room for its smoothstep (1.5x peak over average: the Pi caps the
+# average at 40). Was 15-20 units/s.
+FREE_JOINT_SPEED = 35.0
+# A body keep-out for the clearance check: arm points past the elbow may not come back over
+# the robot (x below BODY_FRONT_X in the arm base frame) lower than BODY_TOP_Z.
+BODY_FRONT_X_M = 0.10
+BODY_TOP_Z_M = 0.03
 MAX_EE_SPEED = 0.08
 # Joint speed budget for planned paths, below the Pi's hard cap so a plan is never refused
 # for a rounding-level overshoot.
@@ -212,7 +221,7 @@ def plan_ee_line(
         weight = 0.05
     n = max(1, math.ceil(float(np.linalg.norm(goal - p0)) / EE_STEP_M))
     prev = {j: start[j] for j in IK_ARM_JOINTS}
-    waypoints, durations = [], []
+    waypoints, spans = [], []
     for i in range(1, n + 1):
         a = i / n
         target = np.eye(4)
@@ -247,25 +256,43 @@ def plan_ee_line(
             if not lo + 1.0 <= norm <= hi - 1.0:
                 raise PlanError(f"{j} would hit its limit ({norm:.1f}) {where}")
             wp[j] = norm
-        seg = float(np.linalg.norm(goal - p0)) / n
-        joint_span = max(abs(wp[j] - prev[j]) for j in IK_ARM_JOINTS)
-        durations.append(max(seg / speed, joint_span / PLAN_JOINT_SPEED, 0.01))
+        spans.append(max(abs(wp[j] - prev[j]) for j in IK_ARM_JOINTS))
         waypoints.append(wp)
         prev = wp
-    # Ease in and out: stretch the first and last two segments.
-    for k, f in ((0, 3.0), (1, 2.0)):
-        if k < len(durations):
-            durations[k] *= f
-            if len(durations) - 1 - k != k:
-                durations[-1 - k] *= f
+    # Timing: a trapezoidal speed profile along the line (accelerate at EE_ACCEL_MPS2 up to
+    # `speed`, cruise, decelerate), so short moves aren't padded the way stretching the end
+    # segments did; each segment also respects the joint speed budget.
+    length = float(np.linalg.norm(goal - p0))
+    times = [_trapezoid_time(length * i / n, length, speed, EE_ACCEL_MPS2) for i in range(n + 1)]
+    durations = [max(times[i + 1] - times[i], spans[i] / PLAN_JOINT_SPEED, 0.01) for i in range(n)]
     return waypoints, durations
+
+
+def _trapezoid_time(s: float, length: float, v: float, a: float) -> float:
+    """Time to cover distance s of a move of `length` that starts and ends at rest, with
+    acceleration a and top speed v (triangular when too short to reach v)."""
+    if length <= 0:
+        return 0.0
+    d_acc = v * v / (2 * a)
+    if 2 * d_acc > length:  # never reaches v
+        d_acc, v = length / 2, math.sqrt(a * length)
+    t_acc = v / a
+    if s <= d_acc:
+        return math.sqrt(2 * s / a)
+    if s <= length - d_acc:
+        return t_acc + (s - d_acc) / v
+    total = 2 * t_acc + (length - 2 * d_acc) / v
+    return total - math.sqrt(2 * max(0.0, length - s) / a)
 
 
 class Arm:
     """The arm skills the brain uses, on top of robot.Robot's primitives."""
 
-    def __init__(self, robot, calib: Calibration | None = None, floor_z: float = DEFAULT_FLOOR_Z_M):
+    def __init__(self, robot, calib: Calibration | None = None, floor_z: float = DEFAULT_FLOOR_Z_M, body_check: bool = True):
         self.robot = robot
+        # The body keep-out assumes the real calibration (named poses where they really are);
+        # offline tests on the uncalibrated mapping turn it off.
+        self.body_check = body_check
         self.calib = calib or Calibration.from_robot(robot)
         self.floor_z = floor_z
         # The Pi's TCP floor guard for free moves (it checks the TCP only; check_clear()
@@ -273,12 +300,30 @@ class Arm:
         self.z_min = floor_z + FLOOR_CLEARANCE_M + JAW_TIP_OFFSET_M
 
     def check_clear(self, a: dict[str, float], b: dict[str, float], what: str) -> None:
+        """Refuse a joint-space move from a to b that brings any arm point within
+        FLOOR_CLEARANCE_M of the floor, or any point past the elbow low over the robot body."""
+        for i in range(CLEARANCE_SAMPLES + 1):
+            q = self.calib.q({j: a[j] + (b[j] - a[j]) * i / CLEARANCE_SAMPLES for j in IK_ARM_JOINTS})
+            pts = arm_points(q)[2:]
+            if self.body_check and np.any((pts[:, 0] < BODY_FRONT_X_M) & (pts[:, 2] < BODY_TOP_Z_M)):
+                raise PlanError(f"{what}: the arm would swing low over the robot body")
         lo = lowest_on_segment(self.calib, a, b)
-        if lo < self.floor_z + FLOOR_CLEARANCE_M:
+        # A move that never goes lower than where it starts is allowed even from a low pose
+        # (after a missed floor touch every move, even straight up, used to be refused).
+        start_lo = float(arm_points(self.calib.q(a))[:, 2].min())
+        if lo < self.floor_z + FLOOR_CLEARANCE_M and lo < start_lo - 0.002:
             raise PlanError(
                 f"{what}: the arm would pass {1000 * (lo - self.floor_z):.0f} mm above the floor "
                 f"(needs {1000 * FLOOR_CLEARANCE_M:.0f} mm)"
             )
+
+    def joint_z_min(self) -> float:
+        """The Pi-side floor guard for a joint move from where the arm is now: the usual
+        z_min, or a little below the arm's lowest point if it already sits lower (e.g. right
+        above the brick, or after a touch). check_clear() makes sure such a move never goes
+        lower than where it starts."""
+        lowest_now = float(arm_points(self.calib.q(self.targets()))[:, 2].min())
+        return min(self.z_min, lowest_now - 0.005)
 
     def targets(self) -> dict[str, float]:
         """Where the arm is commanded to be (the start of the next plan)."""
@@ -299,7 +344,25 @@ class Arm:
     ) -> dict:
         z_min = self.z_min if z_min is None else z_min
         wps, durs = plan_ee_line(self.calib, self.targets(), xyz, pitch_deg, roll_deg, speed, z_min)
+        if len(wps) == 1:
+            # A turn in place (e.g. a wrist roll): one smoothstepped joint move rather than a
+            # single linear segment that starts and stops at full speed.
+            return self.robot.joints(wps[0], speed=FREE_JOINT_SPEED, z_min=z_min)
         return self.robot.trajectory(wps, durs, z_min=z_min)
+
+    def move_direct(self, xyz, pitch_deg: float, roll_deg: float = 0.0, speed: float = FREE_JOINT_SPEED) -> dict:
+        """Go to a TCP pose with one joint-space move from wherever the arm is (e.g. straight
+        from rest to above the brick), instead of via "ready" and a straight line. The joint
+        target is the IK solution of the straight line from "ready"; the whole sweep is
+        clearance-checked (floor and body). Falls back to "ready" + straight line if not clear."""
+        goal = plan_ee_line(self.calib, dict(NAMED_POSES["ready"]), xyz, pitch_deg, roll_deg, 0.04, self.z_min)[0][-1]
+        cur = self.targets()
+        try:
+            self.check_clear(cur, {**cur, **goal}, "direct move")
+        except PlanError:
+            self.pose("ready", speed=speed)
+            return self.move_to(xyz, pitch_deg=pitch_deg, roll_deg=roll_deg)
+        return self.robot.joints(goal, speed=speed, z_min=self.joint_z_min())
 
     def move_by(self, dxyz, speed: float = DEFAULT_EE_SPEED, z_min: float | None = None) -> dict:
         """Relative straight-line move, holding the current orientation."""
@@ -313,9 +376,9 @@ class Arm:
             raise PlanError(f"unknown pose {name!r}; known: {sorted(NAMED_POSES)}")
         cur = self.targets()
         self.check_clear(cur, {**cur, **NAMED_POSES[name]}, f"move to {name}")
-        return self.robot.joints(NAMED_POSES[name], speed=speed, z_min=self.z_min)
+        return self.robot.joints(NAMED_POSES[name], speed=speed, z_min=self.joint_z_min())
 
-    def reset(self, to: str = "rest", speed: float = 15.0) -> None:
+    def reset(self, to: str = "rest", speed: float = FREE_JOINT_SPEED) -> None:
         """Back to a known pose from anywhere: lift the TCP straight up first if it's low (so
         the swing home can't drag the gripper across the floor or the block), then "ready",
         then (to="rest") the folded stow pose, every leg checked for floor clearance before
@@ -327,6 +390,14 @@ class Arm:
         cur = self.targets()
         if all(abs(cur[j] - v) < AT_POSE_UNITS for j, v in NAMED_POSES[to].items()):
             return  # already there: no lift-and-swing (it used to unfold and refold the arm)
+        try:
+            # Straight there in one joint move when that sweep clears the floor and the body
+            # (from above the brick it does: about 6 cm of clearance, Oct 24 check).
+            self.check_clear(cur, {**cur, **NAMED_POSES[to]}, f"direct move to {to}")
+            self.robot.joints(NAMED_POSES[to], speed=speed, z_min=self.joint_z_min())
+            return
+        except PlanError:
+            pass
         p = self.calib.fk(cur)[:3, 3]
         if p[2] < RESET_SAFE_Z_M:
             # Straight up, as high as the arm can go while holding its orientation (the
@@ -340,7 +411,7 @@ class Arm:
             lifts += [([p[0] - 0.04, p[1], RESET_SAFE_Z_M], 45.0), ([p[0] - 0.02, p[1], 0.06], 60.0)]
             for goal, pitch in lifts:
                 try:
-                    self.move_to(goal, pitch_deg=pitch, speed=0.015, z_min=z_min)
+                    self.move_to(goal, pitch_deg=pitch, speed=0.03, z_min=z_min)
                     break
                 except PlanError:
                     continue

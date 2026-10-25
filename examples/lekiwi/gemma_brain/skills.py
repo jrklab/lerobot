@@ -42,6 +42,7 @@ import numpy as np
 
 from arm import Arm
 from gemma import Gemma
+from arm import plan_ee_line
 from robot import Robot, RobotError
 import overhead
 from vision import brick_angle, crop_around, plausible_brick
@@ -79,18 +80,27 @@ OPEN = 40.0
 # the brick sat ~0.05 of the frame lower than taught, along its length).
 SERVO_HEIGHTS = (0.10, 0.06, 0.03, 0.015)
 # Per-height tolerance (pixels): 10 cm is the coarse line-up, 3 cm sets the grasp.
-SERVO_TOL_PX = (20.0, 14.0, 12.0, 10.0)
+# 1.5 cm: 20 px, not 10: that close the jaws partly hide the brick and Gemma's box jitters by
+# 15-30 px frame to frame (Oct 24 run 170013 oscillated 15-29 px at 10); the along-length
+# check before closing does the fine placement.
+SERVO_TOL_PX = (20.0, 14.0, 12.0, 20.0)
+SERVO_GAIN_LAST = 0.5  # gentler at the last stage, so noisy boxes don't make it overshoot
+# A stage that may be skipped when the one above already ended within its tolerance.
+SKIPPABLE_HEIGHTS = (0.06,)
+# Speeds (m/s): moves well clear of the floor and the brick (the descents between centring
+# stages, the lifts), and the small centring corrections. The floor touch and the moves right
+# before closing stay at 0.008. Were 0.015-0.03.
+FREE_EE_SPEED = 0.06
+SERVO_EE_SPEED = 0.03
+# Pause before a camera look: frames are already fetched as taken after the move finished
+# (and the Pi only reports a move done once the arm has settled), so this is just margin.
+LOOK_SETTLE_S = 0.15
 SERVO_GAIN = 0.7
 SERVO_MAX_STEP_M = 0.02
 SERVO_ITERS = 6
-TOUCH_STEP_M = 0.002
-TOUCH_GAP_M = 0.0015
-TOUCH_BASELINE_STEPS = 3
-TOUCH_LOWEST_M = FLOOR_TCP_Z - 0.015  # never command the TCP lower than this
-# z_min sent with moves near the floor: below TOUCH_LOWEST_M by the Pi's jaw-tip margin
-# (auto_control.JAW_TIP_OFFSET_M), so the Pi's own floor guard doesn't refuse the touch.
-NEAR_FLOOR_Z_MIN = TOUCH_LOWEST_M - 0.015 - 0.002
-TOUCH_TOO_HIGH_M = 0.006  # a touch this far above the calibrated floor landed on something
+# The floor touch: one contact-stop descent (see touch_floor), this fast, searching this far.
+TOUCH_SPEED = 0.012
+TOUCH_SEARCH_M = 0.06
 GRASP_LIFT_M = 0.004  # jaw tips this far above the floor when closing (block body is 11.4 mm)
 PRE_CLOSE_MAX_FIX_M = 0.003
 # Just before closing, part of the brick must stick out beyond the jaw tips (owner's rule:
@@ -142,8 +152,6 @@ ARM_REACH_M = 0.015
 # of the bottom of its view), drive this much further before looking down with the wrist
 # camera, which lines up the rest.
 CLOSE_IN_M = 0.06
-# Search: turn this much between looks (the front camera sees ~50 deg across).
-SEARCH_STEP_DEG = 30.0
 # Scan: one full turn in SCAN_STEP_DEG stops (owner's choice, 2026-10-23: 30 deg, may change).
 SCAN_STEP_DEG = 30.0
 # Sightings of one object closer than this in bearing are the same candidate.
@@ -242,10 +250,6 @@ def _wrap(deg: float) -> float:
     return (deg + 180.0) % 360.0 - 180.0
 
 
-def _wrap90(deg: float) -> float:
-    return (deg + 90.0) % 180.0 - 90.0
-
-
 def grasp_pixel(height: float, extra_clear_m: float = 0.0) -> np.ndarray:
     """Where the brick's box centre should be in the wrist image at this gripper height: the
     taught position (brick flush against the fixed jaw), moved GRASP_CLEAR_FIXED_JAW_M away
@@ -287,6 +291,11 @@ class Skills:
         self.robot, self.arm, self.gemma, self.log = robot, arm, gemma, log
         self.roll = 0.0  # current wrist roll target for top-down moves
         self.target = DEFAULT_TARGET  # what pick() is after, as Gemma will be asked for it
+        # The floor under the gripper (TCP z when the closed jaws touch it): calib.json's value
+        # until the first floor touch of the session, then what that touch measured.
+        self.floor_tcp = FLOOR_TCP_Z
+        # The base can be locked (robot.base_enabled False): then the arm alone lines up.
+        self.base_ok = getattr(robot, "base_enabled", True)
 
     # --- sensing ---
 
@@ -294,9 +303,9 @@ class Skills:
         return self.arm.tcp()[:3, 3]
 
     def height(self) -> float:
-        return float(self.tcp()[2] - FLOOR_TCP_Z)
+        return float(self.tcp()[2] - self.floor_tcp)
 
-    def wrist(self, tag: str, settle: float = 0.4) -> bytes:
+    def wrist(self, tag: str, settle: float = LOOK_SETTLE_S) -> bytes:
         time.sleep(settle)
         jpeg, _ = self.robot.frame("wrist", after=time.time())
         self.log.frame(tag, jpeg)
@@ -323,7 +332,9 @@ class Skills:
     # --- motion helpers ---
 
     def move_tcp(self, xyz, speed: float = 0.02, z_min: float | None = None) -> None:
-        z_min = NEAR_FLOOR_Z_MIN if z_min is None else z_min
+        # Default floor guard for moves near the floor: below the session floor by the touch's
+        # overshoot margin and the Pi's jaw-tip margin.
+        z_min = self.floor_tcp - 0.015 - 0.017 if z_min is None else z_min
         self.arm.move_to(xyz, pitch_deg=PITCH, roll_deg=self.roll, speed=speed, z_min=z_min)
 
     def cmd_tcp(self) -> np.ndarray:
@@ -333,8 +344,9 @@ class Skills:
 
     def go_above(self, xy, height: float = SERVO_HEIGHTS[0]) -> Result:
         self.roll = 0.0
-        self.arm.pose("ready", speed=20)
-        self.move_tcp([xy[0], xy[1], FLOOR_TCP_Z + height], speed=0.03, z_min=self.arm.z_min)
+        # One clearance-checked joint move from wherever the arm is (usually rest); it used to
+        # go rest -> "ready" -> a straight line down, ~18 s.
+        self.arm.move_direct([xy[0], xy[1], self.floor_tcp + height], pitch_deg=PITCH, roll_deg=0.0)
         g = self.robot.gripper(OPEN)
         self.log.ev("above", tcp=self.tcp(), gripper=g["result"])
         return Result(True)
@@ -398,10 +410,14 @@ class Skills:
         self.log.ev("step", name="roll", ok=r.ok, reason=r.reason, data=r.data)
         if not r.ok:
             return r
+        last_err = None
         for i, h in enumerate(SERVO_HEIGHTS):
+            if h in SKIPPABLE_HEIGHTS and last_err is not None and last_err < SERVO_TOL_PX[i]:
+                self.log.ev("servo_skip", h=h, last_err_px=round(last_err, 1))
+                continue
             if i > 0:
                 p = self.cmd_tcp()
-                self.move_tcp([p[0], p[1], FLOOR_TCP_Z + h], speed=0.015)
+                self.move_tcp([p[0], p[1], self.floor_tcp + h], speed=FREE_EE_SPEED)
             for it in range(SERVO_ITERS):
                 h_meas = self.height()
                 c = self.see_block(f"servo_h{int(h * 100)}_{it}", check_present=False)
@@ -411,53 +427,40 @@ class Skills:
                 e = target - c
                 err_px = float(np.linalg.norm(e) * 640)
                 self.log.ev("servo", h=h_meas, center=c, target=target, err_px=round(err_px, 1))
+                last_err = err_px
                 if err_px < SERVO_TOL_PX[i]:
                     break
-                d = SERVO_GAIN * np.linalg.solve(jacobian(h_meas, self.roll), e)
+                gain = SERVO_GAIN_LAST if i == len(SERVO_HEIGHTS) - 1 else SERVO_GAIN
+                d = gain * np.linalg.solve(jacobian(h_meas, self.roll), e)
                 n = float(np.linalg.norm(d))
                 if n > SERVO_MAX_STEP_M:
                     d *= SERVO_MAX_STEP_M / n
                 p = self.cmd_tcp()
                 self.log.ev("servo_step", dxy=d)
-                self.move_tcp([p[0] + d[0], p[1] + d[1], p[2]], speed=0.015)
+                self.move_tcp([p[0] + d[0], p[1] + d[1], p[2]], speed=SERVO_EE_SPEED)
             else:
                 return Result(False, f"did not converge at {100 * h:.0f} cm ({err_px:.0f} px off)")
         return Result(True)
 
     def touch_floor(self) -> Result:
-        """Step down until the floor holds the jaws up. Returns the measured and commanded TCP z
-        at the last free step (the jaws were then within one step of the floor)."""
-
-        def gap():
-            time.sleep(0.3)
-            st = self.robot.status()
-            zc = float(self.arm.calib.fk(st["targets"])[2, 3])
-            zm = float(self.arm.calib.fk(st["joints"])[2, 3])
-            return zc, zm, zm - zc
-
-        free, last_free, last_free_cmd = [], None, None
-        while True:
-            p = self.cmd_tcp()
-            z = p[2] - TOUCH_STEP_M
-            if z < TOUCH_LOWEST_M:
-                return Result(False, "reached the lowest allowed height without touching the floor")
-            try:
-                self.move_tcp([p[0], p[1], z], speed=0.008)
-            except RobotError as e:
-                self.log.ev("touch_backstop", reason=str(e))
-                break  # the Pi's contact abort: contact
-            zc, zm, g = gap()
-            if len(free) > TOUCH_BASELINE_STEPS and g - float(np.median(free[: TOUCH_BASELINE_STEPS + 1])) > TOUCH_GAP_M:
-                self.log.ev("touch", cmd_z=zc, meas_z=zm, gap_mm=round(1000 * g, 1))
-                break
-            free.append(g)
-            last_free, last_free_cmd = zm, zc
-        if last_free is None:
-            return Result(False, "touched on the first step")
-        above = last_free - FLOOR_TCP_Z
-        if above > TOUCH_TOO_HIGH_M:
-            return Result(False, f"touched {1000 * above:.0f} mm above the floor: landed on the block?", {"z": last_free})
-        return Result(True, data={"z": last_free, "z_cmd": last_free_cmd, "above_floor_mm": round(1000 * above, 1)})
+        """One straight descent the Pi stops itself where the jaws meet the floor (a
+        contact_stop trajectory: it watches the measured against the commanded TCP height every
+        30 Hz tick), searching up to TOUCH_SEARCH_M below the start: no stored floor height is
+        needed, so it works on a new floor. The height found becomes the session floor."""
+        p = self.cmd_tcp()
+        goal = [p[0], p[1], p[2] - TOUCH_SEARCH_M]
+        z_min = goal[2] - 0.015 - 0.005  # the Pi checks the jaw tips, 1.5 cm below the TCP
+        wps, durs = plan_ee_line(self.arm.calib, self.arm.targets(), goal, PITCH, self.roll, TOUCH_SPEED, z_min=goal[2] - 0.002)
+        res = self.robot.trajectory(wps, durs, z_min=z_min, contact_stop=True)
+        r = res.get("result", {})
+        self.log.ev("touch", **r)
+        if not r.get("contact"):
+            return Result(False, f"no floor within {100 * TOUCH_SEARCH_M:.0f} cm below the start")
+        z = float(r["z_meas"])
+        free_gap = float(r.get("free_gap_mm", 0.0)) / 1000.0  # measured - commanded in free air (sag: negative)
+        self.log.ev("floor", previous=round(self.floor_tcp, 4), now=round(z, 4), shift_mm=round(1000 * (z - self.floor_tcp), 1))
+        self.floor_tcp = z
+        return Result(True, data={"z": z, "z_cmd": z - free_gap, "how": r.get("how")})
 
     def center_along_length(self) -> None:
         """Just before closing: make sure part of the brick sticks out beyond the jaw tips
@@ -508,7 +511,7 @@ class Skills:
         boxes = []
         for k, dz in enumerate((LIFT_M, HOLD_CHECK_LIFT_M)):
             p = self.cmd_tcp()
-            self.move_tcp([p[0], p[1], p[2] + dz], speed=0.015)
+            self.move_tcp([p[0], p[1], p[2] + dz], speed=FREE_EE_SPEED)
             jpeg = self.wrist(f"lifted_{k}")
             a = self.gemma.box(jpeg, f"the {self.target}")
             boxes.append(a.value)
@@ -532,7 +535,7 @@ class Skills:
         edge in the floor part of the image (with nothing there, Gemma has boxed a hat on a
         coat rack), and clear of the left/right border (it has boxed the rug at the edge).
         Gemma's yes/no isn't used: unreliable on these objects (see vision.plausible_brick)."""
-        time.sleep(0.4)
+        time.sleep(LOOK_SETTLE_S)
         jpeg, _ = self.robot.frame("front", after=time.time())
         self.log.frame(tag, jpeg)
         a = self.gemma.box(jpeg, f"the {what} on the floor")
@@ -671,7 +674,7 @@ class Skills:
                 res = self.robot.base(dtheta_deg=-SCAN_STEP_DEG)
                 self.log.ev("base", turn_deg=-SCAN_STEP_DEG, moved=res["result"].get("moved"))
             head = self.heading()
-            time.sleep(0.4)
+            time.sleep(LOOK_SETTLE_S)
             jpeg, _ = self.robot.frame("front", after=time.time())
             self.log.frame(f"scan_{k:02d}", jpeg)
             for o in objects:
@@ -788,24 +791,6 @@ class Skills:
         return Result(False, f"could not reach a confirmed {what} ({'; '.join(reasons) or 'no candidates'}); "
                       f"{left} candidate(s) left", {"left": left})
 
-    def search(self, what: str, direction: str = "right") -> Result:
-        """Turn in place, SEARCH_STEP_DEG at a time toward `direction` ("left" or "right"),
-        until `what` is in the front camera; then turn to face it. Up to a full circle."""
-        self.arm.reset()
-        sign = 1.0 if direction == "left" else -1.0
-        for k in range(int(360 / SEARCH_STEP_DEG) + 1):
-            got = self.see_front(f"search_{what.replace(' ', '_')}_{k}", what)
-            if got is not None:
-                u = float(got[0][0])
-                turn = -(u - FRONT_U_TARGET) / FRONT_U_PER_DEG
-                if abs(turn) > MIN_TURN_DEG:
-                    self.robot.base(dtheta_deg=float(np.clip(turn, -30, 30)))
-                return Result(True, f"found the {what} after turning {k * SEARCH_STEP_DEG:.0f} deg {direction}",
-                              {"turned_deg": k * SEARCH_STEP_DEG * sign})
-            res = self.robot.base(dtheta_deg=sign * SEARCH_STEP_DEG)
-            self.log.ev("base", turn_deg=sign * SEARCH_STEP_DEG, moved=res["result"].get("moved"))
-        return Result(False, f"no {what} anywhere in a full turn")
-
     def approach(self, what: str | None = None) -> Result:
         """Drive until `what` is in arm reach, closing on the front camera: turn it to
         FRONT_U_TARGET, then step forward until its box's bottom edge (where it meets the
@@ -852,6 +837,10 @@ class Skills:
             self.log.ev("lineup", k=k, center=c, dxy=d)
             if np.linalg.norm(d) <= ARM_REACH_M:
                 return Result(True, data={"dxy": d})
+            if not self.base_ok:
+                # Base locked: the arm's own centring (centre()) takes the whole offset, if the
+                # pose is reachable; it reports if it isn't.
+                return Result(True, data={"dxy": d, "base_locked": True})
             # Move the base by the same displacement (arm and base frames share x forward, y
             # left), capped; the next frame measures what's left.
             d = np.clip(d, -0.15, 0.15)
@@ -870,7 +859,7 @@ class Skills:
             self.log.ev("step", name=name, ok=r.ok, reason=r.reason, data=r.data)
             if not r.ok:
                 return Result(False, f"{name}: {r.reason}")
-        if not getattr(self, "closed_in", False):
+        if not getattr(self, "closed_in", False) and self.base_ok:
             res = self.robot.base(dx=CLOSE_IN_M)
             self.log.ev("base", dx=CLOSE_IN_M, moved=res["result"].get("moved"), why="close in")
             self.closed_in = True
@@ -928,9 +917,8 @@ class Skills:
         up under the gripper (arm first, base for what the arm can't reach), then the gripper
         opens."""
         self.roll = DROP_ROLL_DEG
-        z = FLOOR_TCP_Z + DROP_TIP_HEIGHT_M
-        self.arm.pose("ready", speed=20)
-        self.move_tcp([ABOVE_XY[0], ABOVE_XY[1], z], speed=0.03, z_min=self.arm.z_min)
+        z = self.floor_tcp + DROP_TIP_HEIGHT_M
+        self.arm.move_direct([ABOVE_XY[0], ABOVE_XY[1], z], pitch_deg=PITCH, roll_deg=self.roll)
         # The camera looks down at the rim: its height above that plane sets the pixel target
         # and scale (the taught grasp-pixel curve, without the fixed-jaw clearance shift).
         h = DROP_TIP_HEIGHT_M - DROP_RIM_HEIGHT_M
@@ -950,7 +938,7 @@ class Skills:
                 break
             if np.linalg.norm(d) <= ARM_REACH_M:
                 p = self.cmd_tcp()
-                self.move_tcp([p[0] + 0.8 * d[0], p[1] + 0.8 * d[1], p[2]], speed=0.02, z_min=self.arm.z_min)
+                self.move_tcp([p[0] + 0.8 * d[0], p[1] + 0.8 * d[1], p[2]], speed=SERVO_EE_SPEED, z_min=self.arm.z_min)
             else:
                 d = np.clip(d, -0.15, 0.15)
                 res = self.robot.base(dx=float(d[0]), dy=float(d[1]))
@@ -969,7 +957,7 @@ class Skills:
         jpeg = self.wrist("released", settle=0.1)
         b = self.gemma.box(jpeg, "the red Lego brick" if "red" in held else f"the {held}")
         p = self.cmd_tcp()
-        self.move_tcp([p[0], p[1], p[2] + 0.04], speed=0.02, z_min=self.arm.z_min)
+        self.move_tcp([p[0], p[1], p[2] + 0.04], speed=FREE_EE_SPEED, z_min=self.arm.z_min)
         self.robot.gripper(OPEN, speed=40)
         self.holding = None
         inside = False

@@ -93,6 +93,20 @@ STALL_HOLD_S = 0.25
 STALL_LAG_MIN = 4.0  # units: below this lag, a loaded joint is just holding, not blocked
 SETTLE_TIMEOUT_S = 1.0
 
+# Contact-stop trajectories (the floor touch): watch the TCP's measured height (FK of the
+# measured joints) against the commanded one every tick. In free air the measured TCP trails
+# the command by a steady sag/lag (its "free gap", measured over CONTACT_BASELINE_S after
+# CONTACT_WARMUP_S); contact is either the floor holding it up (gap grows past the free gap
+# by contact_gap_mm on CONTACT_CONFIRM_TICKS ticks) or the TCP no longer following (over the
+# last CONTACT_FOLLOW_S it moved under CONTACT_FOLLOW_FRACTION of the commanded distance,
+# which also catches starting already in contact). On contact: hold the measured pose.
+CONTACT_WARMUP_S = 0.15
+CONTACT_BASELINE_S = 0.2
+CONTACT_CONFIRM_TICKS = 2
+CONTACT_FOLLOW_S = 0.3
+CONTACT_FOLLOW_FRACTION = 0.4
+CONTACT_FOLLOW_MIN_M = 0.002
+
 # Gripper: closed is 0. When it stalls on an object, hold this far past the measured
 # position, so it keeps a firm grip without driving the servo at full torque.
 GRIPPER_SQUEEZE = 4.0
@@ -290,7 +304,12 @@ class AutoController:
             full.append(cur)
             prev = cur
         durations = [float(d) for d in durs]
-        return {"waypoints": full, "durations": durations, "total": sum(durations)}
+        run = {"waypoints": full, "durations": durations, "total": sum(durations)}
+        if cmd.get("contact_stop"):
+            run["contact_stop"] = True
+            run["contact_gap_m"] = _clamp(float(cmd.get("contact_gap_mm") or 1.5), 0.8, 5.0) / 1000.0
+            run["watch"] = []
+        return run
 
     def _lowest_z(self, joints: dict[str, float]) -> float:
         """Lower of the TCP and the jaw tips."""
@@ -345,8 +364,60 @@ class AutoController:
 
     # --- execution ---
 
+    def _tcp_z(self, joints: dict[str, float]) -> float:
+        q = np.array([self._norm_to_rad(j, joints[j]) for j in IK_ARM_JOINTS])
+        return float(kin.forward_kinematics(q)[2, 3])
+
+    def _watch_contact(self, cmd: dict, t: float, targets: dict, joint_state: dict) -> str:
+        """For a contact_stop trajectory: a non-empty description once the TCP is in contact
+        (see the CONTACT_* constants)."""
+        if not all(j in joint_state for j in IK_ARM_JOINTS):
+            return ""
+        zc = self._tcp_z(targets)
+        zm = self._tcp_z({j: joint_state[j]["pos"] for j in IK_ARM_JOINTS})
+        hist = cmd["watch"]
+        hist.append((t, zc, zm))
+        if t < CONTACT_WARMUP_S + CONTACT_BASELINE_S:
+            return ""
+        if "free_gap" not in cmd:
+            gaps = [m - c for tt, c, m in hist if tt >= CONTACT_WARMUP_S]
+            cmd["free_gap"] = float(np.median(gaps)) if gaps else 0.0
+        gap = zm - zc
+        cmd["contact_last"] = (zc, zm, gap)
+        if gap - cmd["free_gap"] > cmd["contact_gap_m"]:
+            cmd["held_ticks"] = cmd.get("held_ticks", 0) + 1
+            if cmd["held_ticks"] >= CONTACT_CONFIRM_TICKS:
+                return f"held up: {1000 * (gap - cmd['free_gap']):.1f} mm above its free-air sag"
+        else:
+            cmd["held_ticks"] = 0
+        old = next((h for h in reversed(hist) if t - h[0] >= CONTACT_FOLLOW_S), None)
+        if old is not None:
+            commanded, measured = old[1] - zc, old[2] - zm  # descent over the window
+            if commanded > CONTACT_FOLLOW_MIN_M and measured < CONTACT_FOLLOW_FRACTION * commanded:
+                return f"not following: moved {1000 * measured:.1f} of {1000 * commanded:.1f} mm commanded"
+        return ""
+
+    def _finish_contact(self, cmd: dict, how: str, targets: dict, joint_state: dict, t: float) -> None:
+        zc, zm, gap = cmd.get("contact_last", (None, None, None))
+        self._hold_measured(targets, joint_state)
+        cmd["result"] = {
+            "contact": True,
+            "how": how,
+            "z_meas": None if zm is None else round(zm, 4),
+            "z_cmd": None if zc is None else round(zc, 4),
+            "free_gap_mm": round(1000 * cmd.get("free_gap", 0.0), 1),
+            "t": round(t, 2),
+        }
+        with self._lock:
+            self._finish_locked("done", f"contact ({how})")
+
     def _step_trajectory(self, cmd: dict, t: float, targets: dict, joint_state: dict, now: float) -> None:
         wps, durs = cmd["waypoints"], cmd["durations"]
+        if cmd.get("contact_stop"):
+            how = self._watch_contact(cmd, t, targets, joint_state)
+            if how:
+                self._finish_contact(cmd, how, targets, joint_state, t)
+                return
         if t >= cmd["total"]:
             targets.update(wps[-1])
             err = self._max_tracking_error(targets, joint_state)
@@ -354,6 +425,7 @@ class AutoController:
                 # "done" either way, but say how close it got: a stretched-out arm sags short
                 # of its target and only settles by the timeout.
                 cmd["result"] = {
+                    **({"contact": False} if cmd.get("contact_stop") else {}),
                     "settled": err < 3.0,
                     "max_error": round(err, 1),
                     "errors": {j: round(targets[j] - joint_state[j]["pos"], 1) for j in IK_ARM_JOINTS if j in joint_state},
@@ -374,6 +446,10 @@ class AutoController:
                 targets[j] = w0[j] + (w1[j] - w0[j]) * a
         reason = self._contact_check(cmd, targets, joint_state, now)
         if reason:
+            if cmd.get("contact_stop"):
+                # Looking for contact: a stall or tracking error is the contact we wanted.
+                self._finish_contact(cmd, reason, targets, joint_state, t)
+                return
             self._hold_measured(targets, joint_state)
             with self._lock:
                 self._finish_locked("failed", reason)

@@ -32,7 +32,23 @@ import urllib.request
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_URL = "http://10.55.0.102:8000"
+# Where the LeKiwi web service can be, tried in this order (see find_url): the Ethernet cable
+# to this Mac (fixed addresses), the robot's own Wi-Fi hotspot LeKiwi-RoboNet (the Pi is its
+# gateway), the Pi's name on a shared Wi-Fi network.
+CANDIDATE_URLS = ("http://10.55.0.102:8000", "http://10.42.0.1:8000", "http://raspberrypi.local:8000")
+DEFAULT_URL = CANDIDATE_URLS[0]
+
+
+def find_url(candidates=CANDIDATE_URLS, timeout: float = 1.5) -> str:
+    """The first candidate whose /auto/status answers; raises RobotError if none does."""
+    for url in candidates:
+        try:
+            with urllib.request.urlopen(url + "/auto/status", timeout=timeout) as r:
+                if r.status == 200:
+                    return url
+        except OSError:
+            continue
+    raise RobotError(f"no LeKiwi web service answered at {', '.join(candidates)}")
 HEARTBEAT_PERIOD_S = 0.2
 
 
@@ -44,13 +60,21 @@ class RobotError(RuntimeError):
         self.result = result or {}
 
 
+class BaseLocked(RobotError):
+    """A base move was asked for while the base is locked (Robot(base_enabled=False))."""
+
+
 class OperatorTookOver(RobotError):
     """Auto mode was left on the robot side (gamepad, e-stop, web UI): never resume on our own."""
 
 
 class Robot:
-    def __init__(self, url: str = DEFAULT_URL):
-        self.url = url.rstrip("/")
+    def __init__(self, url: str | None = None, base_enabled: bool = True):
+        """url None: find the robot on whichever link is up (find_url)."""
+        self.url = (url or find_url()).rstrip("/")
+        # False: every base (wheel) command is refused here, before it reaches the robot, e.g.
+        # while the robot is tethered to power and must not drive.
+        self.base_enabled = base_enabled
         self._hb_stop = threading.Event()
         self._hb_thread: threading.Thread | None = None
         # Pi clock minus Mac clock. The Pi has no RTC and often no internet, so after a reboot
@@ -161,12 +185,16 @@ class Robot:
     def calibration(self) -> dict:
         return self._json("GET", "/auto/calibration")
 
-    def trajectory(self, waypoints: list[dict], durations: list[float], z_min: float | None = None) -> dict:
+    def trajectory(
+        self, waypoints: list[dict], durations: list[float], z_min: float | None = None, contact_stop: bool = False
+    ) -> dict:
+        """contact_stop: the Pi stops the move itself where the TCP meets something (it watches
+        measured vs commanded TCP height every tick) and reports where (result["contact"])."""
         total = sum(durations)
-        return self.run(
-            {"cmd": "trajectory", "waypoints": waypoints, "durations": durations, "z_min": z_min},
-            timeout=total + 15.0,
-        )
+        cmd = {"cmd": "trajectory", "waypoints": waypoints, "durations": durations, "z_min": z_min}
+        if contact_stop:
+            cmd["contact_stop"] = True
+        return self.run(cmd, timeout=total + 15.0)
 
     def joints(self, targets: dict[str, float], speed: float | None = None, z_min: float | None = None) -> dict:
         return self.run({"cmd": "joints", "targets": targets, "speed": speed, "z_min": z_min})
@@ -175,4 +203,6 @@ class Robot:
         return self.run({"cmd": "gripper", "pos": pos, "speed": speed})
 
     def base(self, dx: float = 0.0, dy: float = 0.0, dtheta_deg: float = 0.0, speed: float | None = None) -> dict:
+        if not self.base_enabled:
+            raise BaseLocked(f"base move refused (base locked): dx={dx} dy={dy} dtheta={dtheta_deg}")
         return self.run({"cmd": "base", "dx": dx, "dy": dy, "dtheta_deg": dtheta_deg, "speed": speed})

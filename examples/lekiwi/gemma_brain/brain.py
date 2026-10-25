@@ -41,7 +41,7 @@ from pathlib import Path
 
 from arm import Arm, PlanError
 from gemma import DEFAULT_MODEL, Gemma
-from robot import DEFAULT_URL, OperatorTookOver, Robot, RobotError
+from robot import CANDIDATE_URLS, OperatorTookOver, Robot, RobotError
 from skills import Log, Result, Skills
 
 MAX_CALLS = 16
@@ -241,7 +241,8 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("goal", help="what the robot should do, in plain words")
     ap.add_argument("--model", default=DEFAULT_MODEL, help=f"Ollama model (default {DEFAULT_MODEL})")
-    ap.add_argument("--robot", default=DEFAULT_URL, help=f"LeKiwi web service (default {DEFAULT_URL})")
+    ap.add_argument("--robot", default=None, help="LeKiwi web service URL (default: the first that answers of "
+                    + ", ".join(CANDIDATE_URLS) + ")")
     ap.add_argument(
         "--no-think",
         action="store_true",
