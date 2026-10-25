@@ -33,7 +33,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).parent))
 
 import so101_kinematics as kin  # noqa: E402
-from auto_control import GRIPPER, IK_ARM_JOINTS, AutoController, CommandRefused  # noqa: E402
+from auto_control import GRIPPER, HEARTBEAT_TIMEOUT_S, IK_ARM_JOINTS, AutoController, CommandRefused  # noqa: E402
 
 PERIOD = 1 / 30
 READY = dict.fromkeys(IK_ARM_JOINTS, 0.0)
@@ -202,7 +202,7 @@ def test_heartbeat_loss_aborts_and_holds():
     sim = Sim()
     sim.submit({"cmd": "joints", "targets": {"arm_shoulder_pan": 60.0}, "speed": 10})
     sim.run(0.5)
-    sim.run(1.0, heartbeat=False)
+    sim.run(HEARTBEAT_TIMEOUT_S + 0.5, heartbeat=False)
     st = sim.command()
     assert st["state"] == "aborted" and "heartbeat" in st["reason"], st
     pan = sim.pos["arm_shoulder_pan"]
@@ -264,8 +264,10 @@ def test_base_heartbeat_loss_stops_wheels():
     sim.submit({"cmd": "base", "dx": 0.5})
     sim.run(1.0)
     assert sim.base_cmd["x.vel"] > 0
-    sim.run(1.0, heartbeat=False)
-    assert sim.command()["state"] == "aborted" and sim.base_cmd["x.vel"] == 0.0
+    sim.run(HEARTBEAT_TIMEOUT_S + 0.5, heartbeat=False)
+    st = sim.command()
+    assert st["state"] == "aborted" and sim.base_cmd["x.vel"] == 0.0
+    assert 0.0 < st["result"]["moved"][0] < 0.5, st  # how far it got, so the rest can be finished
 
 
 def run_tests(namespace: dict) -> int:

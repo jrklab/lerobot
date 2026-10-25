@@ -23,6 +23,7 @@ stops the robot on its own within auto_control.HEARTBEAT_TIMEOUT_S.
 
 from __future__ import annotations
 
+import http.client
 import json
 import logging
 import threading
@@ -49,7 +50,10 @@ def find_url(candidates=CANDIDATE_URLS, timeout: float = 1.5) -> str:
         except OSError:
             continue
     raise RobotError(f"no LeKiwi web service answered at {', '.join(candidates)}")
-HEARTBEAT_PERIOD_S = 0.2
+# Heartbeats every 0.1 s on one kept-open connection (no TCP handshake per beat over a laggy
+# Wi-Fi link): a single late reply no longer comes near the Pi's 1.5 s timeout.
+HEARTBEAT_PERIOD_S = 0.1
+HEARTBEAT_TIMEOUT_S = 1.0
 
 
 class RobotError(RuntimeError):
@@ -123,11 +127,21 @@ class Robot:
             logger.warning("disable failed: %s", e)
 
     def _heartbeat_loop(self) -> None:
+        host = self.url.split("://", 1)[1]
+        conn = None
         while not self._hb_stop.wait(HEARTBEAT_PERIOD_S):
             try:
-                self._json("POST", "/auto/heartbeat", timeout=1.0)
-            except (RobotError, OSError) as e:
+                if conn is None:
+                    conn = http.client.HTTPConnection(host, timeout=HEARTBEAT_TIMEOUT_S)
+                conn.request("POST", "/auto/heartbeat", body=b"", headers={"Content-Length": "0"})
+                conn.getresponse().read()
+            except (OSError, http.client.HTTPException) as e:
                 logger.warning("heartbeat failed: %s", e)
+                if conn is not None:
+                    conn.close()
+                conn = None
+        if conn is not None:
+            conn.close()
 
     def __enter__(self) -> Robot:
         self.enable()
@@ -169,7 +183,14 @@ class Robot:
         cmd_id = reply["id"]
         deadline = time.monotonic() + timeout
         while True:
-            st = self.status()
+            try:
+                st = self.status()
+            except OSError as e:  # a Wi-Fi stall: keep asking until the deadline
+                logger.warning("status failed while waiting for %s: %s", cmd["cmd"], e)
+                if time.monotonic() > deadline:
+                    raise RobotError(f"{cmd['cmd']}: robot unreachable for {timeout:.0f} s") from None
+                time.sleep(0.2)
+                continue
             c = st.get("command") or {}
             if st["mode"] != "auto":
                 raise OperatorTookOver(f"robot left auto mode (now {st['mode']}): operator took over", c)
@@ -205,4 +226,19 @@ class Robot:
     def base(self, dx: float = 0.0, dy: float = 0.0, dtheta_deg: float = 0.0, speed: float | None = None) -> dict:
         if not self.base_enabled:
             raise BaseLocked(f"base move refused (base locked): dx={dx} dy={dy} dtheta={dtheta_deg}")
+        try:
+            return self._base(dx, dy, dtheta_deg, speed)
+        except RobotError as e:
+            moved = (e.result.get("result") or {}).get("moved")
+            if "heartbeat lost" not in str(e) or not moved:
+                raise
+            # Cut off by a link stall: finish the rest of the move, once (in the robot's frame at
+            # the stop, which for these short moves is close enough to the start's).
+            rest = (dx - moved[0], dy - moved[1], dtheta_deg - moved[2])
+            logger.warning("base move cut off by a heartbeat gap after %s; finishing %s", moved, rest)
+            if abs(rest[0]) < 0.01 and abs(rest[1]) < 0.01 and abs(rest[2]) < 2.0:
+                return {**e.result, "state": "done", "reason": "finished (close enough after a link stall)"}
+            return self._base(*rest, speed)
+
+    def _base(self, dx: float, dy: float, dtheta_deg: float, speed: float | None) -> dict:
         return self.run({"cmd": "base", "dx": dx, "dy": dy, "dtheta_deg": dtheta_deg, "speed": speed})

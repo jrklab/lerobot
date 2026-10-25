@@ -561,6 +561,8 @@ class Skills:
         r = self.scan_overhead(objects)
         if r is not None:
             return r
+        if not self.base_ok:
+            return Result(False, "the base is locked, so it can't turn to scan; objects must be in front, within reach")
         return self.scan_rotate(objects)
 
     def scan_overhead(self, objects: list[str]) -> Result | None:
@@ -764,6 +766,12 @@ class Skills:
         what = self.map_key(what)
         self.confirmed = None
         self.closed_in = False
+        if not self.base_ok:
+            # Base locked: nothing to drive; the object has to be in reach already. Confirm with
+            # the wrist camera from the rest pose, which looks at the floor just ahead.
+            c = self.confirm(what)
+            self.confirmed = what if c.ok else None
+            return Result(c.ok, c.reason or f"base locked; the {what} is in front", {"base_locked": True})
         if not getattr(self, "map", {}).get(what):
             r = self.approach(what)
             if not r.ok:

@@ -244,6 +244,12 @@ def main() -> int:
     ap.add_argument("--robot", default=None, help="LeKiwi web service URL (default: the first that answers of "
                     + ", ".join(CANDIDATE_URLS) + ")")
     ap.add_argument(
+        "--no-base",
+        action="store_true",
+        help="lock the base (every wheel command refused): scan and approach don't drive; pick works on "
+        "an object within the arm's reach in front",
+    )
+    ap.add_argument(
         "--no-think",
         action="store_true",
         help="skip Gemma's reasoning before each call (faster, but it recovered from a failed pick "
@@ -254,18 +260,20 @@ def main() -> int:
 
     out = Path(__file__).parent / "runs" / (datetime.datetime.now().strftime("%Y%m%dT%H%M%S") + "-brain")
     log = Log(out)
-    robot, gemma = Robot(args.robot), Gemma(args.model)
+    robot, gemma = Robot(args.robot, base_enabled=not args.no_base), Gemma(args.model)
     ok, summary = False, ""
     with robot:
         arm = Arm(robot)
         sk = Skills(robot, arm, gemma, log)
-        # Holding something already (e.g. after an earlier run)? Let Gemma know.
-        # A brick held across its short side stalls the gripper at ~4-7; closed empty is ~1.5-2,
-        # open is ~39.
-        if 3.5 < robot.status()["joints"]["arm_gripper"] < 25.0:
-            sk.holding = "object that was already in the gripper at start"
+        # No guess about holding something at start: a closed, empty gripper can read inside
+        # the range a held brick does (Oct 24: 3.0-4 empty vs 4.7-6.8 held), and a wrong
+        # "already holding" made Gemma refuse to pick.
         try:
-            ok, summary = Brain(sk, gemma, log, think=not args.no_think).run(args.goal)
+            goal = args.goal
+            if args.no_base:
+                goal += ("\n(The robot's base is locked: it cannot drive or turn. Objects must already be in "
+                         "front of it, within the arm's reach. Don't scan; call pick directly.)")
+            ok, summary = Brain(sk, gemma, log, think=not args.no_think).run(goal)
         except OperatorTookOver as e:
             summary = f"stopped: {e}"
         except KeyboardInterrupt:

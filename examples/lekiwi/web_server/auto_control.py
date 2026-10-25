@@ -57,7 +57,11 @@ IK_ARM_JOINTS = [f"arm_{name}" for name in kin.JOINT_NAMES]
 GRIPPER = "arm_gripper"
 ARM_JOINTS = [*IK_ARM_JOINTS, GRIPPER]
 
-HEARTBEAT_TIMEOUT_S = 0.6
+# 1.5 s (was 0.6): over the robot's Wi-Fi hotspot the Mac's heartbeats arrive with 1.5-4 s
+# gaps a few times a minute (Oct 24: 11 gaps > 0.6 s in 84 s), while the cable never exceeded
+# 32 ms. Worst case after a real loss: the arm keeps moving ~1.5 s (a few mm at these
+# speeds), the base up to ~0.2 m at its 0.15 m/s cap.
+HEARTBEAT_TIMEOUT_S = 1.5
 
 # Joint units are LeKiwi's normalized -100..100 (gripper 0..100).
 JOINT_RANGE = dict.fromkeys(IK_ARM_JOINTS, (-100.0, 100.0))
@@ -233,6 +237,8 @@ class AutoController:
         with self._lock:
             cmd = self._cmd
             if cmd is not None and now - self._last_heartbeat > HEARTBEAT_TIMEOUT_S:
+                if cmd["kind"] == "base" and "odom_start" in cmd:
+                    cmd["result"] = {"moved": self._base_moved(cmd)}  # so the planner can finish it
                 self._finish_locked("aborted", "heartbeat lost")
                 if cmd["kind"] != "base":
                     self._hold_measured(targets, joint_state)
@@ -522,6 +528,13 @@ class AutoController:
         self._odom += np.array(
             [(vx * math.cos(th) - vy * math.sin(th)) * dt, (vx * math.sin(th) + vy * math.cos(th)) * dt, wz * dt]
         )
+
+    def _base_moved(self, cmd: dict) -> list[float]:
+        """[dx (m), dy (m), dtheta (deg)] covered so far, in the frame the move started in."""
+        start = cmd["odom_start"]
+        c, s = math.cos(start[2]), math.sin(start[2])
+        d = self._odom - start
+        return [round(float(c * d[0] + s * d[1]), 3), round(float(-s * d[0] + c * d[1]), 3), round(math.degrees(d[2]), 1)]
 
     def _step_base(self, cmd: dict, t: float) -> dict[str, float]:
         stop = {"x.vel": 0.0, "y.vel": 0.0, "theta.vel": 0.0}
