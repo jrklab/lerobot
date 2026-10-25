@@ -38,7 +38,8 @@ def lekiwi_cameras_config() -> dict[str, CameraConfig]:
             fps=30,
             width=640,
             height=480,
-            rotation=Cv2Rotation.ROTATE_180,
+            # Mounted the right way up since 2026-10-25 (was upside down: ROTATE_180).
+            rotation=Cv2Rotation.NO_ROTATION,
             fourcc="MJPG",
             warmup_s=5,
             # Right after boot (or a fresh host restart) these USB UVC cameras can take up to
