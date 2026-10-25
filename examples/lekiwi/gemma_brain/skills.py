@@ -45,7 +45,7 @@ from gemma import Gemma
 from arm import plan_ee_line
 from robot import Robot, RobotError
 import overhead
-from vision import brick_angle, crop_around, plausible_brick
+from vision import brick_angle, crop_around, plausible_brick, snap_box
 
 CALIB = json.loads(Path(__file__).with_name("calib.json").read_text())
 FLOOR_TCP_Z = CALIB["floor_tcp_z_m"]["value"]
@@ -85,6 +85,13 @@ SERVO_HEIGHTS = (0.10, 0.06, 0.03, 0.015)
 # check before closing does the fine placement.
 SERVO_TOL_PX = (20.0, 14.0, 12.0, 20.0)
 SERVO_GAIN_LAST = 0.5  # gentler at the last stage, so noisy boxes don't make it overshoot
+# At 6 cm and below, Gemma's box jumps more between looks (Oct 24: the 6 cm stage chased
+# 0.54 <-> 0.68 swings and diverged): gentler, smaller steps there, and a box that lands more
+# than SERVO_JUMP_PX from where the last move should have put it is asked for once more.
+SERVO_LOW_HEIGHT_M = 0.065
+SERVO_GAIN_LOW = 0.5
+SERVO_MAX_STEP_LOW_M = 0.01
+SERVO_JUMP_PX = 35.0
 # A stage that may be skipped when the one above already ended within its tolerance.
 SKIPPABLE_HEIGHTS = (0.06,)
 # Speeds (m/s): moves well clear of the floor and the brick (the descents between centring
@@ -302,6 +309,8 @@ class Skills:
         # False: scan never turns the robot around; without the overhead camera it takes one
         # look straight ahead.
         self.turn_scan = True
+        # Set (degrees): scan sweeps from -this (right) to +this (left) instead of a full turn.
+        self.scan_sweep_deg = None
 
     # --- sensing ---
 
@@ -325,15 +334,18 @@ class Skills:
         self.log.ev("box", tag=tag, box=a.value, ms=round(a.ms))
         if a.value is None:
             return None
+        box, how = snap_box(jpeg, a.value)
+        if how == "snapped":
+            self.log.ev("snap", tag=tag, box=[round(v, 4) for v in box])
         if check_present:
             # Not Gemma's yes/no: unreliable both ways on this brick (see vision.plausible_brick).
-            ok, why = plausible_brick(jpeg, a.value)
+            ok, why = plausible_brick(jpeg, box, self.target)
             self.log.ev("present", tag=tag, ok=ok, why=why)
             if not ok:
                 return None
-        x0, y0, x1, y1 = a.value
+        x0, y0, x1, y1 = box
         c = np.array([(x0 + x1) / 2, (y0 + y1) / 2])
-        return (c, a.value, jpeg) if want_box else c
+        return (c, box, jpeg) if want_box else c
 
     # --- motion helpers ---
 
@@ -424,11 +436,20 @@ class Skills:
             if i > 0:
                 p = self.cmd_tcp()
                 self.move_tcp([p[0], p[1], self.floor_tcp + h], speed=FREE_EE_SPEED)
+            expect = None  # where the last correction should have put the brick in the image
             for it in range(SERVO_ITERS):
                 h_meas = self.height()
                 c = self.see_block(f"servo_h{int(h * 100)}_{it}", check_present=False)
                 if c is None:
                     return Result(False, f"no brick in view at {100 * h:.0f} cm")
+                if expect is not None and np.linalg.norm((c - expect) * IMAGE_PX) > SERVO_JUMP_PX:
+                    # Gemma's box jumped far from where the move should have put it (Oct 24:
+                    # 0.54 <-> 0.68 of the frame between looks, the arm a few mm): ask once more
+                    # and keep the box closer to the expectation.
+                    c2 = self.see_block(f"servo_h{int(h * 100)}_{it}_recheck", check_present=False)
+                    self.log.ev("servo_recheck", first=c, second=c2, expected=expect)
+                    if c2 is not None and np.linalg.norm(c2 - expect) < np.linalg.norm(c - expect):
+                        c = c2
                 target = grasp_pixel(h_meas)
                 e = target - c
                 err_px = float(np.linalg.norm(e) * 640)
@@ -436,11 +457,15 @@ class Skills:
                 last_err = err_px
                 if err_px < SERVO_TOL_PX[i]:
                     break
-                gain = SERVO_GAIN_LAST if i == len(SERVO_HEIGHTS) - 1 else SERVO_GAIN
-                d = gain * np.linalg.solve(jacobian(h_meas, self.roll), e)
+                low = h <= SERVO_LOW_HEIGHT_M
+                gain = SERVO_GAIN_LAST if i == len(SERVO_HEIGHTS) - 1 else SERVO_GAIN_LOW if low else SERVO_GAIN
+                j = jacobian(h_meas, self.roll)
+                d = gain * np.linalg.solve(j, e)
                 n = float(np.linalg.norm(d))
-                if n > SERVO_MAX_STEP_M:
-                    d *= SERVO_MAX_STEP_M / n
+                cap = SERVO_MAX_STEP_LOW_M if low else SERVO_MAX_STEP_M
+                if n > cap:
+                    d *= cap / n
+                expect = c + j @ d
                 p = self.cmd_tcp()
                 self.log.ev("servo_step", dxy=d)
                 self.move_tcp([p[0] + d[0], p[1] + d[1], p[2]], speed=SERVO_EE_SPEED)
@@ -568,8 +593,12 @@ class Skills:
         if r is not None:
             return r
         if not self.turn_scan or not self.base_ok:
-            # No full turn (turn_scan off, or the base locked): one look straight ahead.
-            return self.scan_rotate(objects, stops=1)
+            # No turning (turn_scan off, or the base locked): one look straight ahead.
+            return self.scan_rotate(objects, offsets=[0.0])
+        if self.scan_sweep_deg:
+            # A sweep from -sweep (right) to +sweep (left) in SCAN_STEP_DEG steps.
+            n = int(round(self.scan_sweep_deg / SCAN_STEP_DEG))
+            return self.scan_rotate(objects, offsets=[k * SCAN_STEP_DEG for k in range(-n, n + 1)])
         return self.scan_rotate(objects)
 
     def scan_overhead(self, objects: list[str]) -> Result | None:
@@ -669,21 +698,25 @@ class Skills:
             msg += ("; " if found else "") + "not seen: " + ", ".join(missing)
         return Result(bool(found), msg, {"method": method, **summary})
 
-    def scan_rotate(self, objects: list[str], stops: int | None = None) -> Result:
-        """Turn a full circle in SCAN_STEP_DEG stops (or look `stops` times; 1 = only straight
-        ahead, no turning), boxing every object at every stop, and keep a map: for each object,
-        its candidates (bearing, rough range, number of views), best first. Gemma's box is the
-        only judge here, so a candidate can be wrong (E4B has boxed a backpack as a "short paper
-        cup"); approach() confirms up close."""
+    def scan_rotate(self, objects: list[str], offsets: list[float] | None = None) -> Result:
+        """Look at each heading in `offsets` (degrees from where the robot faces now, left
+        positive; default a full circle in SCAN_STEP_DEG stops, turning right), boxing every
+        object at every look, and keep a map: for each object, its candidates (bearing, rough
+        range, number of views), best first. Gemma's box is the only judge here, so a candidate
+        can be wrong (E4B has boxed a backpack as a "short paper cup"); approach() confirms up
+        close."""
         self.arm.reset()
         self.map = {o: [] for o in objects}
         sightings = {o: [] for o in objects}
-        full = stops is None
-        stops = int(round(360.0 / SCAN_STEP_DEG)) if full else stops
-        for k in range(stops):
-            if k:
-                res = self.robot.base(dtheta_deg=-SCAN_STEP_DEG)
-                self.log.ev("base", turn_deg=-SCAN_STEP_DEG, moved=res["result"].get("moved"))
+        full = offsets is None
+        if full:
+            offsets = [-k * SCAN_STEP_DEG for k in range(int(round(360.0 / SCAN_STEP_DEG)))]
+        at = 0.0  # where the robot faces now, relative to the start
+        for k, off in enumerate(offsets):
+            if abs(off - at) > 0.5:
+                res = self.robot.base(dtheta_deg=off - at)
+                self.log.ev("base", turn_deg=off - at, moved=res["result"].get("moved"))
+                at = off
             head = self.heading()
             time.sleep(LOOK_SETTLE_S)
             jpeg, _ = self.robot.frame("front", after=time.time())
@@ -717,7 +750,9 @@ class Skills:
                 c["tried"] = False
             cands.sort(key=lambda c: (-len(c["views"]), c["range_m"]))
             self.map[o] = cands
-        return self._map_result(objects, "360-degree turn" if full else "one look straight ahead")
+        method = ("360-degree turn" if full else "one look straight ahead" if len(offsets) == 1
+                  else f"sweep {offsets[0]:+.0f} to {offsets[-1]:+.0f} deg")
+        return self._map_result(objects, method)
 
     def classify(self, jpeg: bytes, box, what: str) -> str:
         """Which CLASS_OPTIONS entry Gemma picks for the zoomed crop of `box` (lowercase)."""

@@ -89,7 +89,8 @@ cd examples/lekiwi/gemma_brain
 Options: `--model gemma4:26b` (any Ollama vision+tools model), `--no-think` (faster planning,
 worse recovery), `--robot http://<pi>:8000` (default: found automatically), `--no-turn-scan`
 (scan never turns the robot: overhead camera if attached, else one look straight ahead; if that
-finds none of the objects, the run reports it and stops), `--no-base` (wheels locked; arm-only
+finds none of the objects, the run reports it and stops), `--scan-sweep 60` (scan turns from -60° to
++60° in 30° stops instead of a full circle), `--no-base` (wheels locked; arm-only
 pick and place within reach), `--holding "green block"` (already in the gripper at start). Every turn, frame and number is logged under
 `runs/<timestamp>-brain/`.
 

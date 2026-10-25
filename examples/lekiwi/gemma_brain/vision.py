@@ -19,6 +19,8 @@ box), OpenCV measures what a box can't say, its in-plane orientation."""
 
 from __future__ import annotations
 
+import math
+
 import cv2
 import numpy as np
 
@@ -67,7 +69,7 @@ def brick_angle(jpeg: bytes, box, pad: float = 0.25) -> dict | None:
     }
 
 
-def plausible_brick(jpeg: bytes, box) -> tuple[bool, str]:
+def plausible_brick(jpeg: bytes, box, target: str = "") -> tuple[bool, str]:
     """Is Gemma's box really a brick on the floor in a wrist frame? Gemma's own yes/no is
     unreliable here both ways (2026-10-23: false negatives on a plainly visible brick, and a
     box invented on the blue gripper jaw when nothing was there), so check geometry instead:
@@ -82,7 +84,11 @@ def plausible_brick(jpeg: bytes, box) -> tuple[bool, str]:
     roi = img[int(y0 * h) : int(y1 * h), int(x0 * w) : int(x1 * w)]
     hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
     blue = (hsv[..., 0] > 95) & (hsv[..., 0] < 135) & (hsv[..., 1] > 120) & (hsv[..., 2] > 50)
-    if blue.mean() > 0.15:
+    # The jaws only show at the bottom of the wrist image (tips at ~0.77 of its height), and a
+    # blue target is blue like them (Oct 24: a blue brick in mid-image was rejected as "56%
+    # gripper blue"), so the test only applies low in the frame and for non-blue targets.
+    low = (y0 + y1) / 2 > 0.65
+    if low and "blue" not in target.lower() and blue.mean() > 0.15:
         return False, f"box is {100 * blue.mean():.0f}% gripper blue"
     return True, "ok"
 
@@ -129,3 +135,53 @@ def outside_fraction(box, tip_row: float) -> float:
     if y1 <= y0:
         return 0.0
     return float(np.clip((tip_row - y0) / (y1 - y0), 0.0, 1.0))
+
+
+def snap_box(jpeg: bytes, box, min_chroma: float = 25.0) -> tuple[list[float], str]:
+    """Gemma's box moved onto the coloured blob it was aimed at. E4B's wrist boxes can land a
+    brick-height off the brick (Oct 24, red brick next to the jaws: the box on bare floor just
+    above it, while the centring chased it); the brick itself is plain to colour segmentation.
+
+    Searches a window of the box padded by one box size each way for strongly coloured pixels
+    (L*a*b* chroma, not the jaws' blue, not dark), and takes the blob that overlaps the box
+    most, else the nearest one. The box is replaced by that blob's bounding box when the blob
+    is a plausible size for it (0.3x-3x the area); otherwise the box comes back unchanged.
+    Returns (box, how)."""
+    img = cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_COLOR)
+    if img is None:
+        return list(box), "no image"
+    h, w = img.shape[:2]
+    x0, y0, x1, y1 = box
+    bw, bh = x1 - x0, y1 - y0
+    X0, Y0 = int(max(0, (x0 - bw) * w)), int(max(0, (y0 - bh) * h))
+    X1, Y1 = int(min(w, (x1 + bw) * w)), int(min(h, (y1 + bh) * h))
+    crop = img[Y0:Y1, X0:X1]
+    if crop.size == 0 or min(crop.shape[:2]) < 8:
+        return list(box), "empty window"
+    lab = cv2.cvtColor(cv2.GaussianBlur(crop, (5, 5), 0), cv2.COLOR_BGR2LAB).astype(float)
+    chroma = np.hypot(lab[..., 1] - 128, lab[..., 2] - 128)
+    hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
+    jaw = (hsv[..., 0] > 95) & (hsv[..., 0] < 135) & (hsv[..., 1] > 120)
+    mask = ((chroma > min_chroma) & ~jaw & (lab[..., 0] > 40)).astype(np.uint8) * 255
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((5, 5), np.uint8))
+    n, _, stats, cents = cv2.connectedComponentsWithStats(mask)
+    if n <= 1:
+        return list(box), "no coloured blob"
+    bx0, by0, bx1, by1 = x0 * w - X0, y0 * h - Y0, x1 * w - X0, y1 * h - Y0
+    best, best_key = None, None
+    for i in range(1, n):
+        sx, sy, sw, sh, area = stats[i]
+        if area < 0.1 * bw * w * bh * h:
+            continue
+        ov = max(0, min(bx1, sx + sw) - max(bx0, sx)) * max(0, min(by1, sy + sh) - max(by0, sy))
+        d = math.hypot(cents[i][0] - (bx0 + bx1) / 2, cents[i][1] - (by0 + by1) / 2)
+        key = (ov > 0, ov, -d)
+        if best_key is None or key > best_key:
+            best, best_key = i, key
+    if best is None:
+        return list(box), "blobs too small"
+    sx, sy, sw, sh, _ = stats[best]
+    ratio = sw * sh / max(1.0, bw * w * bh * h)
+    if not 0.3 <= ratio <= 3.0:
+        return list(box), f"blob {ratio:.1f}x the box"
+    return [(X0 + sx) / w, (Y0 + sy) / h, (X0 + sx + sw) / w, (Y0 + sy + sh) / h], "snapped"

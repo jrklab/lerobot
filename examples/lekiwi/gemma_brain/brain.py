@@ -45,6 +45,7 @@ from robot import CANDIDATE_URLS, OperatorTookOver, Robot, RobotError
 from skills import Log, Result, Skills
 
 MAX_CALLS = 16
+PICK_TRIES = 3  # one pick call retries this many times by itself (owner's choice, Oct 24)
 
 SYSTEM = """You control LeKiwi, a small wheeled robot with one arm and a gripper, in a room. You reach the goal you are given by calling the robot's skills, one call at a time. Each skill reports back whether it worked, what happened, and some numbers; use that to choose the next call.
 
@@ -172,9 +173,18 @@ class Brain:
             if getattr(sk, "holding", None):
                 return Result(False, f"already holding the {sk.holding}; place it first")
             what = _text(args.get("object"), "object")
-            r = sk.fetch(what)
-            if not r.ok:
-                r.reason += f". The {what} was not picked up and is still on the floor: call pick again to retry."
+            reasons = []
+            for attempt in range(1, PICK_TRIES + 1):
+                r = sk.fetch(what)
+                if r.ok:
+                    if reasons:
+                        r.reason += f" (on attempt {attempt}; earlier: {'; '.join(reasons)})"
+                    return r
+                reasons.append(r.reason)
+                self.log.ev("pick_retry", attempt=attempt, reason=r.reason)
+                print(f"    pick attempt {attempt} failed: {r.reason}")
+            r.reason = (f"failed {PICK_TRIES} times ({'; '.join(reasons)}). The {what} was not picked up and is "
+                        "still on the floor.")
             return r
         if name == "place_in":
             if not getattr(sk, "holding", None):
@@ -252,6 +262,14 @@ def main() -> int:
                     + ", ".join(CANDIDATE_URLS) + ")")
     ap.add_argument("--holding", default=None, help="what the gripper already holds at start, e.g. 'green block'")
     ap.add_argument(
+        "--scan-sweep",
+        type=float,
+        default=None,
+        metavar="DEG",
+        help="scan sweeps from -DEG (right) to +DEG (left) in 30 deg steps instead of a full turn "
+        "(e.g. 60: five looks); if that finds none of the objects, report it and quit",
+    )
+    ap.add_argument(
         "--no-turn-scan",
         action="store_true",
         help="scan never turns the robot around: it uses the overhead camera if attached, else one look "
@@ -285,12 +303,13 @@ def main() -> int:
         if args.holding:
             sk.holding = args.holding
         sk.turn_scan = not args.no_turn_scan
+        sk.scan_sweep_deg = args.scan_sweep
         try:
             goal = args.goal
             if args.no_base:
                 goal += ("\n(The robot's base is locked: it cannot drive or turn. Objects must already be in "
                          "front of it, within the arm's reach. Don't scan; call pick directly.)")
-            ok, summary = Brain(sk, gemma, log, think=not args.no_think, quit_if_scan_empty=args.no_turn_scan).run(goal)
+            ok, summary = Brain(sk, gemma, log, think=not args.no_think, quit_if_scan_empty=args.no_turn_scan or args.scan_sweep is not None).run(goal)
         except OperatorTookOver as e:
             summary = f"stopped: {e}"
         except OSError as e:
