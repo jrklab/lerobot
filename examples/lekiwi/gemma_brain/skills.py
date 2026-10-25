@@ -40,7 +40,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from arm import Arm
+from arm import Arm, PlanError
 from gemma import Gemma
 from arm import plan_ee_line
 from robot import Robot, RobotError
@@ -108,6 +108,15 @@ SERVO_ITERS = 6
 # The floor touch: one contact-stop descent (see touch_floor), this fast, searching this far.
 TOUCH_SPEED = 0.012
 TOUCH_SEARCH_M = 0.06
+# The floor is measured beside the brick before the low centring stages: the stored floor
+# can be far off at a new spot (Oct 24 run 201924: 2.5 cm), and then the "1.5 cm" stage is
+# really 4 cm up, the aim is off and a jaw comes down on the brick (it was knocked 45 deg,
+# and its top taken for the floor). The probe touches FLOOR_PROBE_OFFSET_M past the jaw tips
+# from the brick, after a fast descent to FLOOR_PROBE_ABOVE_M over the highest floor seen.
+FLOOR_PROBE_OFFSET_M = 0.05
+FLOOR_PROBE_ABOVE_M = 0.025
+# The grasp touch stopping this far above the probed floor came down on the brick, not the floor.
+ON_BRICK_M = 0.006
 GRASP_LIFT_M = 0.004  # jaw tips this far above the floor when closing (block body is 11.4 mm)
 PRE_CLOSE_MAX_FIX_M = 0.003
 # Just before closing, part of the brick must stick out beyond the jaw tips (owner's rule:
@@ -304,6 +313,7 @@ class Skills:
         # The floor under the gripper (TCP z when the closed jaws touch it): calib.json's value
         # until the first floor touch of the session, then what that touch measured.
         self.floor_tcp = FLOOR_TCP_Z
+        self.probed_floor = None  # the floor beside the brick, from this grasp's probe
         # The base can be locked (robot.base_enabled False): then the arm alone lines up.
         self.base_ok = getattr(robot, "base_enabled", True)
         # False: scan never turns the robot around; without the overhead camera it takes one
@@ -429,10 +439,15 @@ class Skills:
         if not r.ok:
             return r
         last_err = None
+        probed = False
         for i, h in enumerate(SERVO_HEIGHTS):
             if h in SKIPPABLE_HEIGHTS and last_err is not None and last_err < SERVO_TOL_PX[i]:
                 self.log.ev("servo_skip", h=h, last_err_px=round(last_err, 1))
                 continue
+            if i > 0 and not probed:
+                probed = True
+                r = self.probe_floor()
+                self.log.ev("step", name="probe_floor", ok=r.ok, reason=r.reason, data=r.data)
             if i > 0:
                 p = self.cmd_tcp()
                 self.move_tcp([p[0], p[1], self.floor_tcp + h], speed=FREE_EE_SPEED)
@@ -473,21 +488,63 @@ class Skills:
                 return Result(False, f"did not converge at {100 * h:.0f} cm ({err_px:.0f} px off)")
         return Result(True)
 
-    def touch_floor(self) -> Result:
+    def probe_floor(self) -> Result:
+        """Touch the floor beside the brick (FLOOR_PROBE_OFFSET_M beyond the jaw tips from it,
+        along its length: the image direction in which the brick moves past the tips), and
+        come back. Sets the session floor. The gripper starts centred over the brick at the
+        first stage. On any failure the floor stays as it was."""
+        self.probed_floor = None
+        p = self.cmd_tcp()
+        j = jacobian(max(self.height(), 0.0), self.roll)
+        d = np.linalg.solve(j, np.array([0.0, -1.0]))
+        d = FLOOR_PROBE_OFFSET_M * d / float(np.linalg.norm(d))
+        try:
+            for sign in (1.0, -1.0):  # the other side when that one is out of reach
+                side = [p[0] + sign * d[0], p[1] + sign * d[1], p[2]]
+                try:
+                    self.move_tcp(side, speed=FREE_EE_SPEED)
+                    break
+                except PlanError:
+                    if sign < 0:
+                        raise
+            z_fast = max(FLOOR_TCP_Z, self.floor_tcp) + FLOOR_PROBE_ABOVE_M
+            if z_fast < side[2]:
+                self.move_tcp([side[0], side[1], z_fast], speed=FREE_EE_SPEED)
+            search = (z_fast - min(FLOOR_TCP_Z, self.floor_tcp)) + 0.03
+            r = self.touch_floor(search=search)
+        except (PlanError, RobotError) as e:
+            r = Result(False, f"probe move failed: {e}")
+        try:
+            q = self.cmd_tcp()
+            self.move_tcp([q[0], q[1], p[2]], speed=FREE_EE_SPEED)
+            self.move_tcp(p, speed=FREE_EE_SPEED)
+        except (PlanError, RobotError) as e:
+            return Result(False, f"could not get back over the brick: {e}")
+        if r.ok:
+            self.probed_floor = self.floor_tcp
+        return r
+
+    def touch_floor(self, search: float = TOUCH_SEARCH_M) -> Result:
         """One straight descent the Pi stops itself where the jaws meet the floor (a
         contact_stop trajectory: it watches the measured against the commanded TCP height every
         30 Hz tick), searching up to TOUCH_SEARCH_M below the start: no stored floor height is
         needed, so it works on a new floor. The height found becomes the session floor."""
         p = self.cmd_tcp()
-        goal = [p[0], p[1], p[2] - TOUCH_SEARCH_M]
+        goal = [p[0], p[1], p[2] - search]
         z_min = goal[2] - 0.015 - 0.005  # the Pi checks the jaw tips, 1.5 cm below the TCP
         wps, durs = plan_ee_line(self.arm.calib, self.arm.targets(), goal, PITCH, self.roll, TOUCH_SPEED, z_min=goal[2] - 0.002)
         res = self.robot.trajectory(wps, durs, z_min=z_min, contact_stop=True)
         r = res.get("result", {})
         self.log.ev("touch", **r)
         if not r.get("contact"):
-            return Result(False, f"no floor within {100 * TOUCH_SEARCH_M:.0f} cm below the start")
+            return Result(False, f"no floor within {100 * search:.0f} cm below the start")
         z = float(r["z_meas"])
+        if self.probed_floor is not None and z > self.probed_floor + ON_BRICK_M:
+            # Stopped on the brick, not the floor: don't take it for the floor, don't close.
+            self.log.ev("on_brick", z=round(z, 4), floor=round(self.probed_floor, 4))
+            p = self.cmd_tcp()
+            self.move_tcp([p[0], p[1], self.probed_floor + SERVO_HEIGHTS[0]], speed=FREE_EE_SPEED)
+            return Result(False, f"a jaw came down on the brick ({1000 * (z - self.probed_floor):.0f} mm above the floor)")
         free_gap = float(r.get("free_gap_mm", 0.0)) / 1000.0  # measured - commanded in free air (sag: negative)
         self.log.ev("floor", previous=round(self.floor_tcp, 4), now=round(z, 4), shift_mm=round(1000 * (z - self.floor_tcp), 1))
         self.floor_tcp = z
