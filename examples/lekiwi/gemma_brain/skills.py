@@ -78,12 +78,14 @@ OPEN = 40.0
 # The last stage, 1.5 cm (tips just above the 13 mm brick's studs), was added after the
 # owner saw the jaws closing on the brick's end (runs 005149: after a blind descent from 3 cm
 # the brick sat ~0.05 of the frame lower than taught, along its length).
-SERVO_HEIGHTS = (0.10, 0.06, 0.03, 0.015)
+# 2 cm, not 1.5: with the tips 2 mm over the studs, a few mm of floor error at the brick
+# had the fixed jaw clip it on the way down and drag it (Oct 24 run 203916, green brick).
+SERVO_HEIGHTS = (0.10, 0.06, 0.03, 0.02)
 # Per-height tolerance (pixels): 10 cm is the coarse line-up, 3 cm sets the grasp.
 # 1.5 cm: 20 px, not 10: that close the jaws partly hide the brick and Gemma's box jitters by
 # 15-30 px frame to frame (Oct 24 run 170013 oscillated 15-29 px at 10); the along-length
 # check before closing does the fine placement.
-SERVO_TOL_PX = (20.0, 14.0, 12.0, 20.0)
+SERVO_TOL_PX = (20.0, 14.0, 12.0, 20.0)  # the last: across the jaws only (see centre)
 SERVO_GAIN_LAST = 0.5  # gentler at the last stage, so noisy boxes don't make it overshoot
 # At 6 cm and below, Gemma's box jumps more between looks (Oct 24: the 6 cm stage chased
 # 0.54 <-> 0.68 swings and diverged): gentler, smaller steps there, and a box that lands more
@@ -92,6 +94,14 @@ SERVO_LOW_HEIGHT_M = 0.065
 SERVO_GAIN_LOW = 0.5
 SERVO_MAX_STEP_LOW_M = 0.01
 SERVO_JUMP_PX = 35.0
+# Smaller steps than this don't move the arm (servo deadband: Oct 24 run 210758 sent six
+# 1.4 mm steps at 2 cm and the image didn't change), so low-stage steps are at least this.
+SERVO_MIN_STEP_M = 0.0025
+# At the low stages a brick that a jaw is pushing moves with the gripper: two moves in a row
+# that shift it less than SERVO_DRAG_RATIO of the predicted image motion (when that is over
+# SERVO_DRAG_MIN_PX) stop the centring, lifted clear, so the pick is retried.
+SERVO_DRAG_RATIO = 0.4
+SERVO_DRAG_MIN_PX = 15.0
 # A stage that may be skipped when the one above already ended within its tolerance.
 SKIPPABLE_HEIGHTS = (0.06,)
 # Speeds (m/s): moves well clear of the floor and the brick (the descents between centring
@@ -465,17 +475,21 @@ class Skills:
         last_err = None
         probed = False
         for i, h in enumerate(SERVO_HEIGHTS):
-            if h in SKIPPABLE_HEIGHTS and last_err is not None and last_err < SERVO_TOL_PX[i]:
-                self.log.ev("servo_skip", h=h, last_err_px=round(last_err, 1))
-                continue
             if i > 0 and not probed:
+                # The probe's trip away and back leaves the gripper a little off (Oct 24 run
+                # 204334: 139 px at 3 cm after skipping 6 cm), so the next stage always runs.
                 probed = True
                 r = self.probe_floor()
                 self.log.ev("step", name="probe_floor", ok=r.ok, reason=r.reason, data=r.data)
+                last_err = None
+            if h in SKIPPABLE_HEIGHTS and last_err is not None and last_err < SERVO_TOL_PX[i]:
+                self.log.ev("servo_skip", h=h, last_err_px=round(last_err, 1))
+                continue
             if i > 0:
                 p = self.cmd_tcp()
                 self.move_tcp([p[0], p[1], self.floor_tcp + h], speed=FREE_EE_SPEED)
             expect = None  # where the last correction should have put the brick in the image
+            prev_c, stuck = None, 0
             for it in range(SERVO_ITERS):
                 h_meas = self.height()
                 c = self.see_block(f"servo_h{int(h * 100)}_{it}", check_present=False)
@@ -489,21 +503,40 @@ class Skills:
                     self.log.ev("servo_recheck", first=c, second=c2, expected=expect)
                     if c2 is not None and np.linalg.norm(c2 - expect) < np.linalg.norm(c - expect):
                         c = c2
+                if prev_c is not None and h <= SERVO_LOW_HEIGHT_M:
+                    predicted = float(np.linalg.norm((expect - prev_c) * IMAGE_PX))
+                    moved = float(np.linalg.norm((c - prev_c) * IMAGE_PX))
+                    stuck = stuck + 1 if predicted > SERVO_DRAG_MIN_PX and moved < SERVO_DRAG_RATIO * predicted else 0
+                    if stuck >= 2:
+                        self.log.ev("servo_drag", h=h, predicted_px=round(predicted, 1), moved_px=round(moved, 1))
+                        p = self.cmd_tcp()
+                        self.move_tcp([p[0], p[1], self.floor_tcp + SERVO_HEIGHTS[0]], speed=FREE_EE_SPEED)
+                        return Result(False, f"the brick moved with the gripper at {100 * h:.0f} cm: a jaw was pushing it")
+                prev_c = c
                 target = grasp_pixel(h_meas)
                 e = target - c
+                last = i == len(SERVO_HEIGHTS) - 1
+                if last:
+                    # Across the jaws (image u) only: the along-length placement is the slide
+                    # before closing (center_along_length). Correcting v here slid the fixed
+                    # jaw along the brick's side and failed picks that were already in place
+                    # (Oct 24 runs 205433: u 0-9 px, v 15-31 px off; 210137).
+                    e = np.array([e[0], 0.0])
                 err_px = float(np.linalg.norm(e) * 640)
                 self.log.ev("servo", h=h_meas, center=c, target=target, err_px=round(err_px, 1))
                 last_err = err_px
                 if err_px < SERVO_TOL_PX[i]:
                     break
                 low = h <= SERVO_LOW_HEIGHT_M
-                gain = SERVO_GAIN_LAST if i == len(SERVO_HEIGHTS) - 1 else SERVO_GAIN_LOW if low else SERVO_GAIN
+                gain = SERVO_GAIN_LAST if last else SERVO_GAIN_LOW if low else SERVO_GAIN
                 j = jacobian(h_meas, self.roll)
                 d = gain * np.linalg.solve(j, e)
                 n = float(np.linalg.norm(d))
                 cap = SERVO_MAX_STEP_LOW_M if low else SERVO_MAX_STEP_M
                 if n > cap:
                     d *= cap / n
+                elif low and 0 < n < SERVO_MIN_STEP_M:
+                    d *= SERVO_MIN_STEP_M / n
                 expect = c + j @ d
                 p = self.cmd_tcp()
                 self.log.ev("servo_step", dxy=d)
@@ -554,12 +587,15 @@ class Skills:
         30 Hz tick), searching up to TOUCH_SEARCH_M below the start: no stored floor height is
         needed, so it works on a new floor. The height found becomes the session floor."""
         p = self.cmd_tcp()
+        self.log.ev("touch_start", tcp=[round(float(v), 4) for v in self.tcp()], cmd=[round(float(v), 4) for v in p], joints=self.arm.targets())
         goal = [p[0], p[1], p[2] - search]
         z_min = goal[2] - 0.015 - 0.005  # the Pi checks the jaw tips, 1.5 cm below the TCP
         wps, durs = plan_ee_line(self.arm.calib, self.arm.targets(), goal, PITCH, self.roll, TOUCH_SPEED, z_min=goal[2] - 0.002)
         res = self.robot.trajectory(wps, durs, z_min=z_min, contact_stop=True)
         r = res.get("result", {})
         self.log.ev("touch", **r)
+        st = self.robot.status()
+        self.log.ev("touch_end", tcp=[round(float(v), 4) for v in self.tcp()], cmd=[round(float(v), 4) for v in self.cmd_tcp()], joints=st["joints"])
         if not r.get("contact"):
             return Result(False, f"no floor within {100 * search:.0f} cm below the start")
         z = float(r["z_meas"])
@@ -572,7 +608,7 @@ class Skills:
         free_gap = float(r.get("free_gap_mm", 0.0)) / 1000.0  # measured - commanded in free air (sag: negative)
         self.log.ev("floor", previous=round(self.floor_tcp, 4), now=round(z, 4), shift_mm=round(1000 * (z - self.floor_tcp), 1))
         self.floor_tcp = z
-        return Result(True, data={"z": z, "z_cmd": z - free_gap, "how": r.get("how")})
+        return Result(True, data={"z": z, "z_cmd": z - free_gap, "how": r.get("how"), "start_xy": [float(p[0]), float(p[1])]})
 
     def center_along_length(self) -> None:
         """Just before closing: make sure part of the brick sticks out beyond the jaw tips
@@ -587,6 +623,13 @@ class Skills:
                 self.log.ev("along", ok=False, why="brick not boxed before closing")
                 return
             _, box, _ = got
+            if box[1] < 0.02 or box[0] < 0.01 or box[2] > 0.99:
+                # Not the brick: it is between the jaws, at the bottom of the frame or below
+                # it (the camera zooms in on the way down). Oct 24 run 210909: Gemma boxed the
+                # robot body in the top corner, "100% outside", and the slide took the jaws
+                # 12 mm off a brick that was already between them. Close where it is.
+                self.log.ev("along", k=k, ok=False, why="box at the top/side edge: not the brick", box=box)
+                return
             outside = float(np.clip((FIXED_JAW_TIP_V - box[1]) / BRICK_LEN_V, 0.0, 1.0))
             self.log.ev("along", k=k, box=box, outside=round(outside, 2))
             if OUTSIDE_MIN <= outside <= OUTSIDE_MAX or k == PRE_CLOSE_ALONG_TRIES:
@@ -1030,7 +1073,13 @@ class Skills:
         # 222825: +17 mm of command) lifted the jaws over the brick.
         goal = touch.data["z"] + GRASP_LIFT_M
         z_cmd = touch.data["z_cmd"] + GRASP_LIFT_M
+        # Back over where the centring left the brick: the "vertical" touch drifts ~8 mm
+        # forward on the way down (Oct 24 run 211223, both touches), enough for the jaws to
+        # miss the brick's end.
         p = self.cmd_tcp()
+        drift = np.array(touch.data["start_xy"]) - p[:2]
+        self.log.ev("touch_drift", dxy_mm=[round(1000 * float(v), 1) for v in drift])
+        p[:2] = touch.data["start_xy"]
         self.move_tcp([p[0], p[1], z_cmd], speed=0.008)
         time.sleep(0.3)
         z = float(self.tcp()[2])
