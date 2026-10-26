@@ -107,6 +107,7 @@ First-time setup of the Mac venv: `python3 -m venv .venv && .venv/bin/pip instal
 | `approach(object)` | face the best scan candidate, drive until it's in arm reach (front camera), confirm it with the wrist camera; on a wrong candidate, try the next |
 | `pick(object)` | approach, line the base up (wrist camera), roll the wrist (within ±90°) so the jaws close on the brick's long faces, centre at 10/(6)/3/1.5 cm, find the floor by touch (one descent the Pi stops itself on contact, so no stored floor height is needed), check about half the brick sticks out past the jaw tips, close, lift and check it's held |
 | `place_in(container)` | gripper 3 cm above the rim, line up over the opening (arm, then base), open gently, check the object landed inside |
+| `place_next_to(object)` | set the held object down on the floor 5 cm beside another object (line up over it with the wrist camera, shift sideways, lower until the held object meets the floor, open), then check the other object didn't move |
 | `reset_arm()` | fold to rest: one joint move when that sweep clears the floor and the robot body, else lift and go via "ready" |
 | `finish(success, summary)` | stop |
 
@@ -132,6 +133,15 @@ arm's reach in front of it, with every wheel command refused in the client:
 
 It prints the time of each phase. On Oct 24: 50.6 s and 53.0 s (was ~165 s for the same steps),
 about two thirds of it Gemma looking (~2.2 s per box) and ~14 s arm motion.
+
+## After moving the front camera
+
+`scan` and `approach` depend on where the front camera sits (which image row is the floor,
+when a brick is in reach, how far a turn moves it). After moving it, put one brick 0.6-1 m
+straight ahead with clear floor up to it and run `.venv/bin/python calibrate_front.py "red
+Lego brick"`: it turns a little, drives at the brick, lines it up under the arm with the
+wrist camera, fits the geometry and saves it in `calib.json` (`front_camera`), only if the
+fit is good. The scan also checks a box's colour against the colour word in the request.
 
 ## Other scripts
 

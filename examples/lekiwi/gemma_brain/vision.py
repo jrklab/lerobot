@@ -185,3 +185,33 @@ def snap_box(jpeg: bytes, box, min_chroma: float = 25.0) -> tuple[list[float], s
     if not 0.3 <= ratio <= 3.0:
         return list(box), f"blob {ratio:.1f}x the box"
     return [(X0 + sx) / w, (Y0 + sy) / h, (X0 + sx + sw) / w, (Y0 + sy + sh) / h], "snapped"
+
+
+# OpenCV hue (0-180) ranges of the colour words a goal can use for an object.
+HUES = {"red": [(0, 10), (165, 180)], "pink": [(150, 175)], "orange": [(10, 20)], "yellow": [(18, 30)],
+        "green": [(30, 90)], "blue": [(95, 130)], "purple": [(130, 150)]}
+
+
+def colour_matches(jpeg: bytes, box, what: str) -> tuple[bool, str]:
+    """Does the box hold the colour `what` names ("light green block" -> green)? The median
+    hue of its strongly coloured pixels (not the floor's) against HUES. With no colour word
+    in `what`, or too few coloured pixels to tell, it passes. Oct 25: asked for the light
+    green block, Gemma boxed the red one, and the kind-of-object check accepted it."""
+    words = [w for w in HUES if w in what.lower()]
+    if not words:
+        return True, "no colour named"
+    img = cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_COLOR)
+    h, w = img.shape[:2]
+    x0, y0, x1, y1 = box
+    roi = img[int(y0 * h) : max(int(y0 * h) + 1, int(y1 * h)), int(x0 * w) : max(int(x0 * w) + 1, int(x1 * w))]
+    hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+    sat = hsv[..., 1] > 80
+    if sat.sum() < 15:
+        return True, "too few coloured pixels to tell"
+    hue = float(np.median(hsv[..., 0][sat]))
+    # Red wraps around 0/180: take the median on the circle near 0 when most pixels are red.
+    reds = ((hsv[..., 0] < 10) | (hsv[..., 0] > 165))[sat].mean()
+    if reds > 0.5:
+        hue = 0.0
+    ok = any(lo <= hue <= hi for word in words for lo, hi in HUES[word])
+    return ok, f"hue {hue:.0f} for {'/'.join(words)}"

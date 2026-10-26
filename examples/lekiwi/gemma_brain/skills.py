@@ -45,7 +45,7 @@ from gemma import Gemma
 from arm import plan_ee_line
 from robot import Robot, RobotError
 import overhead
-from vision import brick_angle, crop_around, plausible_brick, snap_box
+from vision import brick_angle, colour_matches, crop_around, plausible_brick, snap_box
 
 CALIB = json.loads(Path(__file__).with_name("calib.json").read_text())
 FLOOR_TCP_Z = CALIB["floor_tcp_z_m"]["value"]
@@ -179,6 +179,22 @@ FRONT_FLOOR_V = 0.70
 # fitted to the red brick's 10 cm approach steps (Oct 23). For the log and Gemma, not control.
 RANGE_K = 0.043
 RANGE_HORIZON_V = 0.70
+RANGE_OFFSET_M = 0.0  # calibrate_front.py: K / (bottom - horizon) - this = distance beyond ABOVE_XY
+# The values above are for the first camera mount (Oct 23-24). After the camera is moved,
+# calibrate_front.py measures them again (calib.json "front_camera"), and those win.
+if "front_camera" in CALIB:
+    _fc = CALIB["front_camera"]["value"]
+    FRONT_U_PER_DEG, FRONT_U_TARGET = _fc["u_per_deg"], _fc["u_target"]
+    FRONT_FLOOR_V, RANGE_K, RANGE_HORIZON_V = _fc["floor_v"], _fc["range_k"], _fc["range_horizon_v"]
+    FRONT_NEAR_BOTTOM, FRONT_MID_BOTTOM = _fc["near_bottom"], _fc["mid_bottom"]
+    RANGE_OFFSET_M = _fc["range_offset_m"]
+
+
+def front_range(bottom: float) -> float:
+    """Rough distance (m) from the arm's base to where a box with this bottom row meets the
+    floor: the old fit read it directly; calibrate_front.py's is beyond the reach point."""
+    r = RANGE_K / max(0.005, bottom - RANGE_HORIZON_V)
+    return r - RANGE_OFFSET_M + ABOVE_XY[0] if "front_camera" in CALIB else r
 # Scan candidates are checked by asking E4B to classify a zoomed crop of the box among fixed
 # options (16/17 right on Oct 23 crops: real cups, a backpack, a power strip, cases, chair
 # legs; its yes/no and free descriptions were not usable). The object's category must win.
@@ -210,6 +226,14 @@ FRONT_GUESS_DEPTH_M = 0.04  # from where an object meets the floor (its near edg
 # Release by opening only this much past the held position: the moving jaw swings wide when
 # opened fully, and on Oct 23 (run 225755) it carried the brick out over the cup's rim.
 RELEASE_OPEN_BY = 12.0
+# place_next_to: line up over the reference object from NEXT_HOVER_M (jaw tips above the
+# floor), then set the held object down NEXT_OFFSET_M to its side (centre to centre: a 2x4
+# brick is 16 x 32 mm, the closed jaws ~32 mm across), lowering until the held object meets
+# the floor (contact stop), searching at most NEXT_HOVER_M + 1 cm.
+NEXT_HOVER_M = 0.08
+NEXT_OFFSET_M = 0.05
+NEXT_REF_HEIGHT_M = 0.011  # top of a brick on the floor: the plane the camera lines up on
+NEXT_MAX_REF_SHIFT = 0.04  # image fraction: the reference moved less than this = undisturbed
 
 
 @dataclass
@@ -629,7 +653,10 @@ class Skills:
         a = self.gemma.box(jpeg, f"the {what} on the floor")
         b = a.value
         ok = b is not None and b[3] > FRONT_FLOOR_V and b[0] > 0.01 and b[2] < 0.99
-        self.log.ev("front_box", tag=tag, what=what, box=b, accepted=ok, ms=round(a.ms))
+        why = ""
+        if ok:
+            ok, why = colour_matches(jpeg, b, what)
+        self.log.ev("front_box", tag=tag, what=what, box=b, accepted=ok, colour=why, ms=round(a.ms))
         if not ok:
             return None
         return np.array([(b[0] + b[2]) / 2, b[3]]), b
@@ -784,12 +811,15 @@ class Skills:
                 ok = b is not None and b[3] > FRONT_FLOOR_V and b[0] > 0.01 and b[2] < 0.99 and (b[2] - b[0]) < 0.6
                 cls = None
                 if ok:
+                    ok, why = colour_matches(jpeg, b, o)
+                    cls = None if ok else f"wrong colour ({why})"
+                if ok:
                     cls = self.classify(jpeg, b, o)
                     ok = cls == category(o)
                 if ok:
                     u = (b[0] + b[2]) / 2
                     bearing = head - (u - FRONT_U_TARGET) / FRONT_U_PER_DEG
-                    rng = RANGE_K / max(0.005, b[3] - RANGE_HORIZON_V)
+                    rng = front_range(b[3])
                     sightings[o].append({"bearing": bearing, "range_m": rng, "stop": k, "box": b})
                 self.log.ev("scan_box", k=k, heading=round(head, 1), what=o, box=b, cls=cls, accepted=ok, ms=round(a.ms))
         for o in objects:
@@ -1029,7 +1059,7 @@ class Skills:
         if got is None:
             return None
         (u, bottom), _ = got
-        rng = float(np.clip(RANGE_K / max(0.005, bottom - RANGE_HORIZON_V), 0.12, 0.40)) + FRONT_GUESS_DEPTH_M
+        rng = float(np.clip(front_range(bottom), 0.12, 0.40)) + FRONT_GUESS_DEPTH_M
         bearing = math.radians(-(u - FRONT_U_TARGET) / FRONT_U_PER_DEG)
         x = float(np.clip(rng * math.cos(bearing), 0.15, 0.27))
         y = float(np.clip(rng * math.sin(bearing), -0.18, 0.18))
@@ -1113,6 +1143,91 @@ class Skills:
             return Result(False, f"released the {held}, but it is not seen inside the {container}: it may have fallen outside",
                           {"brick_box": b.value, "container_box": cup_box})
         return Result(True, f"dropped the {held} into the {container}")
+
+    def place_next_to(self, ref: str) -> Result:
+        """Set the held object down on the floor next to `ref` (a small object on the floor,
+        in reach: run approach(ref) first), without touching `ref`. Lines up over ref with the
+        wrist camera from NEXT_HOVER_M, moves NEXT_OFFSET_M sideways (toward the robot's
+        centre line, else the other side), lowers until the held object meets the floor,
+        opens, lifts and checks that ref is where it was and the object is on the floor."""
+        held = getattr(self, "holding", None) or "object"
+        self.roll = DROP_ROLL_DEG
+        xy = ABOVE_XY if self.base_ok else (self.front_guess(ref) or ABOVE_XY)
+        z = self.floor_tcp + NEXT_HOVER_M
+        self.arm.move_direct([xy[0], xy[1], z], pitch_deg=PITCH, roll_deg=self.roll)
+        h = NEXT_HOVER_M - NEXT_REF_HEIGHT_M
+        err_px, c = float("inf"), None
+        for k in range(DROP_ITERS):
+            jpeg = self.wrist(f"next_{k}")
+            a = self.gemma.box(jpeg, f"the {ref} on the floor")
+            self.log.ev("next_box", k=k, box=a.value, ms=round(a.ms))
+            if a.value is None:
+                return Result(False, f"no {ref} in the wrist camera above it")
+            box, _ = snap_box(jpeg, a.value)
+            c = np.array([(box[0] + box[2]) / 2, (box[1] + box[3]) / 2])
+            target = grasp_pixel(h) + jacobian(h, 0.0)[:, 0] * GRASP_CLEAR_FIXED_JAW_M  # roll-free: under the jaws
+            d = np.linalg.solve(jacobian(h, self.roll), target - c)
+            err_px = float(np.linalg.norm((target - c) * IMAGE_PX))
+            self.log.ev("next_lineup", k=k, center=c, target=target, dxy=d, err_px=round(err_px, 1))
+            if err_px < DROP_TOL_PX:
+                break
+            if np.linalg.norm(d) <= ARM_REACH_M or not self.base_ok:
+                step = 0.8 * d
+                n = float(np.linalg.norm(step))
+                if n > DROP_ARM_STEP_M:
+                    step *= DROP_ARM_STEP_M / n
+                p = self.cmd_tcp()
+                self.move_tcp([p[0] + step[0], p[1] + step[1], p[2]], speed=SERVO_EE_SPEED, z_min=self.arm.z_min)
+            else:
+                d = np.clip(d, -0.15, 0.15)
+                res = self.robot.base(dx=float(d[0]), dy=float(d[1]))
+                self.log.ev("base", dxy=d, moved=res["result"].get("moved"))
+        else:
+            return Result(False, f"could not line up over the {ref} ({err_px:.0f} px off)")
+        over = self.cmd_tcp()
+        # Sideways (robot y) toward the centre line, so the arm stays in its comfortable reach.
+        first = -1.0 if over[1] > 0.0 else 1.0
+        for sign in (first, -first):
+            try:
+                self.move_tcp([over[0], over[1] + sign * NEXT_OFFSET_M, over[2]], speed=FREE_EE_SPEED, z_min=self.arm.z_min)
+                break
+            except PlanError as e:
+                if sign == -first:
+                    return Result(False, f"can't reach either side of the {ref}: {e}")
+        # Down until the held object meets the floor; the Pi stops the arm on contact.
+        p = self.cmd_tcp()
+        goal = [p[0], p[1], p[2] - (NEXT_HOVER_M + 0.01)]
+        wps, durs = plan_ee_line(self.arm.calib, self.arm.targets(), goal, PITCH, self.roll, TOUCH_SPEED, z_min=goal[2] - 0.002)
+        res = self.robot.trajectory(wps, durs, z_min=goal[2] - 0.02, contact_stop=True)
+        r = res.get("result", {})
+        self.log.ev("set_down", **r)
+        if not r.get("contact"):
+            return Result(False, f"the {held} never met the floor: still holding it")
+        g0 = self.robot.status()["joints"]["arm_gripper"]
+        g = self.robot.gripper(min(OPEN, g0 + RELEASE_OPEN_BY), speed=20)
+        self.log.ev("release", from_pos=round(g0, 1), **g["result"])
+        time.sleep(0.4)
+        p = self.cmd_tcp()
+        self.move_tcp([p[0], p[1], over[2]], speed=FREE_EE_SPEED, z_min=self.arm.z_min)
+        self.robot.gripper(OPEN, speed=40)
+        self.holding = None
+        # Back over the reference: it should be where it was in the image; the set-down object
+        # beside it.
+        self.move_tcp(over, speed=FREE_EE_SPEED, z_min=self.arm.z_min)
+        jpeg = self.wrist("next_check")
+        a = self.gemma.box(jpeg, f"the {ref} on the floor")
+        b = self.gemma.box(jpeg, f"the {held} on the floor")
+        ref_shift = None
+        if a.value is not None:
+            box, _ = snap_box(jpeg, a.value)
+            ref_shift = float(np.linalg.norm(np.array([(box[0] + box[2]) / 2, (box[1] + box[3]) / 2]) - c))
+        self.log.ev("next_check", ref_box=a.value, held_box=b.value, ref_shift=ref_shift)
+        if ref_shift is None or ref_shift > NEXT_MAX_REF_SHIFT:
+            return Result(False, f"set the {held} down, but the {ref} seems to have moved (or isn't seen)",
+                          {"ref_shift": ref_shift})
+        if b.value is None:
+            return Result(False, f"set the {held} down next to the {ref}, but can't see it there now")
+        return Result(True, f"put the {held} down next to the {ref}; the {ref} did not move")
 
 
 __all__ = ["Skills", "Log", "Result", "grasp_pixel", "jacobian"]

@@ -54,6 +54,7 @@ What the skills can do:
 - approach(object): turn toward the object found by the scan, drive until it is within arm's reach, and check up close with the wrist camera that it really is that object (if not, it tries the next place the scan saw it).
 - pick(object): go to a small object on the floor (like approach) and pick it up with the gripper. Only one object can be held at a time.
 - place_in(container): drop the held object into an open container on the floor that is within reach (approach the container first).
+- place_next_to(object): set the held object down on the floor right next to another object, without touching that object (approach that object first).
 - reset_arm(): fold the arm back to its rest pose. The skills already do this when they need to; use it only to recover from a failure.
 - finish(success, summary): stop. Call it when the goal is done, or when it cannot be done.
 
@@ -114,6 +115,18 @@ TOOLS = [
                 "type": "object",
                 "properties": {"container": {"type": "string"}},
                 "required": ["container"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "place_next_to",
+            "description": "Set the held object down on the floor next to another object within reach, without moving that object.",
+            "parameters": {
+                "type": "object",
+                "properties": {"object": {"type": "string"}},
+                "required": ["object"],
             },
         },
     },
@@ -190,6 +203,10 @@ class Brain:
             if not getattr(sk, "holding", None):
                 return Result(False, "not holding anything to place: pick the object up first")
             return sk.place_in(_text(args.get("container"), "container"))
+        if name == "place_next_to":
+            if not getattr(sk, "holding", None):
+                return Result(False, "not holding anything to place: pick the object up first")
+            return sk.place_next_to(_text(args.get("object"), "object"))
         if name == "reset_arm":
             sk.arm.reset()
             return Result(True, "arm at rest")

@@ -89,5 +89,22 @@
     "date": "2026-10-23",
     "log": "runs/20261023T172949-teach",
     "validity": "single teach; the block's long side along robot y (left-right)"
+  },
+  "front_camera": {
+    "value": {
+      "u_per_deg": 0.0162,
+      "u_target": 0.448,
+      "floor_v": 0.3,
+      "range_k": 0.0771,
+      "range_horizon_v": 0.28,
+      "range_offset_m": 0.205,
+      "near_bottom": 0.571,
+      "mid_bottom": 0.491
+    },
+    "meaning": "front-camera geometry for scan/approach (skills.FRONT_*, RANGE_*)",
+    "method": "calibrate_front.py: turn test, straight drive at a brick, wrist check at the reach point",
+    "date": "2026-10-25",
+    "log": "runs/20261025T131136-front-calib",
+    "fit_rms_m": 0.0059
   }
 }
