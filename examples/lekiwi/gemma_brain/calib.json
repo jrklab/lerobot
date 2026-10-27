@@ -136,25 +136,20 @@
   },
   "wrist_descent": {
     "value": {
-      "depth_m": 0.0652,
+      "depth_m": 0.1075,
       "p0": [
-        0.6049,
-        0.2716
+        0.5044,
+        0.1456
       ]
     },
     "unit": "depth: metres from the camera to the jaw tips along the descent; p0: wrist image fraction (u right, v down)",
     "meaning": "a floor point's image offset from p0 scales as 1 / (depth_m + h), h = jaw tips above the floor, TCP pointing down",
-    "method": "calibrate_descent.py over 225 logged straight descents: depth from box width ratios, p0 least squares on box edges",
-    "edge_residual_median_px": 21.0,
+    "method": "calibrate_descent.py over 31 logged straight descents: depth from box width ratios, p0 least squares on box edges",
+    "edge_residual_median_px": 13.4,
     "last_descent_right_edge_mm": [
-      -3.9,
-      -2.3,
-      -0.5,
-      2.0,
-      3.7,
-      5.5,
-      -5.6,
-      -2.8
+      4.2,
+      1.6,
+      -2.5
     ],
     "date": "2026-10-27"
   }
