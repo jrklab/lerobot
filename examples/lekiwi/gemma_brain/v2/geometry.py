@@ -74,7 +74,7 @@ class Geometry:
             floor_coef=coef,
             floor_points=len(pts),
             jac=np.array(jw["value"]),
-            jac_height=float(jw.get("height_m", 0.099)),
+            jac_height=float(jw["height_m"]),  # wrist_calib.py records it (Oct 27 on)
             cam_above_tips=float(calib["wrist_descent"]["value"]["depth_m"]),
             descent_p0=np.array(calib["wrist_descent"]["value"]["p0"]),
             fixed_jaw_inner_u=float(calib["wrist_jaws"]["value"]["fixed_inner_u"]),

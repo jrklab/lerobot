@@ -110,7 +110,7 @@ class Skills2:
         speed = speed or (prm.NEAR_SPEED_MPS.value if low else prm.FREE_SPEED_MPS.value)
         search = prm.LAND_SEARCH_M.value if until_contact else 0.0
         # Low moves get a guard just under them; the Pi checks the TCP, so the jaw tips' offset too.
-        z_min = (min(goal[2], p[2]) - search - JAW_TIP_OFFSET_M - 0.002) if low else None
+        z_min = (min(goal[2], p[2]) - search - JAW_TIP_OFFSET_M - prm.LOW_MOVE_GUARD_M.value) if low else None
         try:
             if until_contact:
                 wps, durs = plan_ee_line(self.arm.calib, self.arm.targets(), goal.tolist(), VERTICAL, roll, speed,
@@ -150,7 +150,8 @@ class Skills2:
                 return math.degrees(cal.to_rad(joint, norm))
 
             def joint_at(roll):
-                wps, _ = plan_ee_line(cal, dict(NAMED_POSES["ready"]), [0.22, 0.0, self.geom.floor(0.22, 0.0) + 0.1],
+                x = prm.REACH_POINT_X_M.value  # where the roll is used: over the reach point
+                wps, _ = plan_ee_line(cal, dict(NAMED_POSES["ready"]), [x, 0.0, self.geom.floor(x, 0.0) + prm.HOVER_HEIGHT_M.value],
                                       VERTICAL, roll, prm.FREE_SPEED_MPS.value, -1.0)
                 return deg(wps[-1][joint])
 
@@ -245,7 +246,7 @@ class Skills2:
             return Result(True, data=res)
         if how != "close":
             return Result(False, f"grip: 'open' or 'close', not {how!r}")
-        res = self.robot.gripper(0, speed=30).get("result", {})
+        res = self.robot.gripper(0, speed=prm.CLOSE_SPEED.value).get("result", {})
         held = self.held()
         self.ev("grip", how="close", held=held, **res)
         if not held:
