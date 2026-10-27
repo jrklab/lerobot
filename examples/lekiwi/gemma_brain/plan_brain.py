@@ -62,6 +62,7 @@ class PlanBrain:
         self.sk, self.planner, self.log, self.robot = sk, planner, log, robot
         self.holding = holding
         self.scanned: set[str] = set()
+        self.near_target = False  # the gripper is low beside a place target (see fold())
 
     def frames(self) -> tuple[bytes, bytes]:
         now = time.time()
@@ -115,11 +116,12 @@ class PlanBrain:
         return self.sk.place_in(target) if rel == "in" else self.sk.place_next_to(target)
 
     def fold(self) -> str:
-        """Fold the arm to rest after a failure. From low down, straight up to RESET_SAFE_Z_M
-        first, keeping the gripper's orientation: Arm.reset's fallback there tilts the gripper
-        and pulls it in while still low, and on Oct 26 that dragged the cup 10 cm toward the
-        robot. If straight up is refused, the arm stays where it is. Returns why it stayed,
-        or "" when folded."""
+        """Fold the arm to rest. From low down, straight up to RESET_SAFE_Z_M first, keeping
+        the gripper's orientation. When that's refused right after a place (self.near_target),
+        the arm stays where it is: Arm.reset's fallback tilts the gripper and pulls it in while
+        still low, and on Oct 26 that dragged the cup 10 cm toward the robot. Elsewhere (e.g.
+        after a pick, the wrist can't go straight up from 9 cm) it folds normally. Returns why
+        it stayed, or "" when folded."""
         arm = self.sk.arm
         try:
             p = arm.tcp()[:3, 3]
@@ -132,7 +134,7 @@ class PlanBrain:
                     # tilt-and-pull-in can't catch it: after a pick the arm is ~19 cm up and
                     # the wrist can't go straight up from there (Oct 26), while the cup was
                     # dragged with the jaws ~13 cm up.
-                    if self.sk.height() < FOLD_CLEAR_M:
+                    if self.near_target and self.sk.height() < FOLD_CLEAR_M:
                         self.log.ev("fold", ok=False, reason=str(e), height=round(self.sk.height(), 3))
                         return f"can't lift straight up from here ({e})"
             arm.reset()
@@ -179,6 +181,7 @@ class PlanBrain:
                                            "disconnecting, e.g. asleep after idling)") from e
                 r = Result(False, f"robot error: {e}")
             self.holding = getattr(self.sk, "holding", None)
+            self.near_target = s.verb == "place"
             self.log.ev("step_result", step=str(s), ok=r.ok, reason=r.reason, holding=self.holding)
             print(f"<<< {'OK' if r.ok else 'FAILED'}: {r.reason or 'done'}")
             if not r.ok and s.verb == "place" and held_before == s.obj and self.holding is None:

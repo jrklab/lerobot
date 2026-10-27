@@ -240,6 +240,15 @@ def test_fold_from_high_up_uses_the_normal_fold():
     assert sk.arm.moves == [("reset",)], sk.arm.moves
 
 
+def test_fold_after_a_pick_folds_even_when_low():
+    # Oct 26: after the 9 cm lift the wrist can't go straight up; not beside a place target,
+    # so the normal fold (with its tilt-and-pull-in fallback) is fine.
+    sk = FakeSkills(arm=FakePlanArm(z=-0.04))
+    b = brain(FakePlanner('pick "red block"'), sk)
+    ok, _ = b.run("pick red")
+    assert ok and b.fold() == "" and sk.arm.moves == [("reset",)], sk.arm.moves  # main() folds after run()
+
+
 def test_leaving_auto_mode_stops_without_replanning():
     class Dropped(FakeSkills):
         def fetch(self, what):
