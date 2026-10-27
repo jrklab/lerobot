@@ -57,6 +57,8 @@ class Geometry:
     fixed_jaw_inner_u: float
     fixed_jaw_tip_v: float
     sources: dict
+    front: dict = None  # calibrate_front.py: u_per_deg, u_target, near_bottom, ...
+    grasp_target: np.ndarray | None = None  # (u of the right edge, v of the middle) at the jaw tips' depth
 
     @classmethod
     def load(cls, calib_path: Path = HERE / "calib.json", touches_path: Path = HERE / "floor_touches.json") -> Geometry:
@@ -77,6 +79,8 @@ class Geometry:
             fixed_jaw_inner_u=float(calib["wrist_jaws"]["value"]["fixed_inner_u"]),
             fixed_jaw_tip_v=float(calib["wrist_jaws"]["value"]["fixed_tip_v"]),
             sources={k: {f: calib[k].get(f) for f in ("method", "date", "log") if f in calib[k]} for k in MAKERS},
+            front=dict(calib["front_camera"]["value"]),
+            grasp_target=np.array(calib["wrist_grasp_target"]["value"]) if "wrist_grasp_target" in calib else None,
         )
 
     def floor(self, x: float, y: float) -> float:
@@ -92,10 +96,29 @@ class Geometry:
         rot = np.array([[math.cos(a), -math.sin(a)], [math.sin(a), math.cos(a)]])
         return (rot @ (j * IMAGE_PX[:, None])) / IMAGE_PX[:, None]
 
+    def front_range(self, bottom_v: float) -> float:
+        """Distance of an object on the floor whose box bottom is at image row bottom_v in the
+        front camera (calibrate_front.py's model: k / (bottom - horizon) - offset), metres."""
+        f = self.front
+        return f["range_k"] / max(bottom_v - f["range_horizon_v"], 1e-3) - f["range_offset_m"]
+
+    def tips_to_top(self, point, height: float, object_height: float) -> np.ndarray:
+        """Where a point at the jaw tips' depth appears on the top face of an object
+        `object_height` tall, with the tips `height` above the floor: nearer the camera, so
+        further from descent_p0 (the top face is what the camera boxes)."""
+        s = self.cam_above_tips / (self.cam_above_tips + height - object_height)
+        return self.descent_p0 + (np.asarray(point, float) - self.descent_p0) * s
+
     def descend(self, point, h_from: float, h_to: float) -> np.ndarray:
         """Where a floor point seen at image `point` with the tips h_from up appears at h_to."""
         s = (self.cam_above_tips + h_from) / (self.cam_above_tips + h_to)
         return self.descent_p0 + (np.asarray(point, float) - self.descent_p0) * s
+
+
+def require_grasp_target(geom: Geometry) -> np.ndarray:
+    if geom.grasp_target is None:
+        raise MissingCalibrationError("calib.json has no 'wrist_grasp_target': record the owner's midpoint teach")
+    return geom.grasp_target
 
 
 def fit_floor(points: list[dict], fallback_z: float) -> np.ndarray:

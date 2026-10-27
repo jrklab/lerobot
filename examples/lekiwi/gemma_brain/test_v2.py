@@ -21,6 +21,7 @@ AutoController in the web_server simulation (as test_arm.py)."""
 import sys
 from pathlib import Path
 
+import cv2
 import numpy as np
 
 HERE = Path(__file__).resolve().parent
@@ -29,8 +30,9 @@ sys.path.insert(0, str(HERE.parent / "web_server"))
 from arm import Arm, Calibration  # noqa: E402
 from test_arm import SimRobot as _SimRobot  # noqa: E402
 from test_auto_control import Sim  # noqa: E402
-from v2 import actions, params as prm  # noqa: E402
+from v2 import actions, goals, params as prm  # noqa: E402
 from v2.geometry import Geometry, fit_floor  # noqa: E402
+from v2.goals import Detection  # noqa: E402
 from v2.skills import Skills2  # noqa: E402
 
 CAL = Calibration()
@@ -133,3 +135,137 @@ def test_actions_and_chains_hold_no_numbers():
         for node in ast.walk(ast.parse(path.read_text())):
             if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)) and not isinstance(node.value, bool):
                 assert node.value in (0, 1, 2, 1000), f"{name}:{node.lineno}: number {node.value} (put it in params.py with its source)"
+
+
+# --- find / servo / goals ---
+
+
+class FakeModel:
+    def __init__(self, boxes):
+        self.boxes, self.calls = list(boxes), 0
+
+    def box(self, jpeg, what):
+        from gemma import Answer
+
+        self.calls += 1
+        return Answer(text="", value=self.boxes.pop(0) if self.boxes else None)
+
+
+def red_frame(box):
+    img = np.full((480, 640, 3), 170, np.uint8)
+    x0, y0, x1, y1 = (int(v * s) for v, s in zip(box, (640, 480, 640, 480), strict=True))
+    cv2.rectangle(img, (x0, y0), (x1, y1), (30, 30, 220), -1)
+    return cv2.imencode(".jpg", img)[1].tobytes()
+
+
+class FrameRobot:
+    def __init__(self, jpeg):
+        self.jpeg = jpeg
+
+    def frame(self, cam, after=0.0):
+        return self.jpeg, after
+
+
+def finder(jpeg, main, fast):
+    sk = Skills2.__new__(Skills2)
+    sk.robot, sk.log, sk.main, sk.fast, sk.seen = FrameRobot(jpeg), None, main, fast, {}
+    return sk
+
+
+def test_find_uses_the_fast_model_only_when_tracking_and_checks_its_colour(monkeypatch):
+    box = [0.40, 0.40, 0.50, 0.55]
+    jpeg = red_frame(box)
+    main, fast = FakeModel([box, box]), FakeModel([[0.05, 0.05, 0.15, 0.15], box])
+    sk = finder(jpeg, main, fast)
+    import v2.skills as skills_v2
+
+    monkeypatch.setattr(skills_v2.time, "sleep", lambda s: None)
+    assert sk.find("red block") is not None and (main.calls, fast.calls) == (1, 0)  # first sight: main
+    d = sk.find("red block")  # tracking: fast boxed grey floor -> rejected by colour -> main
+    assert d is not None and d.by == "main" and (main.calls, fast.calls) == (2, 1)
+    d = sk.find("red block")  # tracking: fast boxed the brick
+    assert d is not None and d.by == "fast"
+
+
+class SimServo:
+    """A world for servo(): the object's image point responds to arm moves through a TRUE
+    Jacobian, which may differ from the calibrated one the goal uses."""
+
+    def __init__(self, geom, start_err, true_scale=1.0, height=0.03):
+        self.geom, self.roll, self.h, self.true_scale = geom, 0.0, height, true_scale
+        self.goal = goals.JawGoal()
+        self.point = self.goal.target(self, height) - np.asarray(start_err, float)
+        self.moves = 0
+
+    def height(self):
+        return self.h
+
+    def find(self, obj, cam, angle=False):
+        u, v = self.point
+        return Detection(box=[u - 0.08, v - 0.1, u, v + 0.1])
+
+    def move(self, part, delta=None, roll=None, **kw):
+        j = self.goal._jac(self, self.h) * self.true_scale
+        self.point = self.point + j @ np.asarray(delta[:2], float)  # the object, seen from the moving camera
+        self.moves += 1
+        from v2.skills import Result
+
+        return Result(True)
+
+    def ev(self, *a, **k):
+        pass
+
+    servo = Skills2.servo
+
+
+def jaw_geom():
+    g = geom(-0.11)
+    g.grasp_target = np.array([0.55, 0.80])
+    return g
+
+
+def test_servo_converges_and_stays_in_view():
+    sim = SimServo(jaw_geom(), start_err=[0.15, -0.12])
+    r = sim.servo("red block", sim.goal)
+    assert r.ok, r
+    assert sim.goal.done(sim.goal.error(sim.find("", ""), sim), sim)
+
+
+def test_servo_converges_with_a_30_percent_wrong_jacobian():
+    sim = SimServo(jaw_geom(), start_err=[0.10, 0.08], true_scale=1.3)
+    assert sim.servo("red block", sim.goal).ok
+
+
+def test_jaw_goal_needs_the_midpoint_teach():
+    import pytest
+    from v2.geometry import MissingCalibrationError
+
+    sim = SimServo.__new__(SimServo)
+    sim.geom, sim.roll, sim.h = geom(-0.11), 0.0, 0.03
+    with pytest.raises(MissingCalibrationError):
+        goals.JawGoal().target(sim, 0.03)
+
+
+def test_angle_goal_rolls_within_the_range_using_the_brick_symmetry():
+    class S:
+        roll, roll_range = 0.0, (-144.0, 14.0)
+
+    g = goals.AngleGoal()
+    # needs +30 or -150: neither fits -144..14; -150 is nearer its end
+    assert g.step(np.array([30.0]), S())["roll"] == -144.0
+    assert g.step(np.array([-40.0]), S())["roll"] == -40.0
+    assert g.done(np.array([10.0]), S()) and not g.done(np.array([20.0]), S())
+
+
+def test_front_approach_turns_before_it_drives():
+    class S:
+        geom = geom(-0.11)
+
+    S.geom.front = {"u_per_deg": 0.0184, "u_target": 0.451, "near_bottom": 0.699, "range_k": 0.0583,
+                    "range_horizon_v": 0.335, "range_offset_m": 0.1}
+    g = goals.FrontApproachGoal()
+    turn = g.step(g.error(Detection(box=[0.6, 0.4, 0.7, 0.5]), S()), S())
+    # right of the target column: turn right (negative), since a left turn moves it right
+    assert "roll" in turn and turn["roll"] < 0
+    drive = g.step(g.error(Detection(box=[0.40, 0.4, 0.50, 0.5]), S()), S())
+    assert "delta" in drive and drive["delta"][0] > 0

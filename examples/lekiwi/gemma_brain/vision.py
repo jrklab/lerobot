@@ -290,3 +290,14 @@ def _hue_matches(hsv: np.ndarray, words: list[str]) -> tuple[bool, str]:
         hue = 0.0
     ok = any(lo <= hue <= hi for word in words for lo, hi in HUES[word])
     return ok, f"hue {hue:.0f} for {'/'.join(words)}"
+
+
+def measured_angle_of(jpeg: bytes, box, what: str = "") -> tuple[float | None, str]:
+    """The object's long-side angle from image vertical and how it was measured, or (None,
+    "unmeasured") when the colour blob isn't brick-shaped: v2 doesn't fall back to a guess (v1's
+    box-shape fallback said 0 deg for bricks 15-22 deg off, Oct 27)."""
+    m = brick_angle(jpeg, box, what=what)
+    if m is not None and 0.4 <= m["fill"] <= 1.15 and m["aspect"] >= 1.4:
+        return m["angle_deg"], "fit"
+    return None, "unmeasured"
+
