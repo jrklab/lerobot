@@ -43,7 +43,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from arm import JAW_TIP_OFFSET_M, Arm, PlanError
+from arm import JAW_TIP_OFFSET_M, NAMED_POSES, Arm, PlanError
 from gemma import Gemma
 from arm import plan_ee_line
 from robot import Robot, RobotError
@@ -78,13 +78,16 @@ PITCH = 90.0
 # a brick up, so that's enough.
 ROLL_TOL_DEG = 12.0
 ROLL_TRIES = 2
-# The skills' roll range, owner's choice (2026-10-24): a 180 deg span, so with the brick's
-# 180 deg symmetry every orientation is reachable by the wrist alone. 0 grips a brick whose
-# long side runs left-right (the taught grasp), -90 one whose long side points at the robot
-# (joint ~+89 deg; at rest the joint is +79), +90 the same from the other side (joint ~-84).
-# Corrections after the first roll may go ROLL_OVERSHOOT_DEG past the ends rather than flip
-# the wrist 180 deg; only a need beyond that turns the base.
-ROLL_MIN_DEG, ROLL_MAX_DEG = -90.0, 90.0
+# The roll range, owner's rule (2026-10-27): the wrist-roll joint within its rest position
+# +/-ROLL_FROM_REST_DEG, and ROLL_OVERSHOOT_DEG inside the motor's calibrated range. Rest
+# (+79 deg) is not the motor's midpoint, so this is not roll -90..+90 (the Oct 24 range,
+# which at +90 turned the joint to -84 deg, 163 deg from rest, and the 3 cm look after the
+# descent found the brick far from where the model put it: run 20261027T014954). Roll r
+# turns the joint by about -r (roll 0 ~ joint +3 deg, -90 ~ +90), so the range is about
+# roll -144..+14; roll_range() works it out from the calibration. Corrections after the first
+# roll may go ROLL_OVERSHOOT_DEG past the ends rather than flip the wrist 180 deg; only a need
+# beyond that turns the base.
+ROLL_FROM_REST_DEG = 90.0
 ROLL_OVERSHOOT_DEG = 10.0
 BASE_TURN_MARGIN_DEG = 10.0
 IMAGE_PX = np.array([640.0, 480.0])
@@ -355,6 +358,28 @@ def grasp_goal(height: float) -> np.ndarray:
     return descend(at_grasp, GRASP_LIFT_M, height)
 
 
+def roll_range(calib) -> tuple[float, float]:
+    """(min, max) skills roll keeping the wrist-roll joint within ROLL_FROM_REST_DEG of its
+    rest position and ROLL_OVERSHOOT_DEG inside its calibrated range, from where the joint
+    lands for rolls 0 and -90 over a brick straight ahead."""
+    joint = "arm_wrist_roll"
+
+    def deg(norm: float) -> float:
+        return math.degrees(calib.to_rad(joint, norm))
+
+    def joint_at(roll: float) -> float:
+        wps, _ = plan_ee_line(calib, dict(NAMED_POSES["ready"]), [0.2, 0.0, -0.10], PITCH, roll, 0.04, -1.0)
+        return deg(wps[-1][joint])
+
+    j0 = joint_at(0.0)
+    slope = (joint_at(-90.0) - j0) / -90.0  # joint degrees per degree of roll (about -1)
+    rest = deg(NAMED_POSES["rest"][joint])
+    lo, hi = sorted((deg(-100.0), deg(100.0)))
+    jmin = max(rest - ROLL_FROM_REST_DEG, lo + ROLL_OVERSHOOT_DEG)
+    jmax = min(rest + ROLL_FROM_REST_DEG, hi - ROLL_OVERSHOOT_DEG)
+    return tuple(sorted(((jmin - j0) / slope, (jmax - j0) / slope)))
+
+
 def jacobian(height: float, roll_deg: float = 0.0) -> np.ndarray:
     """d(image u, v)/d(TCP x, y) at this height and wrist roll: the roll-0 measurement,
     scaled for height and rotated (in pixel units: the image isn't square) by the image's
@@ -405,6 +430,7 @@ class Skills:
         # llama.cpp); None: every look asks `gemma`.
         self.fast = fast
         self.roll = 0.0  # current wrist roll target for top-down moves
+        self.roll_min, self.roll_max = roll_range(arm.calib)
         self.target = DEFAULT_TARGET  # what pick() is after, as Gemma will be asked for it
         # The floor under the gripper (TCP z when the closed jaws touch it): predicted where the
         # gripper is about to work (floor_at), and set from each floor touch.
@@ -506,7 +532,7 @@ class Skills:
         16 mm width: the most pad contact; the owner's rule, and the taught grasp), i.e. its
         long side vertical in the image. Image angle changes by -roll (roll test, Oct 23), and
         the brick looks the same every 180 deg, so the roll needed is the measured angle, or
-        that minus 180. Rolls stay in ROLL_MIN_DEG..ROLL_MAX_DEG; when neither fits, the
+        that minus 180. Rolls stay in roll_min..roll_max (roll_range); when neither fits, the
         result asks for a base turn ("base_turn_deg"): the camera turns with the base, a turn
         of b changing the image angle by +b (left positive), which moves the need back in range.
         Gripping across the 32 mm length (to roll less) was tried and missed (run 002847)."""
@@ -521,13 +547,14 @@ class Skills:
                 return Result(True, data={"roll": self.roll, "residual_deg": ang})
             options = [self.roll + ang, self.roll + ang - 180.0, self.roll + ang + 180.0]
             slack = ROLL_OVERSHOOT_DEG if k > 0 else 0.0
-            fits = [r for r in options if ROLL_MIN_DEG - slack <= r <= ROLL_MAX_DEG + slack]
+            lo, hi = self.roll_min, self.roll_max
+            fits = [r for r in options if lo - slack <= r <= hi + slack]
             if not fits:
                 # A base turn of b adds b to the needed roll: turn so the nearest option lands
                 # BASE_TURN_MARGIN_DEG inside the range (room for the angle's +/-5-15 deg noise).
-                near = min(options, key=lambda r: min(abs(r - ROLL_MIN_DEG), abs(r - ROLL_MAX_DEG)))
-                excess = (near - ROLL_MAX_DEG + BASE_TURN_MARGIN_DEG) if near > ROLL_MAX_DEG else (near - ROLL_MIN_DEG - BASE_TURN_MARGIN_DEG)
-                return Result(False, f"the brick needs a {near:+.0f} deg roll, outside {ROLL_MIN_DEG:+.0f}..{ROLL_MAX_DEG:+.0f}",
+                near = min(options, key=lambda r: min(abs(r - lo), abs(r - hi)))
+                excess = (near - hi + BASE_TURN_MARGIN_DEG) if near > hi else (near - lo - BASE_TURN_MARGIN_DEG)
+                return Result(False, f"the brick needs a {near:+.0f} deg roll, outside {lo:+.0f}..{hi:+.0f}",
                               {"base_turn_deg": -excess})
             new = min(fits, key=lambda r: abs(r - self.roll))
             p = self.cmd_tcp()

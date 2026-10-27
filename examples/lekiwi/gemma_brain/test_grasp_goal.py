@@ -43,3 +43,14 @@ def test_goal_point_remembers_brick_length_only_when_whole():
     sk.brick_len_v = None
     sk._goal_point([0.4, 0.6, 0.5, 1.0], 0.03)
     assert sk.brick_len_v is None
+
+
+def test_roll_range_is_centred_on_the_rest_joint_angle():
+    import arm
+
+    calib = arm.Calibration()  # no calibration: units map linearly to +/-180 deg
+    lo, hi = skills.roll_range(calib)
+    assert hi - lo <= 2 * skills.ROLL_FROM_REST_DEG + 1
+    # the drop's roll is the rest pose's wrist angle: inside the range, near its middle
+    assert lo < skills.DROP_ROLL_DEG < hi
+    assert abs((lo + hi) / 2 - skills.DROP_ROLL_DEG) < 20
