@@ -54,9 +54,20 @@ CALIB = json.loads(Path(__file__).with_name("calib.json").read_text())
 FLOOR_TCP_Z = CALIB["floor_tcp_z_m"]["value"]
 J_WRIST = np.array(CALIB["wrist_image_jacobian"]["value"])  # d(u, v) / d(x, y), at J_HEIGHT
 J_HEIGHT = 0.099
-# Approximate camera distance above the jaw tips along the approach axis: pixel motion per
-# metre scales as 1 / (height + this). A guess (the servo's gain absorbs the error).
-CAM_ABOVE_TIPS_M = 0.06
+# Camera distance above the jaw tips along the descent: pixel motion per metre scales as
+# 1 / (height + this). Fitted from how much the brick's box grows on logged descents
+# (calibrate_descent.py: 0.065 m; the earlier guess was 0.06). A floor point's image offset
+# from DESCENT_P0, the point a straight descent heads for, scales the same way.
+CAM_ABOVE_TIPS_M = CALIB["wrist_descent"]["value"]["depth_m"]
+DESCENT_P0 = np.array(CALIB["wrist_descent"]["value"]["p0"])
+# The fixed jaw in the wrist image, the same in every frame (calibrate_jaws.py).
+FIXED_JAW_INNER_U = CALIB["wrist_jaws"]["value"]["fixed_inner_u"]
+FIXED_JAW_TIP_V = CALIB["wrist_jaws"]["value"]["fixed_tip_v"]
+# Room left between the fixed jaw and the brick's side when aiming the grasp: the median
+# sideways scatter of the last descent (3 cm look -> just before closing) against the descent
+# model, from the logged picks (calibrate_descent.py). A brick landing within it of the aim
+# still leaves the jaw beside it; the larger misses are for the check before closing.
+GRASP_MARGIN_M = float(np.median(np.abs(CALIB["wrist_descent"]["last_descent_right_edge_mm"]))) / 1000
 GRASP_PIXEL = [(p["height_m"], np.array(p["center"])) for p in CALIB["wrist_grasp_pixel"]["value"]]
 
 PITCH = 90.0
@@ -142,11 +153,9 @@ PRE_CLOSE_MAX_FIX_M = 0.003
 # OUTSIDE_AIM, accept OUTSIDE_MIN..OUTSIDE_MAX, else slide the gripper along the brick's
 # length by at most PRE_CLOSE_ALONG_MAX_M per try. Half outside = the jaws close on the
 # brick's middle (owner, Oct 27: grab the middle; the demo's deeper 0.26 is not a target).
-# The fixed jaw is rigid with the camera, so its tip is always on the same image row
-# (0.769 in 4 of 5 frames, Oct 23-24; the moving jaw's tip shows lower when open). The
-# brick's full length at grasp height is BRICK_LEN_V (teach frame): its box is often cut
-# off by the image bottom, so the outside share is measured against this, not the box.
-FIXED_JAW_TIP_V = 0.769
+# The brick's box is often cut off by the image bottom just before closing, so the outside
+# share is measured against its length seen at the last servo look, scaled down to grasp
+# height; BRICK_LEN_V (teach frame) when that look didn't show all of it.
 BRICK_LEN_V = 0.30
 OUTSIDE_AIM, OUTSIDE_MIN, OUTSIDE_MAX = 0.5, 0.35, 0.65
 PRE_CLOSE_ALONG_MAX_M = 0.006
@@ -328,6 +337,24 @@ def grasp_pixel(height: float, extra_clear_m: float = 0.0) -> np.ndarray:
     return taught - jacobian(height, 0.0)[:, 0] * (GRASP_CLEAR_FIXED_JAW_M + extra_clear_m)
 
 
+def descend(point, h_from: float, h_to: float) -> np.ndarray:
+    """Where a floor point seen at image `point` with the jaw tips h_from above the floor
+    appears after a straight descent (or rise) to h_to."""
+    s = (CAM_ABOVE_TIPS_M + h_from) / (CAM_ABOVE_TIPS_M + h_to)
+    return DESCENT_P0 + (np.asarray(point, float) - DESCENT_P0) * s
+
+
+def grasp_goal(height: float) -> np.ndarray:
+    """(u of the brick's right edge, v of its centre) in the wrist image at this gripper
+    height, such that a straight descent to the grasp leaves its right side GRASP_MARGIN_M
+    from the fixed jaw's inner edge and its middle on the jaw tips' row (half the brick
+    beyond the tips: the owner's "grab the middle"). Goals come from the measured jaw and
+    the descent model, not from a taught brick, so they hold for any brick size."""
+    u_per_m = float(np.linalg.norm(jacobian(GRASP_LIFT_M)[0]))
+    at_grasp = np.array([FIXED_JAW_INNER_U - GRASP_MARGIN_M * u_per_m, FIXED_JAW_TIP_V])
+    return descend(at_grasp, GRASP_LIFT_M, height)
+
+
 def jacobian(height: float, roll_deg: float = 0.0) -> np.ndarray:
     """d(image u, v)/d(TCP x, y) at this height and wrist roll: the roll-0 measurement,
     scaled for height and rotated (in pixel units: the image isn't square) by the image's
@@ -383,6 +410,7 @@ class Skills:
         # gripper is about to work (floor_at), and set from each floor touch.
         self.floor_tcp = FLOOR_TCP_Z
         self.predicted_floor = None  # floor_at() for this grasp, the on-brick test's reference
+        self.brick_len_v = None  # brick length in the image at grasp height, from the last servo look
         # The base can be locked (robot.base_enabled False): then the arm alone lines up.
         self.base_ok = getattr(robot, "base_enabled", True)
         # False: scan never turns the robot around; without the overhead camera it takes one
@@ -466,6 +494,7 @@ class Skills:
         self.roll = 0.0
         # One clearance-checked joint move from wherever the arm is (usually rest); it used to
         # go rest -> "ready" -> a straight line down, ~18 s.
+        self.brick_len_v = None
         self.floor_tcp = self.predicted_floor = floor_at(xy[0], xy[1], self.floor_tcp)
         self.arm.move_direct([xy[0], xy[1], self.floor_tcp + height], pitch_deg=PITCH, roll_deg=0.0)
         g = self.robot.gripper(OPEN)
@@ -526,7 +555,8 @@ class Skills:
         return self.centre()
 
     def centre(self) -> Result:
-        """Servo the block onto the grasp pixel at each SERVO_HEIGHTS, going down between."""
+        """Servo the brick onto grasp_goal at each SERVO_HEIGHTS, going down between: its
+        right edge (the fixed jaw's side) and the centre row, not its box centre."""
         r = self.align_roll()
         self.log.ev("step", name="roll", ok=r.ok, reason=r.reason, data=r.data)
         if not r.ok:
@@ -548,14 +578,16 @@ class Skills:
             prev_c, stuck = None, 0
             for it in range(SERVO_ITERS):
                 h_meas = self.height()
-                c = self.see_block(f"servo_h{int(h * 100)}_{it}", check_present=False)
-                if c is None:
+                got = self.see_block(f"servo_h{int(h * 100)}_{it}", check_present=False, want_box=True)
+                if got is None:
                     return Result(False, f"no brick in view at {100 * h:.0f} cm")
+                c = self._goal_point(got[1], h_meas)
                 if expect is not None and np.linalg.norm((c - expect) * IMAGE_PX) > SERVO_JUMP_PX:
                     # Gemma's box jumped far from where the move should have put it (Oct 24:
                     # 0.54 <-> 0.68 of the frame between looks, the arm a few mm): ask once more
                     # and keep the box closer to the expectation.
-                    c2 = self.see_block(f"servo_h{int(h * 100)}_{it}_recheck", check_present=False)
+                    got2 = self.see_block(f"servo_h{int(h * 100)}_{it}_recheck", check_present=False, want_box=True)
+                    c2 = self._goal_point(got2[1], h_meas) if got2 is not None else None
                     self.log.ev("servo_recheck", first=c, second=c2, expected=expect)
                     if c2 is not None and np.linalg.norm(c2 - expect) < np.linalg.norm(c - expect):
                         c = c2
@@ -569,7 +601,7 @@ class Skills:
                         self.move_tcp([p[0], p[1], self.floor_tcp + SERVO_HEIGHTS[0]], speed=FREE_EE_SPEED)
                         return Result(False, f"the brick moved with the gripper at {100 * h:.0f} cm: a jaw was pushing it")
                 prev_c = c
-                target = grasp_pixel(h_meas)
+                target = grasp_goal(h_meas)
                 e = target - c
                 last = h < ACROSS_ONLY_BELOW_M
                 if last:
@@ -579,7 +611,7 @@ class Skills:
                     # (Oct 24 runs 205433: u 0-9 px, v 15-31 px off; 210137).
                     e = np.array([e[0], 0.0])
                 err_px = float(np.linalg.norm(e) * 640)
-                self.log.ev("servo", h=h_meas, center=c, target=target, err_px=round(err_px, 1))
+                self.log.ev("servo", h=h_meas, center=c, target=target, err_px=round(err_px, 1), goal="edge")
                 last_err = err_px
                 if err_px < SERVO_TOL_PX[i]:
                     break
@@ -600,6 +632,15 @@ class Skills:
             else:
                 return Result(False, f"did not converge at {100 * h:.0f} cm ({err_px:.0f} px off)")
         return Result(True)
+
+    def _goal_point(self, box, h: float) -> np.ndarray:
+        """(right edge u, centre v) of the brick's box: what grasp_goal aims. When the box
+        shows the brick's whole length, remember that length scaled to grasp height, for the
+        along-length check before closing."""
+        x0, y0, x1, y1 = box
+        if y0 > 0.01 and y1 < 0.99:
+            self.brick_len_v = (y1 - y0) * (CAM_ABOVE_TIPS_M + h) / (CAM_ABOVE_TIPS_M + GRASP_LIFT_M)
+        return np.array([x1, (y0 + y1) / 2])
 
     def touch_floor(self, search: float = TOUCH_SEARCH_M) -> Result:
         """One straight descent the Pi stops itself where the jaws meet the floor (a
@@ -651,12 +692,13 @@ class Skills:
                 # 12 mm off a brick that was already between them. Close where it is.
                 self.log.ev("along", k=k, ok=False, why="box at the top/side edge: not the brick", box=box)
                 return
-            outside = float(np.clip((FIXED_JAW_TIP_V - box[1]) / BRICK_LEN_V, 0.0, 1.0))
-            self.log.ev("along", k=k, box=box, outside=round(outside, 2))
+            length = self.brick_len_v or BRICK_LEN_V
+            outside = float(np.clip((FIXED_JAW_TIP_V - box[1]) / length, 0.0, 1.0))
+            self.log.ev("along", k=k, box=box, outside=round(outside, 2), length_v=round(length, 3))
             if OUTSIDE_MIN <= outside <= OUTSIDE_MAX or k == PRE_CLOSE_ALONG_TRIES:
                 return
             # More outside = the brick higher in the image (smaller v).
-            ev = -(OUTSIDE_AIM - outside) * BRICK_LEN_V
+            ev = -(OUTSIDE_AIM - outside) * length
             h = max(self.height(), 0.0)
             j = jacobian(h, self.roll)
             # The TCP move whose image motion is (0, ev): along the brick's length only.
