@@ -61,13 +61,6 @@ DESCENT_P0 = np.array(CALIB["wrist_descent"]["value"]["p0"])
 # The fixed jaw in the wrist image, the same in every frame (calibrate_jaws.py).
 FIXED_JAW_INNER_U = CALIB["wrist_jaws"]["value"]["fixed_inner_u"]
 FIXED_JAW_TIP_V = CALIB["wrist_jaws"]["value"]["fixed_tip_v"]
-# The fixed jaw's black rubber pad, rows in the wrist image (calibrate_jaws.py: 257 frames).
-# The grasp puts the brick's middle on the pad's middle (owner, Oct 27: "the brick's middle at
-# the middle of the jaw pads"; aimed at the tip row, the pads closed on its end and squeezed
-# it out past the tips, run 20261027T025331).
-PAD_TOP_V = CALIB["wrist_jaws"]["value"]["pad_top_v"]
-PAD_BOTTOM_V = CALIB["wrist_jaws"]["value"]["pad_bottom_v"]
-PAD_MID_V = (PAD_TOP_V + PAD_BOTTOM_V) / 2
 # Room left between the fixed jaw and the brick's side when aiming the grasp: the median
 # sideways scatter of the last descent (3 cm look -> just before closing) against the descent
 # model, from the logged picks (calibrate_descent.py). A brick landing within it of the aim
@@ -169,12 +162,15 @@ FLOOR_FIT_MIN_POINTS = 8
 ON_BRICK_M = 0.010
 GRASP_LIFT_M = 0.004  # jaw tips this far above the floor when closing (block body is 11.4 mm)
 PRE_CLOSE_MAX_FIX_M = 0.003
-# Just before closing, the brick's middle (at the jaw tips' depth) must lie on the pad
-# (PAD_TOP_V..PAD_BOTTOM_V), else slide the gripper along the brick's length towards
-# PAD_MID_V by at most PRE_CLOSE_ALONG_MAX_M per try. The box is often cut off by the image
-# bottom there, so the middle is its top edge plus the length seen at the last servo look;
-# BRICK_LEN_V (the Oct 23 teach frame, at the tips' depth) when no look showed all of it.
-BRICK_LEN_V = 0.32
+# Just before closing, the share of the brick's length beyond the jaw tips: aim for
+# OUTSIDE_AIM, accept OUTSIDE_MIN..OUTSIDE_MAX, else slide the gripper along the brick's
+# length by at most PRE_CLOSE_ALONG_MAX_M per try. Half outside = the jaws close on the
+# brick's middle (owner, Oct 27: grab the middle; the demo's deeper 0.26 is not a target).
+# The brick's box is often cut off by the image bottom just before closing, so the outside
+# share is measured against its length seen at the last servo look, scaled down to grasp
+# height; BRICK_LEN_V (teach frame) when that look didn't show all of it.
+BRICK_LEN_V = 0.30
+OUTSIDE_AIM, OUTSIDE_MIN, OUTSIDE_MAX = 0.5, 0.35, 0.65
 PRE_CLOSE_ALONG_MAX_M = 0.006
 PRE_CLOSE_ALONG_TRIES = 2
 # 6 mm until Oct 26, when the owner saw an ~8 mm gap at the close (and picks missed with the
@@ -361,31 +357,16 @@ def descend(point, h_from: float, h_to: float) -> np.ndarray:
     return DESCENT_P0 + (np.asarray(point, float) - DESCENT_P0) * s
 
 
-def top_to_tips(point, height: float) -> np.ndarray:
-    """Where a point of the brick's top face, seen at image `point` with the jaw tips
-    `height` above the floor, would appear at the tips' own depth (same spot, BRICK_HEIGHT_M
-    lower than the face when the tips are at the floor): the box Gemma gives is the top face,
-    nearer the camera, so it looks shifted away from DESCENT_P0."""
-    s = (CAM_ABOVE_TIPS_M + height - BRICK_HEIGHT_M) / CAM_ABOVE_TIPS_M
-    return DESCENT_P0 + (np.asarray(point, float) - DESCENT_P0) * s
-
-
-def tips_to_top(point, height: float) -> np.ndarray:
-    """The inverse of top_to_tips."""
-    s = CAM_ABOVE_TIPS_M / (CAM_ABOVE_TIPS_M + height - BRICK_HEIGHT_M)
-    return DESCENT_P0 + (np.asarray(point, float) - DESCENT_P0) * s
-
-
 def grasp_goal(height: float, shift_m: float = 0.0) -> np.ndarray:
-    """(u of the right edge, v of the centre) of the brick's top-face box in the wrist image
-    at this gripper height, such that a straight descent to the grasp leaves its right side
-    GRASP_MARGIN_M from the fixed jaw's inner edge and its middle on the pad's middle
-    (PAD_MID_V), both at the jaw tips' depth. Goals come from the measured jaw and the
-    descent model, not from a taught brick, so they hold for any brick size. shift_m moves
-    the aim that much closer to the fixed jaw (a re-aim after a measured landing)."""
-    u_per_m = float(np.linalg.norm(jacobian(0.0)[0]))  # at the tips' depth
-    at_tips = np.array([FIXED_JAW_INNER_U - (GRASP_MARGIN_M - shift_m) * u_per_m, PAD_MID_V])
-    return tips_to_top(at_tips, height)
+    """(u of the brick's right edge, v of its centre) in the wrist image at this gripper
+    height, such that a straight descent to the grasp leaves its right side GRASP_MARGIN_M
+    from the fixed jaw's inner edge and its middle on the jaw tips' row (half the brick
+    beyond the tips: the owner's "grab the middle"). Goals come from the measured jaw and
+    the descent model, not from a taught brick, so they hold for any brick size. shift_m
+    moves the aim that much closer to the fixed jaw (a re-aim after a measured landing)."""
+    u_per_m = float(np.linalg.norm(jacobian(GRASP_LIFT_M)[0]))
+    at_grasp = np.array([FIXED_JAW_INNER_U - (GRASP_MARGIN_M - shift_m) * u_per_m, FIXED_JAW_TIP_V])
+    return descend(at_grasp, GRASP_LIFT_M, height)
 
 
 def roll_range(calib) -> tuple[float, float]:
@@ -415,8 +396,10 @@ def grasp_gap_m(box) -> float:
     the jaws at grasp height: the box is the brick's top face, BRICK_HEIGHT_M above the floor
     and so nearer the camera than the jaw tips; its edge is brought to the tips' depth before
     comparing with the jaw's inner edge. Negative: the brick reaches under the jaw."""
-    u_edge = top_to_tips([box[2], box[1]], GRASP_LIFT_M)[0]
-    return float((FIXED_JAW_INNER_U - u_edge) / np.linalg.norm(jacobian(0.0)[0]))
+    tips = CAM_ABOVE_TIPS_M
+    top = tips - (BRICK_HEIGHT_M - GRASP_LIFT_M)
+    u_edge = DESCENT_P0[0] + (box[2] - DESCENT_P0[0]) * top / tips
+    return float((FIXED_JAW_INNER_U - u_edge) / np.linalg.norm(jacobian(GRASP_LIFT_M)[0]))
 
 
 def jacobian(height: float, roll_deg: float = 0.0) -> np.ndarray:
@@ -475,7 +458,7 @@ class Skills:
         # gripper is about to work (floor_at), and set from each floor touch.
         self.floor_tcp = FLOOR_TCP_Z
         self.predicted_floor = None  # floor_at() for this grasp, the on-brick test's reference
-        self.brick_len_v = None  # brick length in the image at the tips' depth, from the last servo look
+        self.brick_len_v = None  # brick length in the image at grasp height, from the last servo look
         self.aim_shift_m = 0.0  # grasp_goal's re-aim after a measured landing (step 5.3)
         # The base can be locked (robot.base_enabled False): then the arm alone lines up.
         self.base_ok = getattr(robot, "base_enabled", True)
@@ -685,11 +668,11 @@ class Skills:
 
     def _goal_point(self, box, h: float) -> np.ndarray:
         """(right edge u, centre v) of the brick's box: what grasp_goal aims. When the box
-        shows the brick's whole length, remember that length at the tips' depth, for the
+        shows the brick's whole length, remember that length scaled to grasp height, for the
         along-length check before closing."""
         x0, y0, x1, y1 = box
         if y0 > 0.01 and y1 < 0.99:
-            self.brick_len_v = (y1 - y0) * (CAM_ABOVE_TIPS_M + h - BRICK_HEIGHT_M) / CAM_ABOVE_TIPS_M
+            self.brick_len_v = (y1 - y0) * (CAM_ABOVE_TIPS_M + h) / (CAM_ABOVE_TIPS_M + GRASP_LIFT_M)
         return np.array([x1, (y0 + y1) / 2])
 
     def touch_floor(self, search: float = TOUCH_SEARCH_M) -> Result:
@@ -723,9 +706,10 @@ class Skills:
         return Result(True, data={"z": z, "z_cmd": z - free_gap, "how": r.get("how"), "start_xy": [float(p[0]), float(p[1])]})
 
     def center_along_length(self) -> list | None:
-        """Just before closing: make sure the brick's middle, at the jaw tips' depth, lies on
-        the pad (PAD_TOP_V..PAD_BOTTOM_V), sliding towards PAD_MID_V if not, so the pads close
-        on its middle, not on one end. The wrist is rolled so the brick's long side is vertical
+        """Just before closing: make sure part of the brick sticks out beyond the jaw tips
+        (OUTSIDE_MIN..OUTSIDE_MAX of its length, aiming for OUTSIDE_AIM, i.e. its middle at
+        the tips), so the jaws close on its middle with margin, not on one end with the rest
+        deep inside the gripper. The wrist is rolled so the brick's long side is vertical
         (image v) and the jaws close along u; only the along-length error is corrected, so the
         gripper slides beside the brick and can't push it. Returns the last box seen (None if
         the brick wasn't boxed)."""
@@ -743,14 +727,14 @@ class Skills:
                 self.log.ev("along", k=k, ok=False, why="box at the top/side edge: not the brick", box=box)
                 return
             length = self.brick_len_v or BRICK_LEN_V
-            h = max(self.height(), 0.0)
-            mid = float(top_to_tips([box[0], box[1]], h)[1]) + length / 2
-            self.log.ev("along", k=k, box=box, mid_v=round(mid, 3), pad=[round(PAD_TOP_V, 3), round(PAD_BOTTOM_V, 3)],
-                        length_v=round(length, 3))
-            if PAD_TOP_V <= mid <= PAD_BOTTOM_V or k == PRE_CLOSE_ALONG_TRIES:
+            outside = float(np.clip((FIXED_JAW_TIP_V - box[1]) / length, 0.0, 1.0))
+            self.log.ev("along", k=k, box=box, outside=round(outside, 2), length_v=round(length, 3))
+            if OUTSIDE_MIN <= outside <= OUTSIDE_MAX or k == PRE_CLOSE_ALONG_TRIES:
                 return box
-            ev = PAD_MID_V - mid
-            j = jacobian(0.0, self.roll)  # image motion at the tips' depth
+            # More outside = the brick higher in the image (smaller v).
+            ev = -(OUTSIDE_AIM - outside) * length
+            h = max(self.height(), 0.0)
+            j = jacobian(h, self.roll)
             # The TCP move whose image motion is (0, ev): along the brick's length only.
             d = np.linalg.solve(j, np.array([0.0, ev]))
             n = float(np.linalg.norm(d))

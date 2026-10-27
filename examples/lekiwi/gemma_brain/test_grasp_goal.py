@@ -27,21 +27,12 @@ def test_descend_round_trip_and_growth():
     assert np.linalg.norm(down - skills.DESCENT_P0) > np.linalg.norm(p - skills.DESCENT_P0)
 
 
-def test_grasp_goal_puts_the_brick_beside_the_fixed_jaw_on_the_pad_middle():
-    h = skills.GRASP_LIFT_M
-    u, v = skills.top_to_tips(skills.grasp_goal(h), h)
-    margin_u = skills.GRASP_MARGIN_M * np.linalg.norm(skills.jacobian(0.0)[0])
+def test_grasp_goal_at_grasp_height_is_beside_the_fixed_jaw_on_the_tip_row():
+    u, v = skills.grasp_goal(skills.GRASP_LIFT_M)
+    margin_u = skills.GRASP_MARGIN_M * np.linalg.norm(skills.jacobian(skills.GRASP_LIFT_M)[0])
     assert np.isclose(u, skills.FIXED_JAW_INNER_U - margin_u)
-    assert np.isclose(v, skills.PAD_MID_V)
-    assert skills.PAD_TOP_V < skills.PAD_MID_V < skills.PAD_BOTTOM_V
+    assert np.isclose(v, skills.FIXED_JAW_TIP_V)
     assert 0 < skills.GRASP_MARGIN_M < 0.01
-    # higher up, the goal moves towards where the descent heads
-    assert np.linalg.norm(skills.grasp_goal(0.10) - skills.DESCENT_P0) < np.linalg.norm(skills.grasp_goal(h) - skills.DESCENT_P0)
-
-
-def test_top_to_tips_round_trip():
-    p = np.array([0.4, 0.8])
-    assert np.allclose(skills.tips_to_top(skills.top_to_tips(p, 0.03), 0.03), p)
 
 
 def test_goal_point_remembers_brick_length_only_when_whole():
@@ -66,8 +57,11 @@ def test_roll_range_is_centred_on_the_rest_joint_angle():
 
 
 def test_grasp_gap_is_zero_when_the_edge_at_tip_depth_meets_the_jaw():
+    tips = skills.CAM_ABOVE_TIPS_M
+    top = tips - (skills.BRICK_HEIGHT_M - skills.GRASP_LIFT_M)
+    p0 = skills.DESCENT_P0[0]
     # the top face's edge as it appears when the brick's side is right at the jaw's inner edge
-    u = skills.tips_to_top([skills.FIXED_JAW_INNER_U, 0.5], skills.GRASP_LIFT_M)[0]
+    u = p0 + (skills.FIXED_JAW_INNER_U - p0) * tips / top
     assert abs(skills.grasp_gap_m([0.3, 0.5, u, 0.8])) < 1e-9
     assert skills.grasp_gap_m([0.3, 0.5, u - 0.02, 0.8]) > 0.002
 

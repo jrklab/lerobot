@@ -29,7 +29,7 @@ import json
 import statistics
 from pathlib import Path
 
-from vision import jaw_geometry, jaw_pad_rows
+from vision import jaw_geometry
 
 CALIB = Path(__file__).with_name("calib.json")
 # frames taken with the arm at rest or just before closing: the jaws are in clear view
@@ -51,19 +51,13 @@ def main() -> None:
         med = statistics.median(xs)
         value[key] = round(float(med), 4)
         spread[key] = round(float(statistics.median(abs(x - med) for x in xs)), 4)
-    pads = [p for f in files if (p := jaw_pad_rows(Path(f).read_bytes(), value["fixed_inner_u"]))]
-    for key, i in (("pad_top_v", 0), ("pad_bottom_v", 1)):
-        xs = [p[i] for p in pads]
-        med = statistics.median(xs)
-        value[key] = round(float(med), 4)
-        spread[key] = round(float(statistics.median(abs(x - med) for x in xs)), 4)
-    print(f"{len(found)}/{len(files)} frames ({len(pads)} with the pad): {value}  median abs deviation {spread}")
+    print(f"{len(found)}/{len(files)} frames: {value}  median abs deviation {spread}")
     if args.write:
         calib = json.loads(CALIB.read_text()) if CALIB.exists() else {}
         calib["wrist_jaws"] = {
             "value": value,
             "unit": "wrist image fraction (u right, v down)",
-            "meaning": "fixed jaw (right) in the wrist image: its tip row, its inner edge column just below the tip, and the rows of its black rubber pad (jaw_pad_rows)",
+            "meaning": "fixed jaw (right) in the wrist image: its tip row and its inner edge column just below the tip",
             "method": f"median of jaw_geometry over {len(found)} saved {'/'.join(TAGS)} frames",
             "spread_mad": spread,
             "date": datetime.date.today().isoformat(),

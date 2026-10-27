@@ -110,18 +110,14 @@
   "wrist_jaws": {
     "value": {
       "fixed_tip_v": 0.7542,
-      "fixed_inner_u": 0.5656,
-      "pad_top_v": 0.7729,
-      "pad_bottom_v": 0.8625
+      "fixed_inner_u": 0.5641
     },
     "unit": "wrist image fraction (u right, v down)",
-    "meaning": "fixed jaw (right) in the wrist image: its tip row, its inner edge column just below the tip, and the rows of its black rubber pad (jaw_pad_rows)",
-    "method": "median of jaw_geometry over 288 saved plan_wrist/pre_close frames",
+    "meaning": "fixed jaw (right) in the wrist image: its tip row and its inner edge column just below the tip",
+    "method": "median of jaw_geometry over 213 saved plan_wrist/pre_close frames",
     "spread_mad": {
       "fixed_tip_v": 0.0021,
-      "fixed_inner_u": 0.0016,
-      "pad_top_v": 0.0208,
-      "pad_bottom_v": 0.0083
+      "fixed_inner_u": 0.0016
     },
     "date": "2026-10-27"
   },
