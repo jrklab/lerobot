@@ -89,6 +89,7 @@ VR_MOTION_SCALE = {"slow": 0.3, "medium": 0.6, "fast": 1.0}
 # resolution implied by this robot's calibration file (base wheel motors calibrate over the
 # full 0-4095 tick range).
 MOTOR_RESOLUTION = 4096
+HOMING_TICK = MOTOR_RESOLUTION // 2 - 1  # 2047: where calibration homes "middle of range" (the URDF zero)
 
 # The 5 arm joints that make up so101_kinematics's chain, in the same order as
 # so101_kinematics.JOINT_NAMES (i.e. base -> tip). Excludes arm_gripper, which doesn't
@@ -573,20 +574,19 @@ class RobotBridge:
         in radians, using this robot's own calibration (falls back to assuming the full
         -100..100 range spans +/-180 degrees when uncalibrated, e.g. MockLeKiwi).
 
-        Zero must be the calibrated range's *midpoint* tick, not tick 0 -- matches how this
-        codebase's own MotorNormMode.DEGREES defines "degrees" (see motors_bus.py's
-        `_normalize`: `mid = (min_ + max_) / 2`). Missing that centering here originally
-        put every joint's computed angle off by up to ~180 degrees, which is what made the
-        arm's first real cartesian-jog attempt lurch to a wildly wrong pose: the IK solve's
-        "current pose" (from forward_kinematics on the wrong angles) didn't correspond to
-        the arm's actual physical pose at all.
+        Zero is the homing tick, half a turn (MOTOR_RESOLUTION // 2 - 1 = 2047): calibration
+        writes each motor's Homing_Offset so the pose held at "middle of its range" reads that
+        tick (set_half_turn_homings), and that pose is so101_new_calib.urdf's zero. Tick 0 put
+        every angle off by up to ~180 degrees (the first cartesian jog lurched); the recorded
+        range's midpoint, used until Oct 27, is off by however far the range isn't centred on
+        the homing pose (15.7 deg on this arm's elbow, 13.3 on the wrist), so the model's
+        "straight down" leaned ~26-30 deg.
         """
         calib = getattr(self._robot, "calibration", None)
         if calib and joint in calib:
             c = calib[joint]
-            mid_ticks = (c.range_min + c.range_max) / 2.0
             ticks = c.range_min + (norm + 100.0) / 200.0 * (c.range_max - c.range_min)
-            rad = (ticks - mid_ticks) * (2.0 * math.pi / MOTOR_RESOLUTION)
+            rad = (ticks - HOMING_TICK) * (2.0 * math.pi / MOTOR_RESOLUTION)
             return -rad if c.drive_mode else rad
         return math.radians(norm / 100.0 * 180.0)
 
@@ -595,8 +595,7 @@ class RobotBridge:
         if calib and joint in calib:
             c = calib[joint]
             rad = -rad if c.drive_mode else rad
-            mid_ticks = (c.range_min + c.range_max) / 2.0
-            ticks = rad / (2.0 * math.pi / MOTOR_RESOLUTION) + mid_ticks
+            ticks = rad / (2.0 * math.pi / MOTOR_RESOLUTION) + HOMING_TICK
             return (ticks - c.range_min) / (c.range_max - c.range_min) * 200.0 - 100.0
         return math.degrees(rad) / 180.0 * 100.0
 

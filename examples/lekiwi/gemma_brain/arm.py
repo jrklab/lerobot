@@ -101,11 +101,17 @@ class PlanError(ValueError):
 
 class Calibration:
     """Normalized joint units <-> radians, the same conversion as RobotBridge's
-    _joint_norm_to_rad(): zero is the calibrated range's midpoint tick."""
+    _joint_norm_to_rad(). Zero is the homing tick, half a turn (2047 of 4096): LeRobot's
+    calibration writes each motor's Homing_Offset so the pose held at "middle of its range"
+    reads that tick (set_half_turn_homings), and that pose is so101_new_calib.urdf's zero.
+    Until Oct 27 zero was the recorded range's midpoint, which on this arm is 15.7 deg off on
+    the elbow and 13.3 on the wrist (the ranges aren't centred on the homing pose): the model's
+    "straight down" leaned ~26-30 deg (owner's vertical teach poses read 58.7 and 62.4 deg)."""
 
     def __init__(self, joints: dict[str, dict] | None = None, motor_resolution: int = 4096):
         self.joints = joints or {}
         self.resolution = motor_resolution
+        self.zero_tick = (motor_resolution - 1) // 2  # the half-turn homing tick
 
     @classmethod
     def from_robot(cls, robot) -> Calibration:
@@ -116,9 +122,8 @@ class Calibration:
         c = self.joints.get(joint)
         if not c:
             return math.radians(norm / 100.0 * 180.0)
-        mid = (c["range_min"] + c["range_max"]) / 2.0
         ticks = c["range_min"] + (norm + 100.0) / 200.0 * (c["range_max"] - c["range_min"])
-        rad = (ticks - mid) * (2.0 * math.pi / self.resolution)
+        rad = (ticks - self.zero_tick) * (2.0 * math.pi / self.resolution)
         return -rad if c["drive_mode"] else rad
 
     def to_norm(self, joint: str, rad: float) -> float:
@@ -126,8 +131,7 @@ class Calibration:
         if not c:
             return math.degrees(rad) / 180.0 * 100.0
         rad = -rad if c["drive_mode"] else rad
-        mid = (c["range_min"] + c["range_max"]) / 2.0
-        ticks = rad / (2.0 * math.pi / self.resolution) + mid
+        ticks = rad / (2.0 * math.pi / self.resolution) + self.zero_tick
         return (ticks - c["range_min"]) / (c["range_max"] - c["range_min"]) * 200.0 - 100.0
 
     def q(self, joints: dict[str, float]) -> np.ndarray:
