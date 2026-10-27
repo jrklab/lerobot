@@ -13,6 +13,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# ruff: noqa: E402
+
 """Offline checks for the v2 skills (v2/): geometry, and move/land/grip run by the Pi's
 AutoController in the web_server simulation (as test_arm.py)."""
 
@@ -27,10 +29,7 @@ sys.path.insert(0, str(HERE.parent / "web_server"))
 from arm import Arm, Calibration  # noqa: E402
 from test_arm import SimRobot as _SimRobot  # noqa: E402
 from test_auto_control import Sim  # noqa: E402
-from v2 import (
-    actions,  # noqa: E402
-    params as prm,  # noqa: E402
-)
+from v2 import actions, params as prm  # noqa: E402
 from v2.geometry import Geometry, fit_floor  # noqa: E402
 from v2.skills import Skills2  # noqa: E402
 
