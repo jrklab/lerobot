@@ -84,7 +84,7 @@ dependencies = [
     "cmake>=3.29.0.1,<4.2.0",
     "setuptools>=71.0.0,<81.0.0",
     "inputs>=0.5",
-    "evdev>=1.9.3",
+    "evdev>=1.9.3; sys_platform == 'linux'",  # the Pi's gamepad reader (examples/lekiwi); Linux-only
 ]
 
 # Optional dependencies
