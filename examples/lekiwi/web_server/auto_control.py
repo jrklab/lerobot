@@ -116,6 +116,27 @@ CONTACT_FOLLOW_MIN_M = 0.002
 GRIPPER_SQUEEZE = 4.0
 GRIPPER_STALL_TICKS = 4
 
+# Hold: after a close stalls on an object, the hold is watched every tick until the next
+# gripper command (status()["gripper_hold"]).
+# Dropped: the jaws closed this far past where they stalled, for HOLD_DROP_TICKS ticks. With
+# the object gone they travel most of the way to the squeeze target (GRIPPER_SQUEEZE). Load
+# can't tell: the firmware itself cuts the gripper to Protective_Torque (20%) after ~2 s over
+# Overload_Torque (25%), and today's holds load it ~41% (registers read Oct 26).
+HOLD_DROP_UNITS = 2.5
+HOLD_DROP_TICKS = 3
+# Protection, below the gripper firmware's own (Protection_Current 250 counts ~1.6 A after
+# ~2 s, Max_Temperature_Limit 70 C), so this acts first: current over the limit for
+# HOLD_CURRENT_S eases the squeeze one stage; at GRIPPER_TEMP_WARN_C it eases to
+# GRIPPER_SQUEEZE_EASED, at GRIPPER_TEMP_HARD_C it stops squeezing (holds the stalled
+# position, never opens: the object would fall). Present_Current is raw counts (~6.5 mA).
+HOLD_CURRENT_LIMIT = 200
+HOLD_CURRENT_S = 1.0
+GRIPPER_SQUEEZE_EASED = 2.0
+GRIPPER_TEMP_WARN_C = 55.0
+GRIPPER_TEMP_HARD_C = 62.0
+HOLD_MAX_EVENTS = 5
+HOLD_PUBLIC = ("state", "pos", "squeeze", "current", "temp", "events")
+
 
 class CommandRefused(ValueError):
     """The command was rejected before anything moved; the message says why."""
@@ -148,6 +169,7 @@ class AutoController:
         self._targets: dict[str, float] = {}  # the bridge's joint targets as of the last tick
         self._odom = np.zeros(3)  # x, y (m), theta (rad), integrated from wheel velocities
         self._odom_time: float | None = None
+        self._hold: dict | None = None  # the gripper's hold on an object (see HOLD_*)
 
     # --- planner-facing (HTTP threads) ---
 
@@ -182,6 +204,8 @@ class AutoController:
             self._refuse_if_busy_locked()
             cmd_id = self._next_id
             self._next_id += 1
+            if kind == "gripper":
+                self._hold = None  # a new open or close ends the old hold
             self._cmd = {
                 "id": cmd_id,
                 "kind": kind,
@@ -207,12 +231,14 @@ class AutoController:
             cur = self._cmd if self._cmd is not None else self._last
             targets = dict(self._targets)
             odom = self._odom.copy()
+            hold = None if self._hold is None else {k: self._hold[k] for k in HOLD_PUBLIC}
         public = ("id", "kind", "state", "reason", "result", "submitted", "finished")
         out = {
             "command": None if cur is None else {k: cur[k] for k in public},
             "joints": measured,
             "targets": targets,
             "odom": {"x": float(odom[0]), "y": float(odom[1]), "theta_deg": math.degrees(odom[2])},
+            "gripper_hold": hold,
             "time": time.time(),
         }
         if all(j in measured for j in IK_ARM_JOINTS):
@@ -255,6 +281,8 @@ class AutoController:
                 self._step_gripper(cmd, t, targets, joint_state)
             else:
                 self._step_trajectory(cmd, t, targets, joint_state, now)
+        if GRIPPER in joint_state and (cmd is None or cmd["kind"] != "gripper"):
+            self._watch_hold(now, targets, joint_state[GRIPPER])
         with self._lock:
             self._targets = dict(targets)
         return vel
@@ -508,7 +536,11 @@ class AutoController:
         if cmd["stall_ticks"] >= GRIPPER_STALL_TICKS:
             targets[GRIPPER] = max(JOINT_RANGE[GRIPPER][0], meas - GRIPPER_SQUEEZE)
             with self._lock:
-                cmd["result"] = {"pos": round(meas, 1), "load": load, "stalled": True}
+                cmd["result"] = {"pos": round(meas, 1), "load": load, "stalled": True,
+                                 "current": st.get("current"), "temp": st.get("temp")}
+                self._hold = {"state": "holding", "pos": round(meas, 1), "squeeze": GRIPPER_SQUEEZE,
+                              "current": st.get("current"), "temp": st.get("temp"), "events": [],
+                              "drop_ticks": 0, "high_since": None}
                 self._finish_locked("done", "stalled on an object")
             return
         if a >= 1.0 and (abs(meas - goal) < 2.0 or t > span / speed + SETTLE_TIMEOUT_S):
@@ -568,6 +600,51 @@ class AutoController:
             w = math.copysign(_clamp(BASE_GAIN * abs(rem_th), MIN_BASE_THETA_SPEED, vth), rem_th)
         scale = v / rem_xy if rem_xy > 1e-9 else 0.0
         return {"x.vel": bx * scale, "y.vel": by * scale, "theta.vel": w}
+
+    # --- the hold ---
+
+    def _watch_hold(self, now: float, targets: dict, st: dict) -> None:
+        """One tick of the hold on an object (HOLD_*): spot a drop from the jaw position, and
+        ease the squeeze on high current or temperature."""
+        with self._lock:
+            h = self._hold
+            if h is None:
+                return
+            meas = st.get("pos", h["pos"])
+            cur, temp = st.get("current"), st.get("temp")
+            h["current"], h["temp"] = cur, temp
+            if h["state"] == "dropped":
+                return
+            if meas < h["pos"] - HOLD_DROP_UNITS:
+                h["drop_ticks"] += 1
+                if h["drop_ticks"] >= HOLD_DROP_TICKS:
+                    h["state"] = "dropped"
+                    targets[GRIPPER] = max(JOINT_RANGE[GRIPPER][0], meas)  # stop pushing on nothing
+                    self._hold_event(h, f"dropped: the jaws closed to {meas:.1f} from {h['pos']:.1f}")
+                return
+            h["drop_ticks"] = 0
+            squeeze, why = h["squeeze"], ""
+            if temp is not None and temp >= GRIPPER_TEMP_HARD_C:
+                squeeze, why = 0.0, f"temperature {temp:.0f} C"
+            elif temp is not None and temp >= GRIPPER_TEMP_WARN_C:
+                squeeze, why = min(squeeze, GRIPPER_SQUEEZE_EASED), f"temperature {temp:.0f} C"
+            if cur is not None and cur > HOLD_CURRENT_LIMIT:
+                h["high_since"] = h["high_since"] if h["high_since"] is not None else now
+                if now - h["high_since"] >= HOLD_CURRENT_S:
+                    squeeze = min(squeeze, GRIPPER_SQUEEZE_EASED if h["squeeze"] > GRIPPER_SQUEEZE_EASED else 0.0)
+                    why = why or f"current {cur:.0f} counts for {HOLD_CURRENT_S:.0f} s"
+                    h["high_since"] = now  # the next stage only after another HOLD_CURRENT_S
+            else:
+                h["high_since"] = None
+            if squeeze < h["squeeze"]:
+                h["squeeze"] = squeeze
+                targets[GRIPPER] = max(JOINT_RANGE[GRIPPER][0], h["pos"] - squeeze)
+                self._hold_event(h, f"squeeze eased to {squeeze:.0f}: {why}")
+
+    @staticmethod
+    def _hold_event(h: dict, what: str) -> None:
+        logger.warning("auto: gripper hold: %s", what)
+        h["events"] = (h["events"] + [{"t": time.time(), "what": what}])[-HOLD_MAX_EVENTS:]
 
     # --- helpers ---
 

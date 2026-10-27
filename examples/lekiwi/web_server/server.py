@@ -195,8 +195,15 @@ def auto_stop():
 
 @app.get("/auto/status")
 def auto_status():
-    measured = {j: st["pos"] for j, st in bridge.get_joint_state().items()}
-    return {"mode": bridge.get_control_mode(), **bridge.auto.status(measured)}
+    joint_state = bridge.get_joint_state()
+    measured = {j: st["pos"] for j, st in joint_state.items()}
+    grip = joint_state.get("arm_gripper", {})
+    return {
+        "mode": bridge.get_control_mode(),
+        **bridge.auto.status(measured),
+        # Raw Present_Current counts (~6.5 mA each) and deg C, read every tick (LeKiwi.get_observation).
+        "gripper_sensors": {"current": grip.get("current"), "temp": grip.get("temp")},
+    }
 
 
 @app.get("/auto/calibration")

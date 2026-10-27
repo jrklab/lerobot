@@ -1010,6 +1010,10 @@ class RobotBridge:
                         "stalled": severity > 0.0,
                         "severity": severity,
                     }
+                    # Read for the gripper only (LeKiwi.get_observation): current and temperature.
+                    for k in ("current", "temp"):
+                        if f"{joint}.{k}" in obs:
+                            new_joint_state[joint][k] = obs[f"{joint}.{k}"]
                 for cam_name in ("front", "wrist"):
                     frame = obs.get(cam_name)
                     if frame is not None:

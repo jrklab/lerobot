@@ -49,6 +49,7 @@ class Sim:
         self.pos = dict(start or {**READY, GRIPPER: 50.0})
         self.targets = dict(self.pos)
         self.walls = {}  # joint -> (lo, hi): the joint can't move outside this (contact)
+        self.extra = {}  # joint -> extra joint_state readings, e.g. the gripper's current/temp
         self.base_cmd = {"x.vel": 0.0, "y.vel": 0.0, "theta.vel": 0.0}
         self.t = 0.0
         self.auto = AutoController(norm_to_rad, clock=lambda: self.t)
@@ -60,6 +61,7 @@ class Sim:
             lo, hi = self.walls.get(j, (-1e9, 1e9))
             blocked = (self.targets[j] < lo - 1 and p <= lo + 0.5) or (self.targets[j] > hi + 1 and p >= hi - 0.5)
             state[j] = {"pos": p, "load": 900.0 if blocked else 50.0, "speed": 0.0, "severity": 0.8 if blocked else 0.0}
+            state[j].update(self.extra.get(j, {}))
         return state
 
     def run(self, seconds, heartbeat=True):
@@ -242,6 +244,69 @@ def test_gripper_closes_empty():
     sim.submit({"cmd": "gripper", "pos": 0, "speed": 50})
     st = sim.run_until_done()
     assert st["state"] == "done" and not st["result"]["stalled"] and st["result"]["pos"] < 2.0, st
+
+
+def holding_sim(current=60.0, temp=40.0):
+    """A sim whose gripper has just closed and stalled on a block 22 units wide."""
+    sim = Sim()
+    sim.walls[GRIPPER] = (22.0, 1e9)
+    sim.extra[GRIPPER] = {"current": current, "temp": temp}
+    sim.submit({"cmd": "gripper", "pos": 0, "speed": 50})
+    st = sim.run_until_done()
+    assert st["result"]["stalled"] and st["result"]["current"] == current, st
+    return sim
+
+
+def hold(sim):
+    return sim.auto.status(dict(sim.pos))["gripper_hold"]
+
+
+def test_hold_stays_holding_while_the_block_is_there():
+    sim = holding_sim()
+    sim.run(3.0)
+    h = hold(sim)
+    assert h["state"] == "holding" and h["squeeze"] == 4.0 and 21.0 <= h["pos"] <= 23.0, h
+    assert h["events"] == [], h
+
+
+def test_hold_spots_a_drop():
+    sim = holding_sim()
+    sim.walls.pop(GRIPPER)  # the block slips out: the jaws travel on toward the squeeze target
+    sim.run(0.5)
+    h = hold(sim)
+    assert h["state"] == "dropped" and "dropped" in h["events"][-1]["what"], h
+    assert sim.targets[GRIPPER] >= sim.pos[GRIPPER] - 0.5  # stopped pushing on nothing
+
+
+def test_high_current_eases_the_squeeze_never_opens():
+    sim = holding_sim()
+    pos = hold(sim)["pos"]
+    sim.extra[GRIPPER]["current"] = 230.0  # over HOLD_CURRENT_LIMIT
+    sim.run(0.5)
+    assert hold(sim)["squeeze"] == 4.0  # not yet: under HOLD_CURRENT_S
+    sim.run(0.7)
+    assert hold(sim)["squeeze"] == 2.0 and sim.targets[GRIPPER] == pos - 2.0, hold(sim)
+    sim.run(1.2)
+    h = hold(sim)
+    assert h["squeeze"] == 0.0 and sim.targets[GRIPPER] == pos and h["state"] == "holding", h
+
+
+def test_temperature_eases_then_stops_the_squeeze():
+    sim = holding_sim(temp=56.0)
+    sim.run(0.2)
+    assert hold(sim)["squeeze"] == 2.0, hold(sim)
+    sim.extra[GRIPPER]["temp"] = 63.0
+    sim.run(0.2)
+    assert hold(sim)["squeeze"] == 0.0 and "temperature" in hold(sim)["events"][-1]["what"], hold(sim)
+
+
+def test_a_new_gripper_command_ends_the_hold():
+    sim = holding_sim()
+    sim.submit({"cmd": "gripper", "pos": 40, "speed": 50})
+    assert hold(sim) is None
+    sim.walls.pop(GRIPPER)
+    st = sim.run_until_done()
+    assert st["state"] == "done" and hold(sim) is None, (st, hold(sim))
 
 
 def test_base_move_relative():

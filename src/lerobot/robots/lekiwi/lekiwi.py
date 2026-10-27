@@ -362,7 +362,13 @@ class LeKiwi(Robot):
         arm_vel = self.bus.sync_read("Present_Velocity", self.arm_motors)
         arm_speed_state = {f"{k}.speed": abs(v) for k, v in arm_vel.items()}
 
-        obs_dict = {**arm_state, **base_vel, **arm_load_state, **arm_speed_state}
+        # Gripper current (raw counts, ~6.5 mA each) and temperature (deg C), for the auto
+        # mode's hold check and motor protection (examples/lekiwi/web_server/auto_control.py).
+        grip_current = self.bus.sync_read("Present_Current", ["arm_gripper"])["arm_gripper"]
+        grip_temp = self.bus.sync_read("Present_Temperature", ["arm_gripper"])["arm_gripper"]
+        gripper_state = {"arm_gripper.current": float(grip_current), "arm_gripper.temp": float(grip_temp)}
+
+        obs_dict = {**arm_state, **base_vel, **arm_load_state, **arm_speed_state, **gripper_state}
 
         dt_ms = (time.perf_counter() - start) * 1e3
         logger.debug(f"{self} read state: {dt_ms:.1f}ms")

@@ -361,6 +361,12 @@ class Skills:
 
     # --- sensing ---
 
+    def dropped(self) -> bool:
+        """The Pi's hold watch saw the object slip out (auto_control: jaws closed past where
+        they stalled on it). False when there's no hold to watch."""
+        hold = self.robot.status().get("gripper_hold") or {}
+        return hold.get("state") == "dropped"
+
     def look(self, jpeg: bytes, what: str, check=None):
         """Box of `what`, an object already found, on this frame: the fast model first, then
         `gemma` when the fast one finds nothing or its box fails `check(box) -> bool`. E2B
@@ -692,7 +698,7 @@ class Skills:
             boxes.append(a.value)
             self.log.ev("held_box", k=k, height=self.height(), box=a.value, ms=round(a.ms), by=a.by)
         g = self.robot.status()["joints"]["arm_gripper"]
-        if g < GRIPPER_EMPTY_MAX:
+        if g < GRIPPER_EMPTY_MAX or self.dropped():
             return Result(False, f"gripper closed to {g:.1f}: the brick slipped out", {"gripper": g})
         if None in boxes:
             return Result(False, "brick not seen after lifting", {"gripper": g, "boxes": boxes})
@@ -1150,6 +1156,10 @@ class Skills:
         DROP_TIP_HEIGHT_M above the floor; the container's box in the wrist camera is lined
         up under the gripper (arm first, base for what the arm can't reach), then the gripper
         opens."""
+        if self.dropped():
+            held = getattr(self, "holding", None) or "object"
+            self.holding = None
+            return Result(False, f"the {held} slipped out of the gripper on the way (the Pi saw the jaws close)")
         self.roll = DROP_ROLL_DEG
         z = self.floor_tcp + DROP_TIP_HEIGHT_M
         xy = ABOVE_XY
@@ -1196,6 +1206,9 @@ class Skills:
                 self.log.ev("base", dxy=d, moved=res["result"].get("moved"))
         else:
             return Result(False, f"could not line up over the {container} ({err_px:.0f} px off)")
+        if self.dropped():
+            self.holding = None
+            return Result(False, f"the object slipped out of the gripper while lining up over the {container}")
         held = getattr(self, "holding", None) or "object"
         g0 = self.robot.status()["joints"]["arm_gripper"]
         g = self.robot.gripper(min(OPEN, g0 + RELEASE_OPEN_BY), speed=20)
@@ -1228,6 +1241,10 @@ class Skills:
         wrist camera from NEXT_HOVER_M, moves NEXT_OFFSET_M sideways (toward the robot's
         centre line, else the other side), lowers until the held object meets the floor,
         opens, lifts and checks that ref is where it was and the object is on the floor."""
+        if self.dropped():
+            held = getattr(self, "holding", None) or "object"
+            self.holding = None
+            return Result(False, f"the {held} slipped out of the gripper on the way (the Pi saw the jaws close)")
         held = getattr(self, "holding", None) or "object"
         self.roll = DROP_ROLL_DEG
         xy = ABOVE_XY if self.base_ok else (self.front_guess(ref) or ABOVE_XY)
