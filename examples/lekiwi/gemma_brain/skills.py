@@ -100,10 +100,12 @@ BASE_ROLL_TURNS = 2
 # axis 7.4 cm ahead of the wheel centre, the arm origin 3.9 cm behind that axis).
 BASE_TURN_CENTRE_XY = np.array([-0.035, 0.0])
 # A turn for the wrist roll orbits the brick (turn plus the shift that keeps it in front of
-# the arm), in steps of at most ORBIT_STEP_DEG, looking again after each: the Pi runs the
-# shift and the turn at their own speeds, so mid-step the brick can stray up to about
-# 2 r sin(step / 2) (6 cm at r = 0.24 m), inside the wrist view's ~9 cm half-width at 10 cm.
-# A 70 deg turn in place (Oct 27, run 20261027T020732) swung it ~30 cm, out of view.
+# the arm), in steps of at most ORBIT_STEP_DEG, looking again after each. Each step is a
+# plain turn, then a plain strafe: sent as one combined command the body hardly turned
+# (Oct 27, runs/20261027T022330-orbit-split: odometry -13.1 deg, the front camera ~+2 deg),
+# while a plain turn did (-13.2 odometry, ~-11 by the front camera). Between the two the brick
+# strays about 2 r sin(step / 2) (6 cm at r = 0.24 m), inside the wrist view's ~9 cm
+# half-width at 10 cm. A 70 deg turn in place (run 20261027T020732) swung it ~30 cm, out of view.
 ORBIT_STEP_DEG = 15.0
 IMAGE_PX = np.array([640.0, 480.0])
 # The open width before a grasp: 40 until the owner's Oct 27 demo opened to 24.6.
@@ -617,9 +619,11 @@ class Skills:
             # The brick, from the base's turning centre: where the gripper is now.
             b = self.cmd_tcp()[:2] - BASE_TURN_CENTRE_XY
             t = b - rot @ b  # the shift (start frame) that brings it back in front of the arm
-            res = self.robot.base(dx=float(t[0]), dy=float(t[1]), dtheta_deg=math.degrees(step))
-            self.log.ev("base", orbit=k, dxy=t, turn_deg=round(math.degrees(step), 1),
-                        moved=res["result"].get("moved"), why="roll out of range")
+            res = self.robot.base(dtheta_deg=math.degrees(step))
+            t_after = rot.T @ t  # the same shift, in the frame after the turn
+            res2 = self.robot.base(dx=float(t_after[0]), dy=float(t_after[1]))
+            self.log.ev("base", orbit=k, turn_deg=round(math.degrees(step), 1), dxy=t_after,
+                        moved=[res["result"].get("moved"), res2["result"].get("moved")], why="roll out of range")
             got = self.see_block(f"orbit_{k}", check_present=True, want_box=True, allow_border=True)
             if got is None:
                 return Result(False, f"lost the {self.target} while turning the base for the wrist roll")
