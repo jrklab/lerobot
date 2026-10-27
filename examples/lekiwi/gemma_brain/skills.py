@@ -40,7 +40,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from arm import Arm, PlanError
+from arm import JAW_TIP_OFFSET_M, Arm, PlanError
 from gemma import Gemma
 from arm import plan_ee_line
 from robot import Robot, RobotError
@@ -378,7 +378,7 @@ class Skills:
         self.log.ev("box", tag=tag, box=a.value, ms=round(a.ms))
         if a.value is None:
             return None
-        box, how = snap_box(jpeg, a.value)
+        box, how = snap_box(jpeg, a.value, what=self.target)
         if how == "snapped":
             self.log.ev("snap", tag=tag, box=[round(v, 4) for v in box])
         if check_present:
@@ -1171,6 +1171,7 @@ class Skills:
         g0 = self.robot.status()["joints"]["arm_gripper"]
         g = self.robot.gripper(min(OPEN, g0 + RELEASE_OPEN_BY), speed=20)
         self.log.ev("release", from_pos=round(g0, 1), **g["result"])
+        self.holding = None
         time.sleep(0.6)
         cup_box = a.value
         # Look before moving again: where did it go? Inside the container's box and clear of the
@@ -1181,7 +1182,6 @@ class Skills:
         p = self.cmd_tcp()
         self.move_tcp([p[0], p[1], p[2] + 0.04], speed=FREE_EE_SPEED, z_min=self.arm.z_min)
         self.robot.gripper(OPEN, speed=40)
-        self.holding = None
         inside = False
         if b.value is not None:
             bc = np.array([(b.value[0] + b.value[2]) / 2, (b.value[1] + b.value[3]) / 2])
@@ -1202,7 +1202,10 @@ class Skills:
         held = getattr(self, "holding", None) or "object"
         self.roll = DROP_ROLL_DEG
         xy = ABOVE_XY if self.base_ok else (self.front_guess(ref) or ABOVE_XY)
-        z = self.floor_tcp + NEXT_HOVER_M
+        # Not below the arm's floor guard: floor_tcp is the last touch's floor, which reads up to
+        # 3 cm lower far out where the arm sags (Oct 26: -0.147 at x 0.28 vs -0.119 near), and
+        # this hover is only the line-up height (the set-down stops on contact).
+        z = max(self.floor_tcp + NEXT_HOVER_M, self.arm.z_min + 0.01)
         self.arm.move_direct([xy[0], xy[1], z], pitch_deg=PITCH, roll_deg=self.roll)
         h = NEXT_HOVER_M - NEXT_REF_HEIGHT_M
         err_px, c = float("inf"), None
@@ -1212,7 +1215,7 @@ class Skills:
             self.log.ev("next_box", k=k, box=a.value, ms=round(a.ms))
             if a.value is None:
                 return Result(False, f"no {ref} in the wrist camera above it")
-            box, _ = snap_box(jpeg, a.value)
+            box, _ = snap_box(jpeg, a.value, what=ref)
             c = np.array([(box[0] + box[2]) / 2, (box[1] + box[3]) / 2])
             target = grasp_pixel(h) + jacobian(h, 0.0)[:, 0] * GRASP_CLEAR_FIXED_JAW_M  # roll-free: under the jaws
             d = np.linalg.solve(jacobian(h, self.roll), target - c)
@@ -1255,11 +1258,16 @@ class Skills:
         g0 = self.robot.status()["joints"]["arm_gripper"]
         g = self.robot.gripper(min(OPEN, g0 + RELEASE_OPEN_BY), speed=20)
         self.log.ev("release", from_pos=round(g0, 1), **g["result"])
+        # Let go = not holding it any more, whatever happens next (Oct 26: the retreat below
+        # was refused, the brick already lay on the floor, and a retry "placed" it again).
+        self.holding = None
         time.sleep(0.4)
         p = self.cmd_tcp()
-        self.move_tcp([p[0], p[1], over[2]], speed=FREE_EE_SPEED, z_min=self.arm.z_min)
+        # The set-down ends below the arm's floor guard (the contact stop goes past it), so the
+        # way up starts there; as in Arm.reset.
+        z_min = min(self.arm.z_min, p[2] - JAW_TIP_OFFSET_M - 0.01)
+        self.move_tcp([p[0], p[1], over[2]], speed=FREE_EE_SPEED, z_min=z_min)
         self.robot.gripper(OPEN, speed=40)
-        self.holding = None
         # Back over the reference: it should be where it was in the image; the set-down object
         # beside it.
         self.move_tcp(over, speed=FREE_EE_SPEED, z_min=self.arm.z_min)
@@ -1268,7 +1276,7 @@ class Skills:
         b = self.gemma.box(jpeg, f"the {held} on the floor")
         ref_shift = None
         if a.value is not None:
-            box, _ = snap_box(jpeg, a.value)
+            box, _ = snap_box(jpeg, a.value, what=ref)
             ref_shift = float(np.linalg.norm(np.array([(box[0] + box[2]) / 2, (box[1] + box[3]) / 2]) - c))
         self.log.ev("next_check", ref_box=a.value, held_box=b.value, ref_shift=ref_shift)
         if ref_shift is None or ref_shift > NEXT_MAX_REF_SHIFT:

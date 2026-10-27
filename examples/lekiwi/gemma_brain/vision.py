@@ -137,7 +137,7 @@ def outside_fraction(box, tip_row: float) -> float:
     return float(np.clip((tip_row - y0) / (y1 - y0), 0.0, 1.0))
 
 
-def snap_box(jpeg: bytes, box, min_chroma: float = 25.0) -> tuple[list[float], str]:
+def snap_box(jpeg: bytes, box, min_chroma: float = 25.0, what: str = "") -> tuple[list[float], str]:
     """Gemma's box moved onto the coloured blob it was aimed at. E4B's wrist boxes can land a
     brick-height off the brick (Oct 24, red brick next to the jaws: the box on bare floor just
     above it, while the centring chased it); the brick itself is plain to colour segmentation.
@@ -146,7 +146,11 @@ def snap_box(jpeg: bytes, box, min_chroma: float = 25.0) -> tuple[list[float], s
     (L*a*b* chroma, not the jaws' blue, not dark), and takes the blob that overlaps the box
     most, else the nearest one. The box is replaced by that blob's bounding box when the blob
     is a plausible size for it (0.3x-3x the area); otherwise the box comes back unchanged.
-    Returns (box, how)."""
+
+    `what` naming a colour ("blue block") skips blobs of another colour: Oct 26, lining up a
+    held red brick over a blue one, the blue brick was masked out as jaw and the box snapped
+    onto the held red brick. A saturated blue target is still masked as jaw, so its box comes
+    back unsnapped. Returns (box, how)."""
     img = cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_COLOR)
     if img is None:
         return list(box), "no image"
@@ -162,9 +166,10 @@ def snap_box(jpeg: bytes, box, min_chroma: float = 25.0) -> tuple[list[float], s
     chroma = np.hypot(lab[..., 1] - 128, lab[..., 2] - 128)
     hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
     jaw = (hsv[..., 0] > 95) & (hsv[..., 0] < 135) & (hsv[..., 1] > 120)
+    words = [c for c in HUES if c in what.lower()]
     mask = ((chroma > min_chroma) & ~jaw & (lab[..., 0] > 40)).astype(np.uint8) * 255
     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((5, 5), np.uint8))
-    n, _, stats, cents = cv2.connectedComponentsWithStats(mask)
+    n, labels, stats, cents = cv2.connectedComponentsWithStats(mask)
     if n <= 1:
         return list(box), "no coloured blob"
     bx0, by0, bx1, by1 = x0 * w - X0, y0 * h - Y0, x1 * w - X0, y1 * h - Y0
@@ -172,6 +177,10 @@ def snap_box(jpeg: bytes, box, min_chroma: float = 25.0) -> tuple[list[float], s
     for i in range(1, n):
         sx, sy, sw, sh, area = stats[i]
         if area < 0.1 * bw * w * bh * h:
+            continue
+        # The whole blob's colour, not each pixel's: a brick's shaded side drifts out of the hue
+        # range while the blob as a whole stays in it.
+        if words and not _hue_matches(hsv[labels == i], words)[0]:
             continue
         ov = max(0, min(bx1, sx + sw) - max(bx0, sx)) * max(0, min(by1, sy + sh) - max(by0, sy))
         d = math.hypot(cents[i][0] - (bx0 + bx1) / 2, cents[i][1] - (by0 + by1) / 2)
@@ -204,13 +213,18 @@ def colour_matches(jpeg: bytes, box, what: str) -> tuple[bool, str]:
     h, w = img.shape[:2]
     x0, y0, x1, y1 = box
     roi = img[int(y0 * h) : max(int(y0 * h) + 1, int(y1 * h)), int(x0 * w) : max(int(x0 * w) + 1, int(x1 * w))]
-    hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
-    sat = hsv[..., 1] > 80
+    return _hue_matches(cv2.cvtColor(roi, cv2.COLOR_BGR2HSV).reshape(-1, 3), words)
+
+
+def _hue_matches(hsv: np.ndarray, words: list[str]) -> tuple[bool, str]:
+    """Is the median hue of these HSV pixels' strongly coloured ones (N x 3) one of `words`'
+    colours? Too few coloured pixels to tell passes."""
+    sat = hsv[:, 1] > 80
     if sat.sum() < 15:
         return True, "too few coloured pixels to tell"
-    hue = float(np.median(hsv[..., 0][sat]))
+    hue = float(np.median(hsv[:, 0][sat]))
     # Red wraps around 0/180: take the median on the circle near 0 when most pixels are red.
-    reds = ((hsv[..., 0] < 10) | (hsv[..., 0] > 165))[sat].mean()
+    reds = ((hsv[:, 0] < 10) | (hsv[:, 0] > 165))[sat].mean()
     if reds > 0.5:
         hue = 0.0
     ok = any(lo <= hue <= hi for word in words for lo, hi in HUES[word])
