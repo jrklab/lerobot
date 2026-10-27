@@ -1,0 +1,110 @@
+# Copyright 2025 The HuggingFace Inc. team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""The measured geometry the v2 skills work in, loaded once from calib.json and
+floor_touches.json, each with where it was measured (CALIB). No defaults: a missing
+calibration is an error naming the script that makes it.
+
+    floor       TCP z where the vertical jaws meet the floor, a plane fitted to the touches
+    wrist       image Jacobian d(u, v)/d(x, y) at a height, scaled for other heights and rolls
+    descent     camera height above the jaw tips and the point a vertical descent heads for
+    jaws        the fixed jaw's tip row and inner edge in the wrist image
+"""
+
+from __future__ import annotations
+
+import json
+import math
+from dataclasses import dataclass
+from pathlib import Path
+
+import numpy as np
+
+HERE = Path(__file__).resolve().parent.parent
+IMAGE_PX = np.array([640.0, 480.0])
+MAKERS = {
+    "floor_tcp_z_m": "calibrate_floor.py",
+    "wrist_image_jacobian": "wrist_calib.py",
+    "wrist_descent": "calibrate_descent.py",
+    "wrist_jaws": "calibrate_jaws.py",
+    "front_camera": "calibrate_front.py",
+}
+
+
+class MissingCalibrationError(RuntimeError):
+    pass
+
+
+@dataclass
+class Geometry:
+    floor_coef: np.ndarray  # z = a + b x + c y (TCP z at floor contact, vertical gripper)
+    floor_points: int
+    jac: np.ndarray  # d(u, v)/d(x, y) at jac_height, roll 0 (image fractions per metre)
+    jac_height: float
+    cam_above_tips: float
+    descent_p0: np.ndarray
+    fixed_jaw_inner_u: float
+    fixed_jaw_tip_v: float
+    sources: dict
+
+    @classmethod
+    def load(cls, calib_path: Path = HERE / "calib.json", touches_path: Path = HERE / "floor_touches.json") -> Geometry:
+        calib = json.loads(calib_path.read_text())
+        for key, maker in MAKERS.items():
+            if key not in calib:
+                raise MissingCalibrationError(f"calib.json has no {key!r}: run {maker}")
+        pts = json.loads(touches_path.read_text())["points"] if touches_path.exists() else []
+        coef = fit_floor(pts, calib["floor_tcp_z_m"]["value"])
+        jw = calib["wrist_image_jacobian"]
+        return cls(
+            floor_coef=coef,
+            floor_points=len(pts),
+            jac=np.array(jw["value"]),
+            jac_height=float(jw.get("height_m", 0.099)),
+            cam_above_tips=float(calib["wrist_descent"]["value"]["depth_m"]),
+            descent_p0=np.array(calib["wrist_descent"]["value"]["p0"]),
+            fixed_jaw_inner_u=float(calib["wrist_jaws"]["value"]["fixed_inner_u"]),
+            fixed_jaw_tip_v=float(calib["wrist_jaws"]["value"]["fixed_tip_v"]),
+            sources={k: {f: calib[k].get(f) for f in ("method", "date", "log") if f in calib[k]} for k in MAKERS},
+        )
+
+    def floor(self, x: float, y: float) -> float:
+        return float(self.floor_coef @ np.array([1.0, x, y]))
+
+    def jacobian(self, height: float, roll_deg: float = 0.0) -> np.ndarray:
+        """d(u, v)/d(TCP x, y) with the jaw tips `height` above the floor: the measured one,
+        scaled by the camera's distance to the floor and turned by -roll (pixel units, as the
+        image isn't square)."""
+        d = self.cam_above_tips
+        j = self.jac * (self.jac_height + d) / (max(height, 0.0) + d)
+        a = math.radians(-roll_deg)
+        rot = np.array([[math.cos(a), -math.sin(a)], [math.sin(a), math.cos(a)]])
+        return (rot @ (j * IMAGE_PX[:, None])) / IMAGE_PX[:, None]
+
+    def descend(self, point, h_from: float, h_to: float) -> np.ndarray:
+        """Where a floor point seen at image `point` with the tips h_from up appears at h_to."""
+        s = (self.cam_above_tips + h_from) / (self.cam_above_tips + h_to)
+        return self.descent_p0 + (np.asarray(point, float) - self.descent_p0) * s
+
+
+def fit_floor(points: list[dict], fallback_z: float) -> np.ndarray:
+    """Plane z = a + b x + c y through the floor touches (least squares). Fewer than 3 points:
+    flat at their mean, or at the calibrated value with none. With the gripper vertical the
+    floor came out flat to 3.3 mm over 12 cm (Oct 27), so no sag term."""
+    if len(points) >= 3:
+        a = np.array([[1.0, p["x"], p["y"]] for p in points])
+        coef, *_ = np.linalg.lstsq(a, np.array([p["z"] for p in points]), rcond=None)
+        return coef
+    z = float(np.mean([p["z"] for p in points])) if points else float(fallback_z)
+    return np.array([z, 0.0, 0.0])

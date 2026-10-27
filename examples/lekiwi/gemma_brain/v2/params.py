@@ -1,0 +1,67 @@
+# Copyright 2025 The HuggingFace Inc. team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Every number the v2 skills use, with where it comes from. The owner's rule (Oct 27): few
+hand-set values; each one is measured, taken from a demo, a spec, or set by a stated rule.
+
+Source tags: CALIB = measured by a script into calib.json (see geometry.py); DEMO = the owner's
+demo or teach; SPEC = part datasheet / object; RULE = generic control value set by a stated
+rule, the same for any object. Nothing here is tuned per pick.
+"""
+
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent.parent
+DEMO_EXTRACT = HERE / "demos" / "pick_cup" / "extract-ep0.json"
+
+
+@dataclass(frozen=True)
+class Param:
+    value: float
+    source: str  # CALIB | DEMO | SPEC | RULE
+    why: str
+
+
+def _demo(key: str, fallback: float) -> float:
+    try:
+        return float(json.loads(DEMO_EXTRACT.read_text())[key])
+    except (OSError, KeyError, ValueError):
+        return fallback
+
+
+# --- DEMO (the owner's Oct 27 pick_cup demo; re-extract after the joint-zero fix for heights) ---
+OPEN_WIDTH = Param(_demo("open_width", 25.0), "DEMO", "gripper opening before a grasp (demo opened to 24.6)")
+LIFT_M = Param(_demo("lift_m", 0.09), "DEMO", "lift after the grasp (demo: 9.5 cm)")
+RELEASE_ABOVE_FLOOR_M = Param(_demo("release_z_above_floor_m", 0.06), "DEMO",
+                              "TCP height above the floor at release inside a cup (demo: 5.9 cm)")
+# The grasp target in the wrist image (where the brick's box sits just before closing for a
+# middle grip) comes from the owner's midpoint teach: geometry.grasp_target(); not here yet.
+
+# --- SPEC ---
+BRICK_HEIGHT_M = Param(0.0114, "SPEC", "2x4 brick body height")
+GRIPPER_EMPTY_MAX = Param(3.5, "SPEC", "closed on nothing reads 1.3-2.1; on the brick's 16 mm side 6.7-7.0")
+
+# --- RULE ---
+GRASP_LIFT_M = Param(0.004, "RULE", "jaw tips above the floor when closing: inside the brick's lower half")
+SERVO_GAIN = Param(0.5, "RULE", "fraction of the measured error corrected per look (no overshoot with noisy boxes)")
+STEP_IN_VIEW_FRACTION = Param(0.25, "RULE", "one move may shift the target by at most this share of the image, so it stays in view")
+LOOK_SETTLE_S = Param(0.3, "RULE", "wait after a move before a frame (servo settling)")
+FREE_SPEED_MPS = Param(0.04, "RULE", "straight-line speed in free air")
+NEAR_SPEED_MPS = Param(0.01, "RULE", "speed for the last centimetres to the floor")
+
+ALL = {name: p for name, p in globals().items() if isinstance(p, Param)}
