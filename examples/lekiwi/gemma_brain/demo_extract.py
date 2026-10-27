@@ -46,7 +46,10 @@ JOINTS = ["arm_shoulder_pan", "arm_shoulder_lift", "arm_elbow_flex", "arm_wrist_
 # Segmentation, in the recording's own units (normalized joints at 30 Hz): generic, not
 # robot-specific -- they say what counts as "still" and as "closing" in a human demo.
 STILL_UNITS = 0.4  # max joint change per frame for the arm to count as paused
-PAUSE_FRAMES = 6  # a pause is at least this long (0.2 s; the procedure asks for 0.5 s)
+PAUSE_FRAMES = 6  # stillness at least this long (0.2 s) splits motions
+# A deliberate pause (the procedure asks for ~1 s) marks the hover and lift keyframes: a slow
+# human descent or lift has many 0.2-0.6 s still moments (Oct 27 demo).
+KEY_PAUSE_FRAMES = 24
 CLOSE_DROP = 8.0  # the gripper falls at least this much in one close
 GRIPPER_EMPTY = 3.5  # skills.GRIPPER_EMPTY_MAX: closing below this held nothing
 OPEN_RISE = 3.0  # the gripper opening this far above its closed width is a release
@@ -58,8 +61,8 @@ class Keyframes:
     close_start: int  # the last frame before the gripper starts closing
     close_end: int  # the gripper stops (stalled on the object)
     pre_close: int  # the last frame of the pause before the close
-    hover: int | None  # the last pause before the close that is clearly above it
-    lift: int | None  # the first pause after the close that is clearly above it
+    hover: int | None  # the last deliberate pause before the close that is clearly above it
+    lift: int | None  # the highest deliberate pause between the close and the release
     pre_release: int | None  # the last frame before the gripper opens again
     held: bool
 
@@ -112,7 +115,8 @@ def find_keyframes(joints: np.ndarray, z: np.ndarray) -> Keyframes:
     # it: clip each pause to the frame before the gripper starts moving.
     before = [(p0, min(p1, close_start)) for p0, p1 in ps if p0 < close_start]
     pre_close = before[-1][1] if before else close_start
-    hover = next((p1 for _, p1 in reversed(before) if z[p1] - z[close_end] >= LIFT_MIN_M), None)
+    hover = next((p1 for p0, p1 in reversed(before)
+                  if p1 - p0 + 1 >= KEY_PAUSE_FRAMES and z[p1] - z[close_end] >= LIFT_MIN_M), None)
     rel = np.nonzero(g[close_end:] > width + OPEN_RISE)[0]
     pre_release = None
     if len(rel):
@@ -121,7 +125,12 @@ def find_keyframes(joints: np.ndarray, z: np.ndarray) -> Keyframes:
             r -= 1
         pre_release = r - 1
     end = pre_release if pre_release is not None else len(g) - 1
-    lift = next((p[0] for p in ps if close_end < p[0] <= end and z[p[0]] - z[close_end] >= LIFT_MIN_M), None)
+    # The top of the lift: the highest deliberate pause between the close and the release (a
+    # demo can pause partway up first: Oct 27, 1 s at 2.7 cm before 9.9 cm).
+    # The pause the release comes out of isn't the lift (the target can sit higher than it).
+    ups = [p0 for p0, p1 in ps if close_end < p0 <= end and p1 - p0 + 1 >= KEY_PAUSE_FRAMES
+           and z[p0] - z[close_end] >= LIFT_MIN_M and not (pre_release is not None and p0 <= pre_release <= p1)]
+    lift = max(ups, key=lambda f: z[f]) if ups else None
     return Keyframes(close_start, close_end, pre_close, hover, lift, pre_release, held=width > GRIPPER_EMPTY)
 
 
@@ -168,7 +177,7 @@ def main() -> None:
     df = load_episode(args.dataset, args.episode)
     c = json.loads(args.calibration.read_text())
     calib = Calibration(c["joints"], c.get("motor_resolution", 4096))
-    joints = df[JOINTS].values
+    joints = df[[f"{j}.pos" for j in JOINTS]].values
     tcp = np.stack([calib.fk(dict(zip(JOINTS, row))) for row in joints])
     z = tcp[:, 2, 3]
     kf = find_keyframes(joints, z)
