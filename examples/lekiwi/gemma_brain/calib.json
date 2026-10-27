@@ -105,20 +105,20 @@
   },
   "front_camera": {
     "value": {
-      "u_per_deg": 0.0168,
-      "u_target": 0.466,
-      "floor_v": 0.34,
-      "range_k": 0.0681,
-      "range_horizon_v": 0.32,
-      "range_offset_m": 0.205,
-      "near_bottom": 0.577,
-      "mid_bottom": 0.507
+      "u_per_deg": 0.0184,
+      "u_target": 0.451,
+      "floor_v": 0.355,
+      "range_k": 0.0583,
+      "range_horizon_v": 0.335,
+      "range_offset_m": 0.1,
+      "near_bottom": 0.699,
+      "mid_bottom": 0.559
     },
     "meaning": "front-camera geometry for scan/approach (skills.FRONT_*, RANGE_*)",
     "method": "calibrate_front.py: turn test, straight drive at a brick, wrist check at the reach point",
-    "date": "2026-10-26",
-    "log": "runs/20261026T224800-front-calib",
-    "fit_rms_m": 0.0055
+    "date": "2026-10-27",
+    "log": "runs/20261027T085721-front-calib",
+    "fit_rms_m": 0.0069
   },
   "wrist_jaws": {
     "value": {
