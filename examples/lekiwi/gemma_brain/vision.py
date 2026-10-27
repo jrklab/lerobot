@@ -69,15 +69,17 @@ def brick_angle(jpeg: bytes, box, pad: float = 0.25) -> dict | None:
     }
 
 
-def plausible_brick(jpeg: bytes, box, target: str = "") -> tuple[bool, str]:
+def plausible_brick(jpeg: bytes, box, target: str = "", allow_border: bool = False) -> tuple[bool, str]:
     """Is Gemma's box really a brick on the floor in a wrist frame? Gemma's own yes/no is
     unreliable here both ways (2026-10-23: false negatives on a plainly visible brick, and a
     box invented on the blue gripper jaw when nothing was there), so check geometry instead:
     the box must not touch the image border and must be mostly free of the jaws' saturated
     blue. (A brick-shaped-blob test was tried too and rejected: the whiteness segmentation
-    spills onto the light floor in about half of the real-brick frames.)"""
+    spills onto the light floor in about half of the real-brick frames.)
+    allow_border: a box at the border is fine for a coarse first look (Oct 27: a whole brick at
+    the top edge of the view from the hover point, 0.02 from it, rejected six times)."""
     x0, y0, x1, y1 = box
-    if min(x0, y0) < 0.01 or max(x1, y1) > 0.99:
+    if not allow_border and (min(x0, y0) < 0.01 or max(x1, y1) > 0.99):
         return False, "box touches the image border"
     img = cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_COLOR)
     h, w = img.shape[:2]

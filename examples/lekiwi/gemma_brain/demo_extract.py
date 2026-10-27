@@ -211,12 +211,37 @@ def main() -> None:
             ang = brick_angle(jpeg, box)
             out["pre_close"] = {"video_frame": k, "box": [round(v, 4) for v in box], "snap": how,
                                 "centre": [round((box[0] + box[2]) / 2, 4), round((box[1] + box[3]) / 2, 4)],
-                                "angle_deg": ang.get("angle") if ang else None}
-    if kf.pre_release is not None and args.place_target:
-        got = wrist_frame(args.dataset, df, args.episode, kf.pre_release)
+                                # skills.center_along_length's measure: share of the brick's
+                                # length beyond the fixed jaw's tip row
+                                "outside": round(float(np.clip((S.FIXED_JAW_TIP_V - box[1]) / S.BRICK_LEN_V, 0, 1)), 3)}
+    if kf.hover is not None:
+        got = wrist_frame(args.dataset, df, args.episode, kf.hover)
         if got:
             jpeg, k = got
-            (args.dataset / f"ep{args.episode}_pre_release.jpg").write_bytes(jpeg)
+            (args.dataset / f"ep{args.episode}_hover.jpg").write_bytes(jpeg)
+            a = model.box(jpeg, f"the {args.target} on the floor")
+            if a.value is not None:
+                box, _ = snap_box(jpeg, a.value, what=args.target)
+                ang = brick_angle(jpeg, box)
+                roll = math.degrees(calib.to_rad("arm_wrist_roll", joints[kf.hover, 4]))
+                out["hover_view"] = {"video_frame": k, "box": [round(v, 4) for v in box],
+                                     "brick_angle_deg": None if ang is None else round(ang["angle_deg"], 1), "aspect": None if ang is None else round(ang["aspect"], 2), "roll_deg": round(roll, 1)}
+                if ang:
+                    # The wrist turns between the hover and the close by this much, on top of
+                    # aligning to the brick: skills.align_roll aims for the brick's long side vertical.
+                    out["roll_change_hover_to_close_deg"] = round(out["roll_deg_at_close"] - roll, 1)
+    if kf.pre_release is not None and args.place_target:
+        # Right before the release the cup fills the wrist view (the model finds no "cup"):
+        # use the last deliberate pause above it, before lowering in.
+        from demo_extract import KEY_PAUSE_FRAMES as KP  # noqa: E402
+        above = [p1 for p0, p1 in pauses(joints) if kf.close_end < p1 < kf.pre_release and p1 - p0 + 1 >= KP
+                 and z[p1] - z[kf.pre_release] >= LIFT_MIN_M and p1 != kf.lift and p0 != kf.lift]
+        view = above[-1] if above else kf.pre_release
+        out["above_target_z_above_floor_m"] = round(float(z[view] - out["floor_z_m_est"]), 3)
+        got = wrist_frame(args.dataset, df, args.episode, view)
+        if got:
+            jpeg, k = got
+            (args.dataset / f"ep{args.episode}_above_target.jpg").write_bytes(jpeg)
             a = model.box(jpeg, f"the {args.place_target}")
             if a.value is not None:
                 b = a.value
@@ -225,6 +250,8 @@ def main() -> None:
 
     h = z[kf.pre_close] - out["floor_z_m_est"]
     rows = [
+        ("brick share outside the jaw tips at pre-close", str(out.get("pre_close", {}).get("outside")),
+         f"OUTSIDE_AIM {S.OUTSIDE_AIM} ({S.OUTSIDE_MIN}-{S.OUTSIDE_MAX})"),
         ("open width before the close", f"{out['open_width']:.1f}", f"OPEN {S.OPEN}"),
         ("jaw width at the close", f"{out['closed_width']:.1f}", f"empty below {S.GRIPPER_EMPTY_MAX}; 2x4 seen 4.7-7.0"),
         ("hover -> close descend", _m(out["descend_m"]), f"servo stages {S.SERVO_HEIGHTS} m above the floor"),

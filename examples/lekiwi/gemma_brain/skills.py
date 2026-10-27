@@ -152,7 +152,9 @@ OUTSIDE_AIM, OUTSIDE_MIN, OUTSIDE_MAX = 0.5, 0.35, 0.65
 PRE_CLOSE_ALONG_MAX_M = 0.006
 PRE_CLOSE_ALONG_TRIES = 2
 # 6 mm until Oct 26, when the owner saw an ~8 mm gap at the close (and picks missed with the
-# moving jaw pushing the brick that far): 2 mm aims for ~4 mm real gap.
+# moving jaw pushing the brick that far): 2 mm aims for ~4 mm real gap. Still open (Oct 27):
+# 0 nearly landed the fixed jaw on the brick; landing with room and sliding over at the floor
+# lifted the jaw off the floor (the slide used the commanded height) and missed.
 GRASP_CLEAR_FIXED_JAW_M = 0.002
 LIFT_M = 0.09  # was two lifts of 5 + 4 cm for the old image test; the same height in one
 GRIPPER_EMPTY_MAX = 3.5  # closed to empty reads ~1.9; on the 2x4 brick's short side, 6.7
@@ -424,11 +426,11 @@ class Skills:
         self.log.frame(tag, jpeg)
         return jpeg
 
-    def see_block(self, tag: str, check_present: bool = True, want_box: bool = False):
+    def see_block(self, tag: str, check_present: bool = True, want_box: bool = False, allow_border: bool = False):
         """Centre (u, v) of the brick in a fresh wrist frame, or None if it isn't there.
         want_box: return (centre, box, jpeg) instead."""
         jpeg = self.wrist(tag)
-        check = (lambda b: plausible_brick(jpeg, snap_box(jpeg, b, what=self.target)[0], self.target)[0]) \
+        check = (lambda b: plausible_brick(jpeg, snap_box(jpeg, b, what=self.target)[0], self.target, allow_border)[0]) \
             if check_present else None
         a = self.look(jpeg, f"the {self.target} on the floor", check)
         self.log.ev("box", tag=tag, box=a.value, ms=round(a.ms), by=a.by)
@@ -439,7 +441,7 @@ class Skills:
             self.log.ev("snap", tag=tag, box=[round(v, 4) for v in box])
         if check_present:
             # Not Gemma's yes/no: unreliable both ways on this brick (see vision.plausible_brick).
-            ok, why = plausible_brick(jpeg, box, self.target)
+            ok, why = plausible_brick(jpeg, box, self.target, allow_border)
             self.log.ev("present", tag=tag, ok=ok, why=why)
             if not ok:
                 return None
@@ -1027,7 +1029,8 @@ class Skills:
         """With the gripper above ABOVE_XY, move the base so the brick lands within the arm's
         own servo range of the grasp pixel (the omni base can strafe)."""
         for k in range(3):
-            c = self.see_block(f"lineup_{k}", check_present=(k == 0))
+            # The first look is coarse: a brick at the edge of the view still says which way to go.
+            c = self.see_block(f"lineup_{k}", check_present=(k == 0), allow_border=(k == 0))
             if c is None:
                 return Result(False, f"no {self.target} in the wrist camera above the reach point")
             h = self.height()
@@ -1036,9 +1039,13 @@ class Skills:
             if np.linalg.norm(d) <= ARM_REACH_M:
                 return Result(True, data={"dxy": d})
             if not self.base_ok:
-                # Base locked: the arm's own centring (centre()) takes the whole offset, if the
-                # pose is reachable; it reports if it isn't.
-                return Result(True, data={"dxy": d, "base_locked": True})
+                # Base locked: the arm takes the offset itself, then looks again. Returning here
+                # (as before Oct 27) left a brick 6.4 cm to the side at the edge of the view, and
+                # the roll step couldn't see it. Out of reach: the arm's planner refuses.
+                p = self.cmd_tcp()
+                self.move_tcp([p[0] + float(d[0]), p[1] + float(d[1]), p[2]], speed=FREE_EE_SPEED)
+                self.log.ev("lineup_arm", dxy=d)
+                continue
             # Move the base by the same displacement (arm and base frames share x forward, y
             # left), capped; the next frame measures what's left.
             d = np.clip(d, -0.15, 0.15)
