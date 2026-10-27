@@ -89,7 +89,12 @@ ROLL_TRIES = 2
 # beyond that turns the base.
 ROLL_FROM_REST_DEG = 90.0
 ROLL_OVERSHOOT_DEG = 10.0
+# With the base free to turn, the pick keeps the wrist within ROLL_TOL_DEG of roll 0 and
+# turns the base for the rest (owner, Oct 27): the step 5.2 picks gripped at roll 0, and
+# missed five times at -90..-126, the brick beyond the jaw tips though the wrist image said
+# it was between them; the cause is open, to come back to. A locked base uses the full range.
 BASE_TURN_MARGIN_DEG = 10.0
+BASE_ROLL_TURNS = 2
 IMAGE_PX = np.array([640.0, 480.0])
 # The open width before a grasp: 40 until the owner's Oct 27 demo opened to 24.6.
 OPEN = 25.0
@@ -547,7 +552,7 @@ class Skills:
                 return Result(True, data={"roll": self.roll, "residual_deg": ang})
             options = [self.roll + ang, self.roll + ang - 180.0, self.roll + ang + 180.0]
             slack = ROLL_OVERSHOOT_DEG if k > 0 else 0.0
-            lo, hi = self.roll_min, self.roll_max
+            lo, hi = self.pick_roll_range()
             fits = [r for r in options if lo - slack <= r <= hi + slack]
             if not fits:
                 # A base turn of b adds b to the needed roll: turn so the nearest option lands
@@ -562,24 +567,33 @@ class Skills:
             self.move_tcp(p, speed=0.02)
         return Result(True)
 
+    def pick_roll_range(self) -> tuple[float, float]:
+        if self.base_ok:
+            return max(self.roll_min, -ROLL_TOL_DEG), min(self.roll_max, ROLL_TOL_DEG)
+        return self.roll_min, self.roll_max
+
     def centre_turning_base(self) -> Result:
         """centre(), and when the brick needs a wrist roll outside the allowed range, turn the
         base instead (the gripper stays 10 cm up, clear of the brick), line the base up
-        again (the turn swings the reach point sideways), and centre once more."""
+        again (the turn swings the reach point sideways), and centre once more. Up to
+        BASE_ROLL_TURNS turns: the brick's angle is good to ~+/-15 deg, so with the pick's
+        narrow roll range (pick_roll_range) the first turn can land just outside it."""
         r = self.centre()
-        turn = r.data.get("base_turn_deg") if not r.ok else None
-        if turn is None:
-            return r
-        self.roll = 0.0
-        p = self.cmd_tcp()
-        self.move_tcp(p, speed=0.02)  # back to roll 0 before the base turn
-        res = self.robot.base(dtheta_deg=float(turn))
-        self.log.ev("base", turn_deg=round(turn, 1), moved=res["result"].get("moved"), why="roll out of range")
-        lu = self.line_up_base()
-        self.log.ev("step", name="line_up_after_turn", ok=lu.ok, reason=lu.reason, data=lu.data)
-        if not lu.ok:
-            return lu
-        return self.centre()
+        for _ in range(BASE_ROLL_TURNS):
+            turn = r.data.get("base_turn_deg") if not r.ok else None
+            if turn is None:
+                return r
+            self.roll = 0.0
+            p = self.cmd_tcp()
+            self.move_tcp(p, speed=0.02)  # back to roll 0 before the base turn
+            res = self.robot.base(dtheta_deg=float(turn))
+            self.log.ev("base", turn_deg=round(turn, 1), moved=res["result"].get("moved"), why="roll out of range")
+            lu = self.line_up_base()
+            self.log.ev("step", name="line_up_after_turn", ok=lu.ok, reason=lu.reason, data=lu.data)
+            if not lu.ok:
+                return lu
+            r = self.centre()
+        return r
 
     def centre(self) -> Result:
         """Servo the brick onto grasp_goal at each SERVO_HEIGHTS, going down between: its
