@@ -95,6 +95,16 @@ ROLL_OVERSHOOT_DEG = 10.0
 # it was between them; the cause is open, to come back to. A locked base uses the full range.
 BASE_TURN_MARGIN_DEG = 10.0
 BASE_ROLL_TURNS = 2
+# The base turns about the middle of its three wheels: in the arm base frame, 3.5 cm behind
+# the arm's origin, on its centre line (LeKiwi URDF, SIGRobotics-UIUC/LeKiwi: shoulder-pan
+# axis 7.4 cm ahead of the wheel centre, the arm origin 3.9 cm behind that axis).
+BASE_TURN_CENTRE_XY = np.array([-0.035, 0.0])
+# A turn for the wrist roll orbits the brick (turn plus the shift that keeps it in front of
+# the arm), in steps of at most ORBIT_STEP_DEG, looking again after each: the Pi runs the
+# shift and the turn at their own speeds, so mid-step the brick can stray up to about
+# 2 r sin(step / 2) (6 cm at r = 0.24 m), inside the wrist view's ~9 cm half-width at 10 cm.
+# A 70 deg turn in place (Oct 27, run 20261027T020732) swung it ~30 cm, out of view.
+ORBIT_STEP_DEG = 15.0
 IMAGE_PX = np.array([640.0, 480.0])
 # The open width before a grasp: 40 until the owner's Oct 27 demo opened to 24.6.
 OPEN = 25.0
@@ -586,14 +596,40 @@ class Skills:
             self.roll = 0.0
             p = self.cmd_tcp()
             self.move_tcp(p, speed=0.02)  # back to roll 0 before the base turn
-            res = self.robot.base(dtheta_deg=float(turn))
-            self.log.ev("base", turn_deg=round(turn, 1), moved=res["result"].get("moved"), why="roll out of range")
+            orb = self.orbit(float(turn))
+            if not orb.ok:
+                return orb
             lu = self.line_up_base()
             self.log.ev("step", name="line_up_after_turn", ok=lu.ok, reason=lu.reason, data=lu.data)
             if not lu.ok:
                 return lu
             r = self.centre()
         return r
+
+    def orbit(self, turn_deg: float) -> Result:
+        """Turn the base by turn_deg (left positive) about the brick under the gripper rather
+        than about the base's own centre, in steps of at most ORBIT_STEP_DEG; after each, look
+        again and move the arm over the brick, so it stays tracked."""
+        n = max(1, math.ceil(abs(turn_deg) / ORBIT_STEP_DEG))
+        step = math.radians(turn_deg / n)
+        rot = np.array([[math.cos(step), -math.sin(step)], [math.sin(step), math.cos(step)]])
+        for k in range(n):
+            # The brick, from the base's turning centre: where the gripper is now.
+            b = self.cmd_tcp()[:2] - BASE_TURN_CENTRE_XY
+            t = b - rot @ b  # the shift (start frame) that brings it back in front of the arm
+            res = self.robot.base(dx=float(t[0]), dy=float(t[1]), dtheta_deg=math.degrees(step))
+            self.log.ev("base", orbit=k, dxy=t, turn_deg=round(math.degrees(step), 1),
+                        moved=res["result"].get("moved"), why="roll out of range")
+            got = self.see_block(f"orbit_{k}", check_present=True, want_box=True, allow_border=True)
+            if got is None:
+                return Result(False, f"lost the {self.target} while turning the base for the wrist roll")
+            h = self.height()
+            c = self._goal_point(got[1], h)
+            d = np.linalg.solve(jacobian(h, self.roll), grasp_goal(h) - c)
+            p = self.cmd_tcp()
+            self.move_tcp([p[0] + float(d[0]), p[1] + float(d[1]), p[2]], speed=FREE_EE_SPEED)
+            self.log.ev("orbit_track", k=k, center=c, dxy=d)
+        return Result(True)
 
     def centre(self) -> Result:
         """Servo the brick onto grasp_goal at each SERVO_HEIGHTS, going down between: its
