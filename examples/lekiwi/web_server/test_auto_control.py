@@ -49,7 +49,7 @@ class Sim:
         self.pos = dict(start or {**READY, GRIPPER: 50.0})
         self.targets = dict(self.pos)
         self.walls = {}  # joint -> (lo, hi): the joint can't move outside this (contact)
-        self.extra = {}  # joint -> extra joint_state readings, e.g. the gripper's current/temp
+        self.extra = {}  # joint -> extra joint_state readings, e.g. the gripper's temperature
         self.base_cmd = {"x.vel": 0.0, "y.vel": 0.0, "theta.vel": 0.0}
         self.t = 0.0
         self.auto = AutoController(norm_to_rad, clock=lambda: self.t)
@@ -246,14 +246,14 @@ def test_gripper_closes_empty():
     assert st["state"] == "done" and not st["result"]["stalled"] and st["result"]["pos"] < 2.0, st
 
 
-def holding_sim(current=60.0, temp=40.0):
+def holding_sim(temp=40.0):
     """A sim whose gripper has just closed and stalled on a block 22 units wide."""
     sim = Sim()
     sim.walls[GRIPPER] = (22.0, 1e9)
-    sim.extra[GRIPPER] = {"current": current, "temp": temp}
+    sim.extra[GRIPPER] = {"temp": temp}
     sim.submit({"cmd": "gripper", "pos": 0, "speed": 50})
     st = sim.run_until_done()
-    assert st["result"]["stalled"] and st["result"]["current"] == current, st
+    assert st["result"]["stalled"] and st["result"]["temp"] == temp, st
     return sim
 
 
@@ -278,26 +278,15 @@ def test_hold_spots_a_drop():
     assert sim.targets[GRIPPER] >= sim.pos[GRIPPER] - 0.5  # stopped pushing on nothing
 
 
-def test_high_current_eases_the_squeeze_never_opens():
-    sim = holding_sim()
-    pos = hold(sim)["pos"]
-    sim.extra[GRIPPER]["current"] = 230.0  # over HOLD_CURRENT_LIMIT
-    sim.run(0.5)
-    assert hold(sim)["squeeze"] == 4.0  # not yet: under HOLD_CURRENT_S
-    sim.run(0.7)
-    assert hold(sim)["squeeze"] == 2.0 and sim.targets[GRIPPER] == pos - 2.0, hold(sim)
-    sim.run(1.2)
-    h = hold(sim)
-    assert h["squeeze"] == 0.0 and sim.targets[GRIPPER] == pos and h["state"] == "holding", h
-
-
 def test_temperature_eases_then_stops_the_squeeze():
     sim = holding_sim(temp=56.0)
     sim.run(0.2)
     assert hold(sim)["squeeze"] == 2.0, hold(sim)
     sim.extra[GRIPPER]["temp"] = 63.0
     sim.run(0.2)
-    assert hold(sim)["squeeze"] == 0.0 and "temperature" in hold(sim)["events"][-1]["what"], hold(sim)
+    h = hold(sim)
+    assert h["squeeze"] == 0.0 and "temperature" in h["events"][-1]["what"] and h["state"] == "holding", h
+    assert sim.targets[GRIPPER] == h["pos"]  # holds where it stalled; never opens
 
 
 def test_a_new_gripper_command_ends_the_hold():

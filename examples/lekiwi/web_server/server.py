@@ -201,8 +201,8 @@ def auto_status():
     return {
         "mode": bridge.get_control_mode(),
         **bridge.auto.status(measured),
-        # Raw Present_Current counts (~6.5 mA each) and deg C, read every tick (LeKiwi.get_observation).
-        "gripper_sensors": {"current": grip.get("current"), "temp": grip.get("temp")},
+        # deg C, read every ~2 s (LeKiwi.get_observation).
+        "gripper_sensors": {"temp": grip.get("temp")},
     }
 
 

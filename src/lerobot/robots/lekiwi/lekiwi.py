@@ -37,6 +37,11 @@ from .config_lekiwi import LeKiwiConfig
 
 logger = logging.getLogger(__name__)
 
+# The gripper temperature is read every this many observations (~2 s at 30 Hz).
+TEMP_READ_EVERY = 60
+# The motor read time per observation is logged every this many observations (~1 min at 30 Hz).
+READ_STATS_EVERY = 1800
+
 
 class LeKiwi(Robot):
     """
@@ -52,6 +57,10 @@ class LeKiwi(Robot):
     def __init__(self, config: LeKiwiConfig):
         super().__init__(config)
         self.config = config
+        self._prev_arm: tuple[float, dict[str, float]] | None = None  # (time, positions) for _arm_speeds
+        self._obs_count = 0
+        self._gripper_temp = float("nan")
+        self._read_ms: list[float] = []
         norm_mode_body = MotorNormMode.DEGREES if config.use_degrees else MotorNormMode.RANGE_M100_100
         self.bus = FeetechMotorsBus(
             port=self.config.port,
@@ -339,6 +348,25 @@ class LeKiwi(Robot):
             "theta.vel": theta,
         }  # m/s and deg/s
 
+    def _arm_speeds(self, arm_pos: dict[str, float], now: float) -> dict[str, float]:
+        """|speed| of each arm motor in raw steps/s (Present_Velocity's unit) from the change in
+        its normalized position since the previous call, through its calibration range; 0 on the
+        first call."""
+        prev, self._prev_arm = self._prev_arm, (now, dict(arm_pos))
+        if prev is None or now <= prev[0]:
+            return dict.fromkeys(arm_pos, 0.0)
+        dt = now - prev[0]
+        speeds = {}
+        for m, pos in arm_pos.items():
+            mode = self.bus.motors[m].norm_mode
+            if mode is MotorNormMode.DEGREES:
+                steps_per_unit = 4096 / 360
+            else:
+                cal = self.calibration[m]
+                steps_per_unit = (cal.range_max - cal.range_min) / (200 if mode is MotorNormMode.RANGE_M100_100 else 100)
+            speeds[m] = abs(pos - prev[1][m]) * steps_per_unit / dt
+        return speeds
+
     @check_if_not_connected
     def get_observation(self) -> RobotObservation:
         # Read actuators position for arm and vel for base
@@ -358,20 +386,28 @@ class LeKiwi(Robot):
         arm_load = self.bus.sync_read("Present_Load", self.arm_motors)
         arm_load_state = {f"{k}.load": abs(v) for k, v in arm_load.items()}
 
-        # Read arm motor speeds for stall detection; take abs() for speed magnitude
-        arm_vel = self.bus.sync_read("Present_Velocity", self.arm_motors)
-        arm_speed_state = {f"{k}.speed": abs(v) for k, v in arm_vel.items()}
+        # Arm speeds for stall detection, from the position change since the last read instead
+        # of a Present_Velocity read (one bus round trip less per tick).
+        arm_speed_state = {f"{k}.speed": v for k, v in self._arm_speeds(arm_pos, start).items()}
 
-        # Gripper current (raw counts, ~6.5 mA each) and temperature (deg C), for the auto
-        # mode's hold check and motor protection (examples/lekiwi/web_server/auto_control.py).
-        grip_current = self.bus.sync_read("Present_Current", ["arm_gripper"])["arm_gripper"]
-        grip_temp = self.bus.sync_read("Present_Temperature", ["arm_gripper"])["arm_gripper"]
-        gripper_state = {"arm_gripper.current": float(grip_current), "arm_gripper.temp": float(grip_temp)}
+        # Gripper temperature (deg C) for the auto mode's hold protection
+        # (examples/lekiwi/web_server/auto_control.py): it changes over minutes, so it's read
+        # every TEMP_READ_EVERY observations, not every tick.
+        if self._obs_count % TEMP_READ_EVERY == 0:
+            self._gripper_temp = float(self.bus.sync_read("Present_Temperature", ["arm_gripper"])["arm_gripper"])
+        self._obs_count += 1
 
-        obs_dict = {**arm_state, **base_vel, **arm_load_state, **arm_speed_state, **gripper_state}
+        obs_dict = {**arm_state, **base_vel, **arm_load_state, **arm_speed_state, "arm_gripper.temp": self._gripper_temp}
 
         dt_ms = (time.perf_counter() - start) * 1e3
         logger.debug(f"{self} read state: {dt_ms:.1f}ms")
+        self._read_ms.append(dt_ms)
+        if len(self._read_ms) >= READ_STATS_EVERY:
+            logger.info(
+                f"{self} motor reads: mean {np.mean(self._read_ms):.1f} ms, max {np.max(self._read_ms):.1f} ms "
+                f"over {len(self._read_ms)} observations"
+            )
+            self._read_ms = []
 
         # Capture images from cameras
         for cam_key, cam in self.cameras.items():
