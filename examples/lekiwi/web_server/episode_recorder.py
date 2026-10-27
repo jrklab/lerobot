@@ -147,6 +147,12 @@ class EpisodeRecorder:
         self._frame_count = 0
         self._buf_action: list[np.ndarray] = []
         self._buf_state: list[np.ndarray] = []
+        # Per camera, per recorded row: the index of the video frame written for that row, or
+        # -1 when none was (no new camera frame, or the encoder queue was full). Saved as
+        # observation.images.<cam>.video_frame: the Pi drops frames under load (Sept episode:
+        # 457 wrist frames for 631 rows), so timestamps alone can't match rows to frames.
+        self._buf_video_frame: dict[str, list[int]] = {}
+        self._video_frame_count: dict[str, int] = {}
         # Video encoding (libx264) happens on one background thread per camera, fed through a
         # bounded queue, instead of inline in add_frame() -- encoding synchronously in the
         # control-loop thread competed with send_action() timing and made teleoperated arm
@@ -279,6 +285,8 @@ class EpisodeRecorder:
             self._task = task
             self._buf_action = []
             self._buf_state = []
+            self._buf_video_frame = {cam_key: [] for cam_key in self._frame_queues}
+            self._video_frame_count = dict.fromkeys(self._frame_queues, 0)
             self._frame_count = 0
             self._recording = True
         self._record_start_t = time.monotonic()
@@ -318,14 +326,17 @@ class EpisodeRecorder:
                 self._buf_state.append(state_arr)
                 self._buf_action.append(action_arr)
                 self._frame_count += 1
-            for cam_key, q in self._frame_queues.items():
-                frame = obs.get(cam_key)
-                if frame is None:
-                    continue
-                try:
-                    q.put_nowait(np.ascontiguousarray(frame, dtype=np.uint8))
-                except queue.Full:
-                    logger.warning("Video encoder queue full for %s -- dropping a frame", cam_key)
+                for cam_key, q in self._frame_queues.items():
+                    frame = obs.get(cam_key)
+                    written = -1
+                    if frame is not None:
+                        try:
+                            q.put_nowait(np.ascontiguousarray(frame, dtype=np.uint8))
+                            written = self._video_frame_count[cam_key]
+                            self._video_frame_count[cam_key] += 1
+                        except queue.Full:
+                            logger.warning("Video encoder queue full for %s -- dropping a frame", cam_key)
+                    self._buf_video_frame[cam_key].append(written)
         except Exception:
             logger.exception("add_frame failed -- stopping recording")
             with self._buffer_lock:
@@ -355,8 +366,10 @@ class EpisodeRecorder:
             # inside the lock, which is what makes that straggler a no-op in the first place.
             actions = self._buf_action
             states = self._buf_state
+            video_frames = self._buf_video_frame
             self._buf_action = []
             self._buf_state = []
+            self._buf_video_frame = {}
         episode_index = self._current_episode_index
         task = self._task
         frame_queues = self._frame_queues
@@ -374,7 +387,8 @@ class EpisodeRecorder:
         self._saving = True
         threading.Thread(
             target=self._save_worker,
-            args=(episode_index, task, actions, states, frame_queues, encoder_threads, video_writers, video_paths),
+            args=(episode_index, task, actions, states, video_frames, frame_queues, encoder_threads, video_writers,
+                  video_paths),
             daemon=True,
         ).start()
 
@@ -405,6 +419,7 @@ class EpisodeRecorder:
         task: str,
         actions: list[np.ndarray],
         states: list[np.ndarray],
+        video_frames: dict[str, list[int]],
         frame_queues: dict[str, queue.Queue],
         encoder_threads: dict[str, threading.Thread],
         video_writers: dict[str, _VideoWriter],
@@ -434,6 +449,8 @@ class EpisodeRecorder:
                 "index": list(range(global_start, global_start + frame_count)),
                 "task_index": [task_idx] * frame_count,
             }
+            for cam_key, rows in video_frames.items():
+                data[f"observation.images.{cam_key}.video_frame"] = rows
             data_path = self.root / "data" / "chunk-000" / f"file-{episode_index:03d}.parquet"
             data_path.parent.mkdir(parents=True, exist_ok=True)
             pd.DataFrame(data).to_parquet(data_path, index=False)
@@ -487,6 +504,8 @@ class EpisodeRecorder:
             "shape": [len(self._state_names)],
             "names": self._state_names,
         }
+        for cam_key in self._camera_shapes:
+            features[f"observation.images.{cam_key}.video_frame"] = {"dtype": "int64", "shape": [1], "names": None}
         for cam_key, (height, width, channels) in self._camera_shapes.items():
             features[f"observation.images.{cam_key}"] = {
                 "dtype": "video",
@@ -531,6 +550,7 @@ class EpisodeRecorder:
             self._recording = False
             self._buf_action = []
             self._buf_state = []
+            self._buf_video_frame = {}
         frame_queues = self._frame_queues
         encoder_threads = self._encoder_threads
         video_writers = self._video_writers
