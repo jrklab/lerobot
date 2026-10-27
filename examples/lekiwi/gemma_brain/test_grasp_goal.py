@@ -92,14 +92,16 @@ def _grasper(gaps):
     return sk
 
 
-def test_grasp_redoes_once_from_the_last_servo_height_when_the_gap_is_wide():
+def test_grasp_redoes_once_from_the_last_servo_height_when_the_gap_is_wide(monkeypatch):
+    monkeypatch.setattr(skills, "GRASP_REDOS", 1)
     sk = _grasper([0.009, 0.004])
     assert sk.grasp(None).ok
     assert sk.centre_calls == [0, len(skills.SERVO_HEIGHTS) - 1]
     assert abs(sk.aim_shift_m - (0.009 - skills.GRASP_MARGIN_M)) < 1e-9  # aim closer to the jaw
 
 
-def test_grasp_closes_without_redo_when_the_gap_is_in_range_and_after_one_redo_anyway():
+def test_grasp_closes_without_redo_when_the_gap_is_in_range_and_after_one_redo_anyway(monkeypatch):
+    monkeypatch.setattr(skills, "GRASP_REDOS", 1)
     sk = _grasper([0.003])
     assert sk.grasp(None).ok and sk.centre_calls == [0]
     sk = _grasper([-0.004, -0.003])

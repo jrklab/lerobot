@@ -79,7 +79,10 @@ GRASP_MARGIN_M = float(np.median(np.abs(CALIB["wrist_descent"]["last_descent_rig
 # From the 33 logged closes (Oct 26-27, gap corrected for the brick's height): square grips
 # at 0.1-5.6 mm, tilted grips at 4.9-11.0 mm, empty closes spread over 0.1-11.7 mm.
 GRASP_GAP_MAX_M = 0.005
-GRASP_REDOS = 1
+# 0 (Oct 27): the redo's second touch stopped on a false contact ~24 mm up five times in a
+# row (run 20261027T030658); the check stays, logged only, until the redo lands on the
+# measured floor without a second touch.
+GRASP_REDOS = 0
 BRICK_HEIGHT_M = 0.0114  # 2x4 brick body, spec; its box in the wrist image is the top face
 GRASP_PIXEL = [(p["height_m"], np.array(p["center"])) for p in CALIB["wrist_grasp_pixel"]["value"]]
 
