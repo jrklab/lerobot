@@ -45,11 +45,14 @@ from brain import PICK_TRIES
 from gemma import LlamaCpp
 from planner import Planner, Step, check_plan, objects_in
 from robot import CANDIDATE_URLS, OperatorTookOver, Robot, RobotError
-from skills import Log, Result, Skills
+from skills import DROP_RIM_HEIGHT_M, Log, Result, Skills
 
 PLANNER_URL = "http://127.0.0.1:8081"  # 26B-A4B, 70 image tokens
 FAST_URL = "http://127.0.0.1:8082"  # E2B Q4_K_M, 70 image tokens: repeat looks inside the skills
 MAX_REPLANS = 2
+# fold(): above this (TCP over the floor), Arm.reset's tilt-and-pull-in can't catch anything
+# we handle: the tallest is the cup's rim.
+FOLD_CLEAR_M = DROP_RIM_HEIGHT_M + 0.06
 # What the existing skills can run: (verb, relation).
 SUPPORTED = {("pick", None), ("place", "in"), ("place", "next_to")}
 
@@ -125,8 +128,13 @@ class PlanBrain:
                     arm.move_to([p[0], p[1], RESET_SAFE_Z_M], speed=0.03,
                                 z_min=min(arm.z_min, p[2] - JAW_TIP_OFFSET_M - 0.01))
                 except PlanError as e:
-                    self.log.ev("fold", ok=False, reason=str(e))
-                    return f"can't lift straight up from here ({e})"
+                    # Clear of anything we handle (the cup rim, plus a margin), Arm.reset's
+                    # tilt-and-pull-in can't catch it: after a pick the arm is ~19 cm up and
+                    # the wrist can't go straight up from there (Oct 26), while the cup was
+                    # dragged with the jaws ~13 cm up.
+                    if self.sk.height() < FOLD_CLEAR_M:
+                        self.log.ev("fold", ok=False, reason=str(e), height=round(self.sk.height(), 3))
+                        return f"can't lift straight up from here ({e})"
             arm.reset()
         except (RobotError, PlanError) as e:
             if isinstance(e, OperatorTookOver):
@@ -164,6 +172,11 @@ class PlanBrain:
             except (RobotError, PlanError) as e:
                 if isinstance(e, OperatorTookOver):
                     raise
+                if "not in auto mode" in str(e):
+                    # The Pi ends auto mode on gamepad input, the e-stop, or the gamepad
+                    # disconnecting (it powers off when idle: Oct 26). Nothing can move now.
+                    raise OperatorTookOver("robot left auto mode (gamepad input, e-stop, or the gamepad "
+                                           "disconnecting, e.g. asleep after idling)") from e
                 r = Result(False, f"robot error: {e}")
             self.holding = getattr(self.sk, "holding", None)
             self.log.ev("step_result", step=str(s), ok=r.ok, reason=r.reason, holding=self.holding)

@@ -704,22 +704,27 @@ class Skills:
             return Result(False, "the brick stayed behind: it moved in the image as the gripper rose", data)
         return Result(True, data=data)
 
-    def see_front(self, tag: str, what: str) -> tuple[np.ndarray, list] | None:
+    def see_front(self, tag: str, what: str, repeat: bool = False) -> tuple[np.ndarray, list] | None:
         """(u, v_bottom) and the box of `what` on the floor in a fresh front-camera frame, or
         None. Gemma's box is only accepted if it could be a thing on the floor: its bottom
         edge in the floor part of the image (with nothing there, Gemma has boxed a hat on a
         coat rack), and clear of the left/right border (it has boxed the rug at the edge).
-        Gemma's yes/no isn't used: unreliable on these objects (see vision.plausible_brick)."""
+        Gemma's yes/no isn't used: unreliable on these objects (see vision.plausible_brick).
+        repeat: `what` was found a step ago, so the fast model may answer (see look())."""
         time.sleep(LOOK_SETTLE_S)
         jpeg, _ = self.robot.frame("front", after=time.time())
         self.log.frame(tag, jpeg)
-        a = self.gemma.box(jpeg, f"the {what} on the floor")
+
+        def accept(b) -> tuple[bool, str]:
+            if not (b[3] > FRONT_FLOOR_V and b[0] > 0.01 and b[2] < 0.99):
+                return False, "not on the floor or at the border"
+            return colour_matches(jpeg, b, what)
+
+        q = f"the {what} on the floor"
+        a = self.look(jpeg, q, lambda b: accept(b)[0]) if repeat else self.gemma.box(jpeg, q)
         b = a.value
-        ok = b is not None and b[3] > FRONT_FLOOR_V and b[0] > 0.01 and b[2] < 0.99
-        why = ""
-        if ok:
-            ok, why = colour_matches(jpeg, b, what)
-        self.log.ev("front_box", tag=tag, what=what, box=b, accepted=ok, colour=why, ms=round(a.ms))
+        ok, why = accept(b) if b is not None else (False, "no box")
+        self.log.ev("front_box", tag=tag, what=what, box=b, accepted=ok, colour=why, ms=round(a.ms), by=a.by)
         if not ok:
             return None
         return np.array([(b[0] + b[2]) / 2, b[3]]), b
@@ -1006,7 +1011,7 @@ class Skills:
         self.arm.reset()
         last_u = None
         for k in range(APPROACH_MAX_STEPS):
-            got = self.see_front(f"approach_{k}", what)
+            got = self.see_front(f"approach_{k}", what, repeat=k > 0)
             if got is None:
                 return Result(False, f"no {what} in the front camera")
             u, bottom = float(got[0][0]), float(got[0][1])

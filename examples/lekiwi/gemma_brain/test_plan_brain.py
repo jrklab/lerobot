@@ -31,6 +31,7 @@ from arm import PlanError
 from gemma import Answer
 from plan_brain import SUPPORTED, PlanBrain
 from planner import Step, check_plan, objects_in, parse_plan
+from robot import OperatorTookOver, RobotError
 from skills import Log, Result
 
 
@@ -77,6 +78,13 @@ class FakeArm:
         self.moves.append(("reset",))
 
 
+class FakePlanArm(FakeArm):
+    """Can't move straight up (wrist limit), like the arm just after a pick."""
+
+    def __init__(self, z):
+        super().__init__(z=z, stuck=True)
+
+
 class FakeSkills:
     """Records the skill calls; `fail` maps a call like 'fetch:red block' to how many times it fails."""
 
@@ -84,6 +92,9 @@ class FakeSkills:
         self.calls, self.fail = [], dict(fail or {})
         self.holding, self.base_ok, self.arm = None, True, arm or FakeArm()
         self.release_then_fail = release_then_fail
+
+    def height(self):
+        return self.arm.z + 0.13  # the floor at TCP z -0.13
 
     def _do(self, call: str) -> Result:
         self.calls.append(call)
@@ -220,6 +231,28 @@ def test_fold_stays_put_when_it_cant_lift_straight_up():
     ok, why = brain(FakePlanner('pick "red block"\nplace "red block" in "cup"\ndone'), sk).run("x")
     assert not ok and "stayed where it was" in why, why
     assert ("reset",) not in sk.arm.moves, sk.arm.moves  # no tilt-and-pull-in fold
+
+
+def test_fold_from_high_up_uses_the_normal_fold():
+    # Oct 26: after a pick the arm is ~19 cm up and can't go straight up; folding is safe there.
+    sk = FakeSkills(arm=FakePlanArm(z=0.06))
+    assert brain(FakePlanner('pick "a"'), sk).fold() == ""
+    assert sk.arm.moves == [("reset",)], sk.arm.moves
+
+
+def test_leaving_auto_mode_stops_without_replanning():
+    class Dropped(FakeSkills):
+        def fetch(self, what):
+            raise RobotError("POST /auto/cmd: HTTP 409: not in auto mode (mode is gamepad)")
+
+    planner = FakePlanner('pick "red block"\ndone')
+    try:
+        brain(planner, Dropped()).run("pick red")
+    except OperatorTookOver as e:
+        assert "gamepad disconnecting" in str(e)
+    else:
+        raise AssertionError("expected OperatorTookOver")
+    assert planner.replans == []
 
 
 def test_starts_holding():
