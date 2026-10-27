@@ -175,6 +175,28 @@ def jaw_geometry(jpeg: bytes, fixed: dict | None = None, band: float = 0.06) -> 
     return out
 
 
+def jaw_pad_rows(jpeg: bytes, fixed_inner_u: float) -> tuple[float, float] | None:
+    """(top, bottom) image rows, as fractions, of the fixed jaw's black rubber pad: the first
+    run of dark rows (V < 70 in more than half of a 20 px band just inside the jaw's inner edge)
+    below 0.7 of the height. None when no run of 5+ rows is found."""
+    img = cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_COLOR)
+    if img is None:
+        return None
+    h, w = img.shape[:2]
+    c = int(fixed_inner_u * w)
+    v = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)[:, max(c - 2, 0) : c + 18, 2]
+    dark = (v < 70).mean(axis=1) > 0.5
+    rows = [y for y in range(int(0.7 * h), h) if dark[y]]
+    if len(rows) < 5:
+        return None
+    run = [rows[0]]
+    for y in rows[1:]:
+        if y - run[-1] > 2:
+            break
+        run.append(y)
+    return (run[0] / h, run[-1] / h) if len(run) >= 5 else None
+
+
 def outside_fraction(box, tip_row: float) -> float:
     """Share of the brick's box (along the image vertical: its length, with the wrist rolled
     to put the long side vertical) that lies beyond the jaw tips, i.e. outside the gripper."""
