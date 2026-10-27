@@ -37,20 +37,33 @@
   "wrist_image_jacobian": {
     "value": [
       [
-        3.143,
-        1.374
+        4.227,
+        0.535
       ],
       [
-        1.549,
-        -7.365
+        0.697,
+        -5.26
       ]
     ],
     "unit": "image fraction (u right, v down) per metre of measured TCP motion (arm base x, y)",
-    "pose": "TCP pointing straight down, roll 0, near (0.22, 0, 0.0): jaw tips ~10 cm above the floor",
-    "method": "wrist_calib.py: +/-0.02 m moves, Gemma E4B box centres, least squares over 6 frames (rms 4.9 px)",
-    "date": "2026-10-23",
-    "log": "runs/20261023T172118-wrist-calib",
-    "validity": "one height; pixel motion scales roughly with 1/height, so re-measure or scale for other heights"
+    "pose": "gripper vertical (homing-tick joint zero), roll 0, TCP at (0.233, 0, -0.017): 0.094 m above the floor TCP height",
+    "height_m": 0.094,
+    "method": "wrist_calib.py: +/-0.02 m moves over a brick, llama.cpp 26B box centres, least squares over 6 frames (rms 2.7 px)",
+    "date": "2026-10-27",
+    "log": "runs/20261027T084856-wrist-calib",
+    "previous": {
+      "value": [
+        [
+          3.143,
+          1.374
+        ],
+        [
+          1.549,
+          -7.365
+        ]
+      ],
+      "note": "Oct 23, measured with the old joint zero (gripper ~28 deg off vertical)"
+    }
   },
   "wrist_grasp_pixel": {
     "value": [

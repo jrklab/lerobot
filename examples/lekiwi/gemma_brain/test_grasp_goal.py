@@ -63,7 +63,9 @@ def test_grasp_gap_is_zero_when_the_edge_at_tip_depth_meets_the_jaw():
     # the top face's edge as it appears when the brick's side is right at the jaw's inner edge
     u = p0 + (skills.FIXED_JAW_INNER_U - p0) * tips / top
     assert abs(skills.grasp_gap_m([0.3, 0.5, u, 0.8])) < 1e-9
-    assert skills.grasp_gap_m([0.3, 0.5, u - 0.02, 0.8]) > 0.002
+    # 2 mm further from the jaw at the tips' depth reads as a 2 mm gap
+    du = 0.002 * np.linalg.norm(skills.jacobian(skills.GRASP_LIFT_M)[0])
+    assert np.isclose(skills.grasp_gap_m([0.3, 0.5, u - du * skills.CAM_ABOVE_TIPS_M / (skills.CAM_ABOVE_TIPS_M - (skills.BRICK_HEIGHT_M - skills.GRASP_LIFT_M)), 0.8]), 0.002, rtol=0.02)
 
 
 class _Log:

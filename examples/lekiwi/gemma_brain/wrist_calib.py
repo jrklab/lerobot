@@ -37,7 +37,7 @@ from pathlib import Path
 import numpy as np
 
 from arm import Arm
-from gemma import Gemma
+from gemma import Gemma, LlamaCpp
 from robot import Robot
 
 WHAT = "the Lego brick on the floor"
@@ -68,12 +68,14 @@ def main() -> None:
     ap.add_argument("--z", type=float, default=0.0)
     ap.add_argument("--step", type=float, default=0.02)
     ap.add_argument("--write", action="store_true")
+    ap.add_argument("--vision-url", default="http://127.0.0.1:8081", help="llama-server for the boxes ('' = Ollama Gemma)")
+    ap.add_argument("--hold", action="store_true", help="only go to the centre pose and stay there (place the brick under it)")
     args = ap.parse_args()
     logging.basicConfig(level=logging.WARNING)
 
     out = Path(__file__).parent / "runs" / (datetime.datetime.now().strftime("%Y%m%dT%H%M%S") + "-wrist-calib")
     out.mkdir(parents=True)
-    robot, gemma = Robot(), Gemma()
+    robot, gemma = Robot(), (LlamaCpp(args.vision_url) if args.vision_url else Gemma())
     recs = []
     with robot:
         arm = Arm(robot)
@@ -81,6 +83,9 @@ def main() -> None:
             arm.pose("ready", speed=20)
             center = np.array([args.x, 0.0, args.z])
             arm.move_to(center, pitch_deg=90, roll_deg=0, speed=0.03)
+            if args.hold:
+                print(f"holding at {center}: place the brick under the gripper")
+                return
             recs.append(look(robot, gemma, out, "center", arm))
             s = args.step
             for tag, d in (("+x", (s, 0)), ("-x", (-s, 0)), ("+y", (0, s)), ("-y", (0, -s))):
@@ -90,7 +95,8 @@ def main() -> None:
             recs.append(look(robot, gemma, out, "center2", arm))
         finally:
             (out / "records.json").write_text(json.dumps(recs, indent=2))
-            arm.reset()
+            if not args.hold:
+                arm.reset()
 
     ok = [r for r in recs if r["center"] is not None]
     if len(ok) < 3:

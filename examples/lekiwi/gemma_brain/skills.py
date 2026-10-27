@@ -51,7 +51,7 @@ from vision import brick_angle, colour_matches, crop_around, plausible_brick, sn
 CALIB = json.loads(Path(__file__).with_name("calib.json").read_text())
 FLOOR_TCP_Z = CALIB["floor_tcp_z_m"]["value"]
 J_WRIST = np.array(CALIB["wrist_image_jacobian"]["value"])  # d(u, v) / d(x, y), at J_HEIGHT
-J_HEIGHT = 0.099
+J_HEIGHT = CALIB["wrist_image_jacobian"].get("height_m", 0.099)  # the TCP height above the floor it was measured at
 # Camera distance above the jaw tips along the descent: pixel motion per metre scales as
 # 1 / (height + this). Fitted from how much the brick's box grows on logged descents
 # (calibrate_descent.py: 0.065 m; the earlier guess was 0.06). A floor point's image offset
