@@ -42,12 +42,10 @@ from pathlib import Path
 
 import cv2
 import numpy as np
-
-from arm import JAW_TIP_OFFSET_M, NAMED_POSES, Arm, PlanError
-from gemma import Gemma
-from arm import plan_ee_line
-from robot import Robot, RobotError
 import overhead
+from arm import JAW_TIP_OFFSET_M, NAMED_POSES, Arm, PlanError, plan_ee_line
+from gemma import Gemma
+from robot import Robot
 from vision import brick_angle, colour_matches, crop_around, plausible_brick, snap_box
 
 CALIB = json.loads(Path(__file__).with_name("calib.json").read_text())
@@ -85,28 +83,12 @@ ROLL_TRIES = 2
 # descent found the brick far from where the model put it: run 20261027T014954). Roll r
 # turns the joint by about -r (roll 0 ~ joint +3 deg, -90 ~ +90), so the range is about
 # roll -144..+14; roll_range() works it out from the calibration. Corrections after the first
-# roll may go ROLL_OVERSHOOT_DEG past the ends rather than flip the wrist 180 deg; only a need
-# beyond that turns the base.
+# roll may go ROLL_OVERSHOOT_DEG past the ends rather than flip the wrist 180 deg. A need
+# beyond that (the ~22 deg the range misses of the brick's 180 deg symmetry) rolls to the
+# nearest end and grips up to ~11 deg off square; the base doesn't turn for the roll (owner,
+# Oct 27: orbiting the brick to fix its angle chased the angle without end).
 ROLL_FROM_REST_DEG = 90.0
 ROLL_OVERSHOOT_DEG = 10.0
-# With the base free to turn, the pick keeps the wrist within ROLL_TOL_DEG of roll 0 and
-# turns the base for the rest (owner, Oct 27): the step 5.2 picks gripped at roll 0, and
-# missed five times at -90..-126, the brick beyond the jaw tips though the wrist image said
-# it was between them; the cause is open, to come back to. A locked base uses the full range.
-BASE_TURN_MARGIN_DEG = 10.0
-BASE_ROLL_TURNS = 2
-# The base turns about the middle of its three wheels: in the arm base frame, 3.5 cm behind
-# the arm's origin, on its centre line (LeKiwi URDF, SIGRobotics-UIUC/LeKiwi: shoulder-pan
-# axis 7.4 cm ahead of the wheel centre, the arm origin 3.9 cm behind that axis).
-BASE_TURN_CENTRE_XY = np.array([-0.035, 0.0])
-# A turn for the wrist roll orbits the brick (turn plus the shift that keeps it in front of
-# the arm), in steps of at most ORBIT_STEP_DEG, looking again after each. Each step is a
-# plain turn, then a plain strafe: sent as one combined command the body hardly turned
-# (Oct 27, runs/20261027T022330-orbit-split: odometry -13.1 deg, the front camera ~+2 deg),
-# while a plain turn did (-13.2 odometry, ~-11 by the front camera). Between the two the brick
-# strays about 2 r sin(step / 2) (6 cm at r = 0.24 m), inside the wrist view's ~9 cm
-# half-width at 10 cm. A 70 deg turn in place (run 20261027T020732) swung it ~30 cm, out of view.
-ORBIT_STEP_DEG = 15.0
 IMAGE_PX = np.array([640.0, 480.0])
 # The open width before a grasp: 40 until the owner's Oct 27 demo opened to 24.6.
 OPEN = 25.0
@@ -550,8 +532,7 @@ class Skills:
         long side vertical in the image. Image angle changes by -roll (roll test, Oct 23), and
         the brick looks the same every 180 deg, so the roll needed is the measured angle, or
         that minus 180. Rolls stay in roll_min..roll_max (roll_range); when neither fits, the
-        result asks for a base turn ("base_turn_deg"): the camera turns with the base, a turn
-        of b changing the image angle by +b (left positive), which moves the need back in range.
+        nearest end of the range.
         Gripping across the 32 mm length (to roll less) was tried and missed (run 002847)."""
         for k in range(ROLL_TRIES + 1):
             got = self.see_block(f"roll_{k}", check_present=(k == 0), want_box=True)
@@ -564,75 +545,17 @@ class Skills:
                 return Result(True, data={"roll": self.roll, "residual_deg": ang})
             options = [self.roll + ang, self.roll + ang - 180.0, self.roll + ang + 180.0]
             slack = ROLL_OVERSHOOT_DEG if k > 0 else 0.0
-            lo, hi = self.pick_roll_range()
+            lo, hi = self.roll_min, self.roll_max
             fits = [r for r in options if lo - slack <= r <= hi + slack]
-            if not fits:
-                # A base turn of b adds b to the needed roll: turn so the nearest option lands
-                # BASE_TURN_MARGIN_DEG inside the range (room for the angle's +/-5-15 deg noise).
+            if fits:
+                new = min(fits, key=lambda r: abs(r - self.roll))
+            else:
                 near = min(options, key=lambda r: min(abs(r - lo), abs(r - hi)))
-                excess = (near - hi + BASE_TURN_MARGIN_DEG) if near > hi else (near - lo - BASE_TURN_MARGIN_DEG)
-                return Result(False, f"the brick needs a {near:+.0f} deg roll, outside {lo:+.0f}..{hi:+.0f}",
-                              {"base_turn_deg": -excess})
-            new = min(fits, key=lambda r: abs(r - self.roll))
+                new = float(np.clip(near, lo, hi))
+                self.log.ev("roll_clamped", needed=round(near, 1), roll=round(new, 1))
             p = self.cmd_tcp()
             self.roll = new
             self.move_tcp(p, speed=0.02)
-        return Result(True)
-
-    def pick_roll_range(self) -> tuple[float, float]:
-        if self.base_ok:
-            return max(self.roll_min, -ROLL_TOL_DEG), min(self.roll_max, ROLL_TOL_DEG)
-        return self.roll_min, self.roll_max
-
-    def centre_turning_base(self) -> Result:
-        """centre(), and when the brick needs a wrist roll outside the allowed range, turn the
-        base instead (the gripper stays 10 cm up, clear of the brick), line the base up
-        again (the turn swings the reach point sideways), and centre once more. Up to
-        BASE_ROLL_TURNS turns: the brick's angle is good to ~+/-15 deg, so with the pick's
-        narrow roll range (pick_roll_range) the first turn can land just outside it."""
-        r = self.centre()
-        for _ in range(BASE_ROLL_TURNS):
-            turn = r.data.get("base_turn_deg") if not r.ok else None
-            if turn is None:
-                return r
-            self.roll = 0.0
-            p = self.cmd_tcp()
-            self.move_tcp(p, speed=0.02)  # back to roll 0 before the base turn
-            orb = self.orbit(float(turn))
-            if not orb.ok:
-                return orb
-            lu = self.line_up_base()
-            self.log.ev("step", name="line_up_after_turn", ok=lu.ok, reason=lu.reason, data=lu.data)
-            if not lu.ok:
-                return lu
-            r = self.centre()
-        return r
-
-    def orbit(self, turn_deg: float) -> Result:
-        """Turn the base by turn_deg (left positive) about the brick under the gripper rather
-        than about the base's own centre, in steps of at most ORBIT_STEP_DEG; after each, look
-        again and move the arm over the brick, so it stays tracked."""
-        n = max(1, math.ceil(abs(turn_deg) / ORBIT_STEP_DEG))
-        step = math.radians(turn_deg / n)
-        rot = np.array([[math.cos(step), -math.sin(step)], [math.sin(step), math.cos(step)]])
-        for k in range(n):
-            # The brick, from the base's turning centre: where the gripper is now.
-            b = self.cmd_tcp()[:2] - BASE_TURN_CENTRE_XY
-            t = b - rot @ b  # the shift (start frame) that brings it back in front of the arm
-            res = self.robot.base(dtheta_deg=math.degrees(step))
-            t_after = rot.T @ t  # the same shift, in the frame after the turn
-            res2 = self.robot.base(dx=float(t_after[0]), dy=float(t_after[1]))
-            self.log.ev("base", orbit=k, turn_deg=round(math.degrees(step), 1), dxy=t_after,
-                        moved=[res["result"].get("moved"), res2["result"].get("moved")], why="roll out of range")
-            got = self.see_block(f"orbit_{k}", check_present=True, want_box=True, allow_border=True)
-            if got is None:
-                return Result(False, f"lost the {self.target} while turning the base for the wrist roll")
-            h = self.height()
-            c = self._goal_point(got[1], h)
-            d = np.linalg.solve(jacobian(h, self.roll), grasp_goal(h) - c)
-            p = self.cmd_tcp()
-            self.move_tcp([p[0] + float(d[0]), p[1] + float(d[1]), p[2]], speed=FREE_EE_SPEED)
-            self.log.ev("orbit_track", k=k, center=c, dxy=d)
         return Result(True)
 
     def centre(self) -> Result:
@@ -1203,7 +1126,7 @@ class Skills:
         it, pointing down, open). Stops at the first failed step."""
         steps = [
             ("above", lambda: self.go_above(xy) if xy is not None else Result(True)),
-            ("centre", self.centre_turning_base),
+            ("centre", self.centre),
             ("touch", self.touch_floor),
         ]
         touch = None
