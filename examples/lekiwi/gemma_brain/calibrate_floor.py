@@ -114,7 +114,11 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--x", type=float, nargs="+", default=[0.22, 0.28])
     ap.add_argument("--write", action="store_true")
+    ap.add_argument("--start-z", type=float, default=None,
+                    help="TCP height the descent starts from (lower reaches further out vertically)")
     args = ap.parse_args()
+    if args.start_z is not None:
+        globals()["START_Z_M"] = args.start_z
     logging.basicConfig(level=logging.WARNING)
 
     robot = Robot()

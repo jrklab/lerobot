@@ -7,11 +7,11 @@
     "date": "2026-10-23"
   },
   "floor_tcp_z_m": {
-    "value": -0.1145,
+    "value": -0.1112,
     "unit": "m",
     "frame": "arm base (so101_kinematics), TCP pointing straight down, gripper closed",
-    "method": "calibrate_floor.py probe 2 (fixed contact rule: measured TCP held above its free-air sag by > 1.5 mm, 3 mm steps); value at x 0.22 m",
-    "date": "2026-10-23",
+    "method": "calibrate_floor.py, 3 vertical probes at x 0.18/0.24/0.30 (-0.1094/-0.1115/-0.1127), homing-tick joint zero",
+    "date": "2026-10-27",
     "probes": [
       {
         "x": 0.22,
