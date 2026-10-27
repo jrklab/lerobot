@@ -340,8 +340,11 @@ def measured_angle(jpeg: bytes, box) -> tuple[float, str]:
 
 
 class Skills:
-    def __init__(self, robot: Robot, arm: Arm, gemma: Gemma, log: Log):
+    def __init__(self, robot: Robot, arm: Arm, gemma: Gemma, log: Log, fast=None):
         self.robot, self.arm, self.gemma, self.log = robot, arm, gemma, log
+        # A faster model for repeat looks at an object already found (plan_brain: E2B on
+        # llama.cpp); None: every look asks `gemma`.
+        self.fast = fast
         self.roll = 0.0  # current wrist roll target for top-down moves
         self.target = DEFAULT_TARGET  # what pick() is after, as Gemma will be asked for it
         # The floor under the gripper (TCP z when the closed jaws touch it): calib.json's value
@@ -357,6 +360,21 @@ class Skills:
         self.scan_sweep_deg = None
 
     # --- sensing ---
+
+    def look(self, jpeg: bytes, what: str, check=None):
+        """Box of `what`, an object already found, on this frame: the fast model first, then
+        `gemma` when the fast one finds nothing or its box fails `check(box) -> bool`. E2B
+        boxes something even when the object isn't there (0 of 9 absent cases said so, Oct 26
+        benchmark), so `check` is what catches a wrong fast box."""
+        if self.fast is not None:
+            a = self.fast.box(jpeg, what)
+            if a.value is not None and (check is None or check(a.value)):
+                a.by = "fast"
+                return a
+            self.log.ev("fast_miss", what=what, box=a.value, ms=round(a.ms))
+        a = self.gemma.box(jpeg, what)
+        a.by = "main"
+        return a
 
     def tcp(self) -> np.ndarray:
         return self.arm.tcp()[:3, 3]
@@ -374,8 +392,10 @@ class Skills:
         """Centre (u, v) of the brick in a fresh wrist frame, or None if it isn't there.
         want_box: return (centre, box, jpeg) instead."""
         jpeg = self.wrist(tag)
-        a = self.gemma.box(jpeg, f"the {self.target} on the floor")
-        self.log.ev("box", tag=tag, box=a.value, ms=round(a.ms))
+        check = (lambda b: plausible_brick(jpeg, snap_box(jpeg, b, what=self.target)[0], self.target)[0]) \
+            if check_present else None
+        a = self.look(jpeg, f"the {self.target} on the floor", check)
+        self.log.ev("box", tag=tag, box=a.value, ms=round(a.ms), by=a.by)
         if a.value is None:
             return None
         box, how = snap_box(jpeg, a.value, what=self.target)
@@ -668,9 +688,9 @@ class Skills:
             p = self.cmd_tcp()
             self.move_tcp([p[0], p[1], p[2] + dz], speed=FREE_EE_SPEED)
             jpeg = self.wrist(f"lifted_{k}")
-            a = self.gemma.box(jpeg, f"the {self.target}")
+            a = self.look(jpeg, f"the {self.target}")
             boxes.append(a.value)
-            self.log.ev("held_box", k=k, height=self.height(), box=a.value, ms=round(a.ms))
+            self.log.ev("held_box", k=k, height=self.height(), box=a.value, ms=round(a.ms), by=a.by)
         g = self.robot.status()["joints"]["arm_gripper"]
         if g < GRIPPER_EMPTY_MAX:
             return Result(False, f"gripper closed to {g:.1f}: the brick slipped out", {"gripper": g})
@@ -1140,8 +1160,8 @@ class Skills:
         err_px = float("inf")
         for k in range(DROP_ITERS):
             jpeg = self.wrist(f"drop_{k}")
-            a = self.gemma.box(jpeg, f"the {container}")
-            self.log.ev("drop_box", k=k, box=a.value, ms=round(a.ms))
+            a = self.look(jpeg, f"the {container}", lambda b: (b[2] - b[0]) * (b[3] - b[1]) <= DROP_MAX_BOX_AREA)
+            self.log.ev("drop_box", k=k, box=a.value, ms=round(a.ms), by=a.by)
             if a.value is None:
                 return Result(False, f"no {container} in the wrist camera above the drop point")
             x0, y0, x1, y1 = a.value
@@ -1215,6 +1235,9 @@ class Skills:
         err_px, c = float("inf"), None
         for k in range(DROP_ITERS):
             jpeg = self.wrist(f"next_{k}")
+            # 26B, not the fast model: with a held brick filling the bottom of the view, E2B
+            # boxed the jaws and the held brick in 17 of 25 recorded line-ups (Oct 26), so its
+            # look plus the fallback cost more than asking 26B straight away.
             a = self.gemma.box(jpeg, f"the {ref} on the floor")
             self.log.ev("next_box", k=k, box=a.value, ms=round(a.ms))
             if a.value is None:

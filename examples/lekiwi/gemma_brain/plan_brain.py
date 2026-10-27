@@ -25,6 +25,10 @@ grammar-limited and checked before anything moves; scan and approach are added b
 chosen by the model; a failed step is retried in code (pick: PICK_TRIES), then replanned (at
 most MAX_REPLANS times). Perception inside the skills asks the llama.cpp server instead of
 Ollama. Needs llama-server for 26B on --planner-url (and --vision-url).
+
+Step 2a: repeat looks at an object already found (the wrist line-up, servo and lift-check
+looks; the cup and place line-ups) ask E2B on --fast-url first, and 26B on the same frame
+when E2B finds nothing or its box fails the skill's own check. --no-fast turns it off.
 """
 
 from __future__ import annotations
@@ -44,6 +48,7 @@ from robot import CANDIDATE_URLS, OperatorTookOver, Robot, RobotError
 from skills import Log, Result, Skills
 
 PLANNER_URL = "http://127.0.0.1:8081"  # 26B-A4B, 70 image tokens
+FAST_URL = "http://127.0.0.1:8082"  # E2B Q4_K_M, 70 image tokens: repeat looks inside the skills
 MAX_REPLANS = 2
 # What the existing skills can run: (verb, relation).
 SUPPORTED = {("pick", None), ("place", "in"), ("place", "next_to")}
@@ -209,6 +214,8 @@ def main() -> int:
     ap.add_argument("goal", help="what the robot should do, in plain words")
     ap.add_argument("--planner-url", default=PLANNER_URL, help="llama-server running the planner (26B)")
     ap.add_argument("--vision-url", default=PLANNER_URL, help="llama-server for the skills' boxes and questions")
+    ap.add_argument("--fast-url", default=FAST_URL, help="llama-server for repeat looks at an object already found (E2B)")
+    ap.add_argument("--no-fast", action="store_true", help="every look asks --vision-url (step 1 behaviour)")
     ap.add_argument("--robot", default=None, help="LeKiwi web service URL (default: the first that answers of "
                     + ", ".join(CANDIDATE_URLS) + ")")
     ap.add_argument("--holding", default=None, help="what the gripper already holds at start, e.g. 'green block'")
@@ -240,7 +247,8 @@ def main() -> int:
     ok, summary = False, ""
     with robot:
         arm = Arm(robot)
-        sk = Skills(robot, arm, LlamaCpp(args.vision_url), log)
+        sk = Skills(robot, arm, LlamaCpp(args.vision_url), log,
+                    fast=None if args.no_fast else LlamaCpp(args.fast_url, "gemma4-e2b"))
         sk.turn_scan = not args.no_turn_scan
         sk.scan_sweep_deg = args.scan_sweep
         pb = PlanBrain(sk, planner, log, robot, args.holding)

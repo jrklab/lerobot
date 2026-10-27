@@ -45,6 +45,7 @@ class Answer:
     prompt_ms: float = 0.0
     out_tokens: int = 0
     raw: dict = field(default_factory=dict, repr=False)
+    by: str = ""  # which model answered, when a skill can ask more than one
 
 
 class Gemma:
