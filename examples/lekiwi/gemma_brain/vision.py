@@ -25,14 +25,17 @@ import cv2
 import numpy as np
 
 
-def brick_angle(jpeg: bytes, box, pad: float = 0.25) -> dict | None:
+def brick_angle(jpeg: bytes, box, pad: float = 0.25, what: str = "") -> dict | None:
     """Long-axis angle of the brick inside `box` (x0, y0, x1, y1 image fractions), in degrees
     from image vertical, in (-90, 90], positive = clockwise in the image (top leaning right).
 
     The crop around the box is segmented by colour distance from the floor around it (the
     median L*a*b* of the crop's border ring), Otsu-thresholded, and the largest blob's
     minimum-area rectangle gives the angle. Works for any brick colour that differs from the
-    floor. Returns None if no plausible blob is found.
+    floor. When `what` names a colour (HUES), the blob is that colour's pixels instead: the
+    floor-distance mask also takes in the brick's shadow (Oct 27, run 20261027T032148: a brick
+    ~20 deg off square came out square with its shadow, fill 1.45, and fell back to 0 deg).
+    Returns None if no plausible blob is found.
     """
     img = cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_COLOR)
     if img is None:
@@ -45,12 +48,23 @@ def brick_angle(jpeg: bytes, box, pad: float = 0.25) -> dict | None:
     crop = img[Y0:Y1, X0:X1]
     if crop.size == 0 or min(crop.shape[:2]) < 8:
         return None
-    lab = cv2.GaussianBlur(cv2.cvtColor(crop, cv2.COLOR_BGR2LAB).astype(float), (5, 5), 0)
-    ring = np.concatenate([lab[:3].reshape(-1, 3), lab[-3:].reshape(-1, 3), lab[:, :3].reshape(-1, 3), lab[:, -3:].reshape(-1, 3)])
-    bg = np.median(ring, axis=0)
-    score = np.linalg.norm(lab - bg, axis=2)
-    score = cv2.normalize(score, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
-    _, mask = cv2.threshold(score, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    words = [word for word in HUES if word in what.lower()]
+    mask = None
+    if words:
+        hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
+        hue, strong = hsv[..., 0], (hsv[..., 1] > 80) & (hsv[..., 2] > 50)
+        mask = np.zeros(hue.shape, bool)
+        for word in words:
+            for lo, hi in HUES[word]:
+                mask |= strong & (hue >= lo) & (hue <= hi)
+        mask = mask.astype(np.uint8) * 255 if mask.sum() >= 30 else None
+    if mask is None:
+        lab = cv2.GaussianBlur(cv2.cvtColor(crop, cv2.COLOR_BGR2LAB).astype(float), (5, 5), 0)
+        ring = np.concatenate([lab[:3].reshape(-1, 3), lab[-3:].reshape(-1, 3), lab[:, :3].reshape(-1, 3), lab[:, -3:].reshape(-1, 3)])
+        bg = np.median(ring, axis=0)
+        score = np.linalg.norm(lab - bg, axis=2)
+        score = cv2.normalize(score, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+        _, mask = cv2.threshold(score, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((5, 5), np.uint8))
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if not contours:

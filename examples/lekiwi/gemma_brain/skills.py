@@ -434,10 +434,10 @@ def add_floor_touch(x: float, y: float, z: float, run: str) -> None:
     FLOOR_TOUCHES.write_text(json.dumps(data, indent=1) + "\n")
 
 
-def measured_angle(jpeg: bytes, box) -> tuple[float, str]:
+def measured_angle(jpeg: bytes, box, what: str = "") -> tuple[float, str]:
     """The brick's long-axis angle from image vertical, and how it was measured: the
     OpenCV fit when its blob is plausible, else the box's shape (vertical vs horizontal only)."""
-    m = brick_angle(jpeg, box)
+    m = brick_angle(jpeg, box, what=what)
     if m is not None and 0.4 <= m["fill"] <= 1.15 and m["aspect"] >= 1.4:
         return m["angle_deg"], "fit"
     w_px = (box[2] - box[0]) * IMAGE_PX[0]
@@ -564,7 +564,7 @@ class Skills:
             if got is None:
                 return Result(False, "no brick in view to measure its angle")
             _, box, jpeg = got
-            ang, how = measured_angle(jpeg, box)  # long side from image vertical, (-90, 90]
+            ang, how = measured_angle(jpeg, box, self.target)  # long side from image vertical, (-90, 90]
             self.log.ev("brick_angle", k=k, angle=ang, how=how, roll=self.roll)
             if abs(ang) <= ROLL_TOL_DEG or k == ROLL_TRIES:
                 return Result(True, data={"roll": self.roll, "residual_deg": ang})
