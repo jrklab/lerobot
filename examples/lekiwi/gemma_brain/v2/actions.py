@@ -19,6 +19,7 @@ params.py or geometry.py one, so a new action adds a name, not a parameter to ca
 from __future__ import annotations
 
 from v2 import params as prm
+from v2.goals import AngleGoal, FrontApproachGoal, ReachGoal
 from v2.skills import Result, Skills2
 
 
@@ -43,3 +44,24 @@ def lift(sk: Skills2) -> Result:
         return r
     held = sk.held()
     return Result(held, "" if held else "nothing held after the lift", {**r.data, "held": held})
+
+
+def approach(sk: Skills2, obj: str) -> Result:
+    """Base: turn and drive until the front camera sees the object at the reach point."""
+    return sk.servo(obj, FrontApproachGoal())
+
+
+def hover(sk: Skills2) -> Result:
+    """The open, vertical gripper over the reach point at the hover height, roll 0."""
+    r = sk.move("arm", xy=(prm.REACH_POINT_X_M.value, 0.0), height=prm.HOVER_HEIGHT_M.value, roll=0.0)
+    return sk.grip("open") if r.ok else r
+
+
+def line_up(sk: Skills2, obj: str) -> Result:
+    """Base, with the gripper hovering: the object within the arm's reach of the grasp spot."""
+    return sk.servo(obj, ReachGoal())
+
+
+def align(sk: Skills2, obj: str) -> Result:
+    """Wrist roll: the object's long side across the jaws."""
+    return sk.servo(obj, AngleGoal())

@@ -58,7 +58,8 @@ class Geometry:
     fixed_jaw_tip_v: float
     sources: dict
     front: dict = None  # calibrate_front.py: u_per_deg, u_target, near_bottom, ...
-    grasp_target: np.ndarray | None = None  # (u of the right edge, v of the middle) at the jaw tips' depth
+    grasp_target: np.ndarray | None = None  # taught (u of the box's right edge, v of its middle)
+    grasp_target_height: float | None = None  # jaw tips above the floor when it was taught
 
     @classmethod
     def load(cls, calib_path: Path = HERE / "calib.json", touches_path: Path = HERE / "floor_touches.json") -> Geometry:
@@ -81,6 +82,7 @@ class Geometry:
             sources={k: {f: calib[k].get(f) for f in ("method", "date", "log") if f in calib[k]} for k in MAKERS},
             front=dict(calib["front_camera"]["value"]),
             grasp_target=np.array(calib["wrist_grasp_target"]["value"]) if "wrist_grasp_target" in calib else None,
+            grasp_target_height=calib["wrist_grasp_target"]["height_m"] if "wrist_grasp_target" in calib else None,
         )
 
     def floor(self, x: float, y: float) -> float:
@@ -117,7 +119,7 @@ class Geometry:
 
 def require_grasp_target(geom: Geometry) -> np.ndarray:
     if geom.grasp_target is None:
-        raise MissingCalibrationError("calib.json has no 'wrist_grasp_target': record the owner's midpoint teach")
+        raise MissingCalibrationError("calib.json has no 'wrist_grasp_target': run teach_grasp.py (the owner's midpoint teach)")
     return geom.grasp_target
 
 

@@ -64,8 +64,9 @@ class _WristPointGoal:
 
     def target(self, sk, height: float) -> np.ndarray:
         g, h_obj = sk.geom, prm.BRICK_HEIGHT_M.value
-        taught = require_grasp_target(g)  # raw top-face box values at the grasp lift
-        s = (g.cam_above_tips + prm.GRASP_LIFT_M.value - h_obj) / (g.cam_above_tips + height - h_obj)
+        taught = require_grasp_target(g)  # the box's (right edge, middle) at the taught height
+        h_taught = g.grasp_target_height if g.grasp_target_height is not None else prm.GRASP_LIFT_M.value
+        s = (g.cam_above_tips + h_taught - h_obj) / (g.cam_above_tips + height - h_obj)
         return g.descent_p0 + (taught - g.descent_p0) * s
 
     def _jac(self, sk, height: float) -> np.ndarray:

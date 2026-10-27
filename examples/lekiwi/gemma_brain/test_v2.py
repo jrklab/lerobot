@@ -269,3 +269,28 @@ def test_front_approach_turns_before_it_drives():
     assert "roll" in turn and turn["roll"] < 0
     drive = g.step(g.error(Detection(box=[0.40, 0.4, 0.50, 0.5]), S()), S())
     assert "delta" in drive and drive["delta"][0] > 0
+
+
+def test_pick_chain_runs_its_steps_in_order_and_stops_at_the_first_failure(monkeypatch):
+    from v2 import chains
+    from v2.skills import Result
+
+    calls = []
+
+    def ok(name):
+        return lambda *a, **k: (calls.append(name), Result(True))[1]
+
+    for name in ("approach", "hover", "line_up", "align", "land", "lift"):
+        monkeypatch.setattr(chains.actions, name, ok(name))
+    sk = Skills2.__new__(Skills2)
+    sk.servo = lambda obj, goal, part=None: (calls.append(type(goal).__name__), Result(True))[1]
+    sk.move = lambda part, **k: (calls.append("down"), Result(True))[1]
+    sk.grip = lambda how, **k: (calls.append(how), Result(True))[1]
+    r = chains.pick(sk, "red block")
+    assert r.ok
+    assert calls == ["approach", "hover", "line_up", "align", "JawGoal", "down", "JawGoal", "land", "close", "lift"]
+    calls.clear()
+    sk.grip = lambda how, **k: Result(False, "closed to 1.6 without holding anything")
+    r = chains.pick(sk, "red block", drive=False)
+    assert not r.ok and r.data["failed"] == "close" and "close:" in r.reason
+    assert calls[0] == "hover"
