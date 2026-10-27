@@ -130,6 +130,51 @@ def jaw_tip_row(jpeg: bytes) -> float | None:
     return float(np.mean([b[cv2.CC_STAT_TOP] for b in blobs])) / h
 
 
+def jaw_geometry(jpeg: bytes, fixed: dict | None = None, band: float = 0.06) -> dict | None:
+    """Where the gripper's jaws are in a wrist frame, as image fractions: for the fixed jaw
+    (rigid with the camera, on the right) and the moving one (left), the tip row (top of its
+    blob) and the inner edge column in a band of `band` of the height just below that tip; and
+    the opening between the inner edges. Jaws are saturated-blue blobs in the lower half that
+    reach the bottom edge (they enter from below; a blue brick lying apart from them doesn't).
+    `fixed` (calib.json "wrist_jaws": fixed_tip_v, fixed_inner_u) replaces the fixed jaw's
+    measurement, since it can't move in the image, and keeps a blue brick touching it from
+    shifting it. None if no fixed jaw; the moving jaw's keys are None when it isn't seen."""
+    img = cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_COLOR)
+    if img is None:
+        return None
+    h, w = img.shape[:2]
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    blue = ((hsv[..., 0] > 95) & (hsv[..., 0] < 135) & (hsv[..., 1] > 120) & (hsv[..., 2] > 50)).astype(np.uint8)
+    blue[: h // 2] = 0
+    blue = cv2.morphologyEx(blue, cv2.MORPH_OPEN, np.ones((5, 5), np.uint8))
+    n, labels, stats, cents = cv2.connectedComponentsWithStats(blue)
+    blobs = [i for i in range(1, n) if stats[i][cv2.CC_STAT_AREA] > 0.004 * h * w
+             and stats[i][cv2.CC_STAT_TOP] + stats[i][cv2.CC_STAT_HEIGHT] >= h - 2]
+
+    def jaw(i: int, inner_is_left: bool) -> tuple[float, float]:
+        tip = stats[i][cv2.CC_STAT_TOP]
+        rows = labels[tip : tip + max(1, int(band * h))] == i
+        cols = np.nonzero(rows.any(axis=0))[0]
+        return tip / h, (cols.min() if inner_is_left else cols.max()) / w
+
+    if fixed is not None:
+        fixed_tip, fixed_inner = fixed["fixed_tip_v"], fixed["fixed_inner_u"]
+        left = [i for i in blobs if (stats[i][cv2.CC_STAT_LEFT] + stats[i][cv2.CC_STAT_WIDTH]) / w < fixed_inner - 0.01]
+    else:
+        blobs = sorted(blobs, key=lambda i: -stats[i][cv2.CC_STAT_AREA])[:2]
+        if not blobs:
+            return None
+        blobs.sort(key=lambda i: cents[i][0])  # left to right
+        fixed_tip, fixed_inner = jaw(blobs[-1], inner_is_left=True)
+        left = blobs[:-1]
+    out = {"fixed_tip_v": fixed_tip, "fixed_inner_u": fixed_inner,
+           "moving_tip_v": None, "moving_inner_u": None, "opening_u": None}
+    if left:
+        moving_tip, moving_inner = jaw(max(left, key=lambda i: stats[i][cv2.CC_STAT_AREA]), inner_is_left=False)
+        out.update(moving_tip_v=moving_tip, moving_inner_u=moving_inner, opening_u=fixed_inner - moving_inner)
+    return out
+
+
 def outside_fraction(box, tip_row: float) -> float:
     """Share of the brick's box (along the image vertical: its length, with the wrist rolled
     to put the long side vertical) that lies beyond the jaw tips, i.e. outside the gripper."""
