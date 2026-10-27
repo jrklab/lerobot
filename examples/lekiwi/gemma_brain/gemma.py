@@ -19,6 +19,9 @@ decision can be logged next to the frame it was made on.
 
 Perception questions are short and direct, asked with the image first, thinking off and
 greedy decoding: the model answers what it sees, and code does the geometry.
+
+Gemma talks to Ollama (brain.py); LlamaCpp asks the same questions of a llama.cpp server,
+with grammar-constrained answers (plan_brain.py).
 """
 
 from __future__ import annotations
@@ -102,6 +105,83 @@ class Gemma:
         a = self.ask_image(jpeg, question + " Answer with one word: yes or no.", max_tokens=4)
         word = a.text.strip().strip(".!").lower()
         a.value = True if word.startswith("yes") else False if word.startswith("no") else None
+        return a
+
+
+# Optional spaces where Gemma writes them: a grammar that forbids its usual spacing pushes it
+# toward null (E4B, Oct 25).
+BOX_GBNF = r'''root ::= "{\"box_2d\":" " "? ( box | "null" ) "}"
+box ::= "[" n "," " "? n "," " "? n "," " "? n "]"
+n ::= [0-9] | [1-9][0-9] | [1-9][0-9][0-9] | "1000"'''
+YES_NO_GBNF = 'root ::= "yes" | "no"'
+
+
+class LlamaCpp:
+    """The same perception calls as Gemma, against a llama.cpp server (OpenAI API), with
+    grammar-constrained answers. The image token budget is the server's
+    --image-min-tokens/--image-max-tokens."""
+
+    def __init__(self, url: str, name: str = ""):
+        self.url = url.rstrip("/")
+        self.model = name or self.url
+
+    def generate(
+        self,
+        text: str,
+        jpegs: list[bytes] = (),
+        system: str = "",
+        grammar: str | None = None,
+        max_tokens: int = 60,
+        timeout: float = 60.0,
+    ) -> Answer:
+        content = [
+            {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + base64.b64encode(j).decode()}}
+            for j in jpegs
+        ]
+        content.append({"type": "text", "text": text})
+        messages = [{"role": "system", "content": system}] if system else []
+        messages.append({"role": "user", "content": content})
+        body = {
+            "messages": messages,
+            "temperature": 0,
+            "top_k": 1,
+            "max_tokens": max_tokens,
+            "cache_prompt": True,
+            "chat_template_kwargs": {"enable_thinking": False},
+        }
+        if grammar:
+            body["grammar"] = grammar
+        t = time.monotonic()
+        req = urllib.request.Request(
+            self.url + "/v1/chat/completions", json.dumps(body).encode(), {"Content-Type": "application/json"}
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            resp = json.load(r)
+        timings = resp.get("timings", {})
+        return Answer(
+            text=resp["choices"][0]["message"]["content"].strip(),
+            ms=(time.monotonic() - t) * 1000,
+            prompt_ms=timings.get("prompt_ms", 0.0),
+            out_tokens=timings.get("predicted_n", 0),
+            raw=resp,
+        )
+
+    def ask_image(self, jpeg: bytes, question: str, max_tokens: int = 60) -> Answer:
+        return self.generate(question, [jpeg], max_tokens=max_tokens)
+
+    def box(self, jpeg: bytes, what: str) -> Answer:
+        q = (
+            f"Find {what} in this image. Reply with JSON only: "
+            '{"box_2d": [ymin, xmin, ymax, xmax]} with coordinates normalized to 0-1000, '
+            f'or {{"box_2d": null}} if there is no {what}.'
+        )
+        a = self.generate(q, [jpeg], grammar=BOX_GBNF, max_tokens=40)
+        a.value = parse_box(a.text)
+        return a
+
+    def yes_no(self, jpeg: bytes, question: str) -> Answer:
+        a = self.generate(question + " Answer with one word: yes or no.", [jpeg], grammar=YES_NO_GBNF, max_tokens=2)
+        a.value = a.text == "yes"
         return a
 
 
