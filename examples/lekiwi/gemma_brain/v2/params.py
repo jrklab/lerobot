@@ -60,6 +60,7 @@ GRIPPER_EMPTY_MAX = Param(3.5, "SPEC", "closed on nothing reads 1.3-2.1; on the 
 GRASP_LIFT_M = Param(0.004, "RULE", "jaw tips above the floor when closing: inside the brick's lower half")
 SERVO_GAIN = Param(0.5, "RULE", "fraction of the measured error corrected per look (no overshoot with noisy boxes)")
 STEP_IN_VIEW_FRACTION = Param(0.25, "RULE", "one move may shift the target by at most this share of the image, so it stays in view")
+LAND_SEARCH_M = Param(0.008, "RULE", "how far past its goal a contact-stop move may go: the old floor fit's worst error (8.4 mm)")
 LOOK_SETTLE_S = Param(0.3, "RULE", "wait after a move before a frame (servo settling)")
 FREE_SPEED_MPS = Param(0.04, "RULE", "straight-line speed in free air")
 NEAR_SPEED_MPS = Param(0.01, "RULE", "speed for the last centimetres to the floor")

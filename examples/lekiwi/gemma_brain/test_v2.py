@@ -27,7 +27,10 @@ sys.path.insert(0, str(HERE.parent / "web_server"))
 from arm import Arm, Calibration  # noqa: E402
 from test_arm import SimRobot as _SimRobot  # noqa: E402
 from test_auto_control import Sim  # noqa: E402
-from v2 import params as prm  # noqa: E402
+from v2 import (
+    actions,  # noqa: E402
+    params as prm,  # noqa: E402
+)
 from v2.geometry import Geometry, fit_floor  # noqa: E402
 from v2.skills import Skills2  # noqa: E402
 
@@ -55,7 +58,7 @@ def skills_over(real_floor_tcp_z, predicted):
     # The sim's floor stops the TCP; ours is TCP z at contact, so the same number.
     sim = Sim(floor_z=real_floor_tcp_z)
     sk = Skills2(SimRobot(sim), Arm(SimRobot(sim), CAL, body_check=False), geom(predicted))
-    assert sk.move((0.22, 0.0), 0.05).ok
+    assert sk.move(xy=(0.22, 0.0), height=0.05).ok
     return sim, sk
 
 
@@ -80,7 +83,7 @@ def test_every_param_names_its_source():
 
 def test_land_on_the_predicted_floor_does_not_press():
     sim, sk = skills_over(real_floor_tcp_z=-0.12, predicted=-0.12)
-    r = sk.land()
+    r = actions.land(sk)
     assert r.ok and not r.data["contact"]
     assert abs(sk.height() - prm.GRASP_LIFT_M.value) < 0.002
 
@@ -89,7 +92,7 @@ def test_land_on_a_slightly_higher_floor_stops_on_it():
     # 5 mm higher than predicted: the goal is ~1 mm below the real floor, under the Pi's
     # contact threshold, so the arm just stops on it (pressing at most that 1 mm).
     sim, sk = skills_over(real_floor_tcp_z=-0.115, predicted=-0.12)
-    assert sk.land().ok
+    assert actions.land(sk).ok
     assert sk.tcp()[2] >= -0.115 - 0.0005
 
 
@@ -97,20 +100,37 @@ def test_land_treats_a_contact_over_half_a_brick_up_as_not_the_floor():
     # 7.5 mm above the predicted floor: more than half the brick's height, so it might be the
     # brick's edge; land refuses rather than close there (the fit is good to a few mm).
     sim, sk = skills_over(real_floor_tcp_z=-0.1125, predicted=-0.12)
-    r = sk.land()
+    r = actions.land(sk)
     assert not r.ok and "above the floor" in r.reason, r
 
 
 def test_land_refuses_to_close_on_something_tall():
     sim, sk = skills_over(real_floor_tcp_z=-0.12 + 0.03, predicted=-0.12)  # 3 cm up: not the floor
-    assert sk.move((0.22, 0.0), 0.05).ok
-    r = sk.land()
+    r = actions.land(sk)
     assert not r.ok and "above the floor" in r.reason, r
 
 
 def test_move_out_of_vertical_reach_is_refused_without_moving():
     sim, sk = skills_over(-0.12, -0.12)
     before = dict(sim.pos)
-    r = sk.move((0.6, 0.0), 0.10)
+    r = sk.move(xy=(0.6, 0.0), height=0.10)
     assert not r.ok and "can't move" in r.reason
     assert sim.pos == before
+
+
+def test_base_moves_are_one_kind_at_a_time():
+    sim, sk = skills_over(-0.12, -0.12)
+    assert not sk.move("base", delta=(0.05, 0.0), roll=10.0).ok
+
+
+def test_actions_and_chains_hold_no_numbers():
+    # Layer 3 composes primitives; every value must come from params.py or geometry.py.
+    import ast
+
+    for name in ("actions.py", "chains.py"):
+        path = HERE / "v2" / name
+        if not path.exists():
+            continue
+        for node in ast.walk(ast.parse(path.read_text())):
+            if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)) and not isinstance(node.value, bool):
+                assert node.value in (0, 1, 2, 1000), f"{name}:{node.lineno}: number {node.value} (put it in params.py with its source)"

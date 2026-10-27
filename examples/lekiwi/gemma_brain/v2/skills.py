@@ -12,12 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""v2 skills, first increment: move, land and grip. find and servo come next; pick and place
-are chains of these (design doc "Step 5 design").
+"""v2 layer 1, the primitives: the only code that drives motors and cameras (design doc
+"v2 skills: three layers"). Every value comes from geometry.py (CALIB) or params.py (DEMO,
+SPEC, RULE); the actions and chains above only compose these.
 
-Every move keeps the gripper vertical (pitch 90 in the arm model with the homing-tick joint
-zero) unless told otherwise; the Arm planner refuses joint targets outside the recorded range
-and paths below the floor clearance, and the Pi enforces z_min on every tick.
+    move(part, ...)   arm: vertical straight-line move to a height over x, y, or by a delta,
+                      optionally stopping at contact; base: a plain turn or a plain drive
+    grip(open|close)  returns whether something is held
+    find, servo       next increment
+
+Arm moves keep the gripper vertical (pitch 90 in the arm model with the homing-tick joint
+zero). The Arm planner refuses joint targets outside the recorded range and paths below the
+floor clearance before anything moves, and the Pi enforces z_min on every tick.
 """
 
 from __future__ import annotations
@@ -30,10 +36,7 @@ from arm import FLOOR_CLEARANCE_M, JAW_TIP_OFFSET_M, Arm, PlanError, plan_ee_lin
 from v2 import params as prm
 from v2.geometry import Geometry
 
-VERTICAL = 90.0
-# The Pi stops a contact_stop trajectory this far below its goal at the latest (its z_min),
-# so a floor higher than predicted is met, not pushed through: the floor fit's worst error.
-LAND_SEARCH_M = 0.008
+VERTICAL = 90.0  # the arm model's pitch for a gripper pointing straight down
 
 
 @dataclass
@@ -66,80 +69,78 @@ class Skills2:
 
     # --- move ---
 
-    def move(self, xy, height: float, roll: float | None = None, speed: float | None = None) -> Result:
-        """Straight-line move of the vertical gripper to `height` (jaw tips above the floor) over
-        TCP x, y. Refused, with nothing sent, when the path would leave the joints' recorded
-        range or come within the arm's floor clearance."""
-        roll = self.roll if roll is None else roll
-        z = self.geom.floor(xy[0], xy[1]) + height
-        # Low moves (servo heights, under the free-move clearance) get a guard just under them.
-        z_min = None if height >= FLOOR_CLEARANCE_M else min(z, self.tcp()[2]) - 0.003
-        try:
-            self.arm.move_to([xy[0], xy[1], z], pitch_deg=VERTICAL, roll_deg=roll,
-                             speed=speed or prm.FREE_SPEED_MPS.value, z_min=z_min)
-        except PlanError as e:
-            return Result(False, f"can't move there: {e}", {"xy": list(xy), "height": height})
-        self.roll = roll
-        self.ev("move", xy=[round(float(v), 4) for v in xy], height=round(height, 4), roll=round(roll, 1))
-        return Result(True)
+    def move(self, part: str = "arm", *, xy=None, height: float | None = None, delta=None,
+             roll: float | None = None, until_contact: bool = False, speed: float | None = None) -> Result:
+        """One plain move.
 
-    # --- land ---
-
-    def land(self, lift: float | None = None) -> Result:
-        """From above the target, go straight down to `lift` (default GRASP_LIFT_M) above the
-        floor the fit predicts, without pressing into it: v1's touch searched for the floor by
-        pushing into it and the gripper slid 8-10 mm forward (Oct 27). The Pi's contact stop
-        stays on as the safety: met early, the result says how high, and a touch at floor
-        level is added to the floor data."""
-        lift = prm.GRASP_LIFT_M.value if lift is None else lift
+        arm: to `height` (jaw tips above the floor) over TCP `xy` (default: where it is), or by
+        `delta` (dx, dy, dz in metres); `roll` turns the wrist; until_contact: the Pi stops the
+        move where the TCP meets something (data["contact_z"]), searching at most
+        LAND_SEARCH_M past the goal. Refused, with nothing sent, out of reach or too low.
+        base: `delta` = (dx, dy) in metres or `roll` = a turn in degrees, never both: a
+        combined turn and strafe left the body unturned (Oct 27).
+        """
+        if part == "base":
+            return self._move_base(delta, roll)
         p = self.tcp()
-        floor = self.geom.floor(p[0], p[1])
-        goal = [float(p[0]), float(p[1]), floor + lift]
-        z_min = goal[2] - LAND_SEARCH_M - JAW_TIP_OFFSET_M - 0.002
+        roll = self.roll if roll is None else roll
+        if delta is not None:
+            goal = p + np.asarray(delta, float)
+        else:
+            x, y = (p[0], p[1]) if xy is None else xy
+            goal = np.array([x, y, self.geom.floor(x, y) + (p[2] - self.geom.floor(p[0], p[1]) if height is None else height)])
+        floor = self.geom.floor(goal[0], goal[1])
+        low = goal[2] - floor < FLOOR_CLEARANCE_M
+        speed = speed or (prm.NEAR_SPEED_MPS.value if low else prm.FREE_SPEED_MPS.value)
+        search = prm.LAND_SEARCH_M.value if until_contact else 0.0
+        # Low moves get a guard just under them; the Pi checks the TCP, so the jaw tips' offset too.
+        z_min = (min(goal[2], p[2]) - search - JAW_TIP_OFFSET_M - 0.002) if low else None
         try:
-            wps, durs = plan_ee_line(self.arm.calib, self.arm.targets(), goal, VERTICAL, self.roll,
-                                     prm.NEAR_SPEED_MPS.value, z_min=goal[2] - LAND_SEARCH_M)
+            if until_contact:
+                wps, durs = plan_ee_line(self.arm.calib, self.arm.targets(), goal.tolist(), VERTICAL, roll, speed,
+                                         z_min=goal[2] - search)
+                res = self.robot.trajectory(wps, durs, z_min=z_min, contact_stop=True).get("result", {})
+            else:
+                self.arm.move_to(goal.tolist(), pitch_deg=VERTICAL, roll_deg=roll, speed=speed, z_min=z_min)
+                res = {}
         except PlanError as e:
-            return Result(False, f"can't land here: {e}")
-        res = self.robot.trajectory(wps, durs, z_min=z_min, contact_stop=True).get("result", {})
-        if not res.get("contact"):
-            self.ev("land", how="reached", floor=round(floor, 4), lift=lift)
-            return Result(True, data={"contact": False, "floor": floor})
-        z = float(res["z_meas"])
-        above = z - floor
-        self.ev("land", how="contact", z=round(z, 4), above_floor_mm=round(1000 * above, 1), detector=res.get("how"))
-        if above > prm.BRICK_HEIGHT_M.value / 2:
-            return Result(False, f"met something {1000 * above:.0f} mm above the floor", {"contact_z": z})
-        # The floor, a little higher than predicted: keep the touch, come back up to `lift`.
-        self.arm.move_to([goal[0], goal[1], z + lift], pitch_deg=VERTICAL, roll_deg=self.roll,
-                         speed=prm.NEAR_SPEED_MPS.value, z_min=z - 0.002)
-        return Result(True, data={"contact": True, "floor": z, "predicted": floor})
+            return Result(False, f"can't move there: {e}", {"goal": goal.round(4).tolist()})
+        self.roll = roll
+        data = {"goal": goal.round(4).tolist(), "floor": round(floor, 4), "contact": False}
+        if res.get("contact"):
+            data.update(contact=True, contact_z=float(res["z_meas"]), detector=res.get("how"))
+        self.ev("move", part="arm", **data)
+        return Result(True, data=data)
+
+    def _move_base(self, delta, turn) -> Result:
+        if (delta is None) == (turn is None):
+            return Result(False, "base: give a drive (dx, dy) or a turn, one at a time")
+        if turn is not None:
+            res = self.robot.base(dtheta_deg=float(turn))
+        else:
+            res = self.robot.base(dx=float(delta[0]), dy=float(delta[1]))
+        moved = res.get("result", {}).get("moved")
+        self.ev("move", part="base", delta=None if delta is None else list(delta), turn=turn, moved=moved)
+        return Result(True, data={"moved": moved})
 
     # --- grip ---
 
-    def open(self, width: float | None = None) -> Result:
-        r = self.robot.gripper(prm.OPEN_WIDTH.value if width is None else width)
-        return Result(True, data=r.get("result", {}))
-
-    def close(self) -> Result:
+    def grip(self, how: str, width: float | None = None) -> Result:
+        """open: to `width` (default the demo's OPEN_WIDTH). close: until the jaws stall;
+        data["held"]: they stopped short of closed-empty and the Pi's hold watch saw no drop."""
+        if how == "open":
+            res = self.robot.gripper(prm.OPEN_WIDTH.value if width is None else width).get("result", {})
+            return Result(True, data=res)
+        if how != "close":
+            return Result(False, f"grip: 'open' or 'close', not {how!r}")
         res = self.robot.gripper(0, speed=30).get("result", {})
-        self.ev("close", **res)
-        if not res.get("stalled"):
-            return Result(False, f"closed fully ({res.get('pos')}) without stalling: nothing between the jaws", res)
-        return Result(True, data=res)
+        held = self.held()
+        self.ev("grip", how="close", held=held, **res)
+        if not held:
+            return Result(False, f"closed to {res.get('pos')} without holding anything", {**res, "held": False})
+        return Result(True, data={**res, "held": True})
 
     def held(self) -> bool:
-        """Something is between the jaws: they stopped short of closed-empty and the Pi's hold
-        watch saw no drop."""
         st = self.robot.status()
         hold = st.get("gripper_hold") or {}
         return st["joints"]["arm_gripper"] >= prm.GRIPPER_EMPTY_MAX.value and hold.get("state") != "dropped"
-
-    def lift(self, by: float | None = None) -> Result:
-        p = self.tcp()
-        try:
-            self.arm.move_to([p[0], p[1], p[2] + (prm.LIFT_M.value if by is None else by)], pitch_deg=VERTICAL,
-                             roll_deg=self.roll, speed=prm.FREE_SPEED_MPS.value)
-        except PlanError as e:
-            return Result(False, f"can't lift: {e}")
-        return Result(True, data={"held": self.held()})
