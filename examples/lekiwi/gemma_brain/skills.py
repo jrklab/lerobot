@@ -25,7 +25,8 @@ Grasp, from a top-down pose above the block:
   3. touch: step down until the floor holds the jaws up (measured TCP above its free-air
      sag), refusing if the touch comes much higher than the floor (landed on the block);
   4. lift GRASP_LIFT_M off the floor, close, read the stall;
-  5. lift, and ask Gemma whether the gripper holds the brick.
+  5. lift LIFT_M; held = the jaws stalled on it and didn't close to empty, and the Pi's
+     hold watch saw no drop (no camera: see lift_and_check).
 Each skill returns a Result; every frame and number goes to the run's log.
 """
 
@@ -142,10 +143,10 @@ BRICK_LEN_V = 0.30
 OUTSIDE_AIM, OUTSIDE_MIN, OUTSIDE_MAX = 0.5, 0.35, 0.65
 PRE_CLOSE_ALONG_MAX_M = 0.006
 PRE_CLOSE_ALONG_TRIES = 2
-GRASP_CLEAR_FIXED_JAW_M = 0.006
-LIFT_M = 0.05
-HOLD_CHECK_LIFT_M = 0.04  # second lift for the held-or-not test
-HOLD_MAX_SHIFT = 0.03  # image fraction: a held brick moves less than this between the lifts
+# 6 mm until Oct 26, when the owner saw an ~8 mm gap at the close (and picks missed with the
+# moving jaw pushing the brick that far): 2 mm aims for ~4 mm real gap.
+GRASP_CLEAR_FIXED_JAW_M = 0.002
+LIFT_M = 0.09  # was two lifts of 5 + 4 cm for the old image test; the same height in one
 GRIPPER_EMPTY_MAX = 3.5  # closed to empty reads ~1.9; on the 2x4 brick's short side, 6.7
 DEFAULT_TARGET = "red Lego brick"
 
@@ -683,31 +684,19 @@ class Skills:
         return Result(True, data=res)
 
     def lift_and_check(self) -> Result:
-        """Held or not, from geometry rather than one frame: the wrist camera rides on the
-        gripper, so a held brick stays put in the image as the gripper rises, while a brick
-        left on the floor shifts ~0.1 of the frame per 3-4 cm (the teach run). Gemma only
-        boxes the brick; a yes/no on a single frame can't tell held from not held (tested
-        2026-10-23: every phrasing got at least one of 4 known frames wrong). Also the
-        gripper must still be stalled open on something, not closed to empty."""
-        boxes = []
-        for k, dz in enumerate((LIFT_M, HOLD_CHECK_LIFT_M)):
-            p = self.cmd_tcp()
-            self.move_tcp([p[0], p[1], p[2] + dz], speed=FREE_EE_SPEED)
-            jpeg = self.wrist(f"lifted_{k}")
-            a = self.look(jpeg, f"the {self.target}")
-            boxes.append(a.value)
-            self.log.ev("held_box", k=k, height=self.height(), box=a.value, ms=round(a.ms), by=a.by)
+        """Lift the brick LIFT_M and decide held or not from the gripper motor: the close
+        stalled on something (fetch's close step), the jaws haven't closed to empty, and the
+        Pi's hold watch (auto_control) saw no drop on the way up. No camera: on Oct 26 the two
+        lifted frames showed the brick held in the jaws, but E2B's box took in the jaws too and
+        the image test called it "stayed behind", and the robot let go of a held brick. One
+        wrist frame is logged for the record."""
+        p = self.cmd_tcp()
+        self.move_tcp([p[0], p[1], p[2] + LIFT_M], speed=FREE_EE_SPEED)
+        self.wrist("lifted")
         g = self.robot.status()["joints"]["arm_gripper"]
+        data = {"gripper": round(g, 1)}
         if g < GRIPPER_EMPTY_MAX or self.dropped():
-            return Result(False, f"gripper closed to {g:.1f}: the brick slipped out", {"gripper": g})
-        if None in boxes:
-            return Result(False, "brick not seen after lifting", {"gripper": g, "boxes": boxes})
-        (a0, b0, a1, b1), (c0, d0, c1, d1) = boxes
-        shift = float(np.hypot((c0 + c1 - a0 - a1) / 2, (d0 + d1 - b0 - b1) / 2))
-        size = ((c1 - c0) * (d1 - d0)) / max(1e-6, (a1 - a0) * (b1 - b0))
-        data = {"gripper": round(g, 1), "shift": round(shift, 3), "size_ratio": round(size, 2)}
-        if shift > HOLD_MAX_SHIFT or not 0.8 < size < 1.25:
-            return Result(False, "the brick stayed behind: it moved in the image as the gripper rose", data)
+            return Result(False, f"gripper closed to {g:.1f}: the brick slipped out", data)
         return Result(True, data=data)
 
     def see_front(self, tag: str, what: str, repeat: bool = False) -> tuple[np.ndarray, list] | None:
