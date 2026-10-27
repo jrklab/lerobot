@@ -929,9 +929,13 @@ class Skills:
         """Close up, from the rest pose: the wrist camera looks at the floor just ahead."""
         self.arm.reset()
         jpeg = self.wrist(f"confirm_{what.replace(' ', '_')}")
-        yn = self.gemma.yes_no(jpeg, f"Is there a {what} in this image?")
-        self.log.ev("confirm", what=what, answer=yn.text, ms=round(yn.ms))
-        return Result(yn.value is True, "" if yn.value else f"up close, the wrist camera does not see a {what}")
+        # A box and its colour, not a yes/no: Oct 26, "Is there a red block in this image?"
+        # answered no six times with the brick in plain view (yes/no is biased to no; see the
+        # Oct 26 benchmark), while boxes were right.
+        a = self.gemma.box(jpeg, f"the {what} on the floor")
+        ok, why = (False, "no box") if a.value is None else colour_matches(jpeg, a.value, what)
+        self.log.ev("confirm", what=what, box=a.value, colour=why, ok=ok, ms=round(a.ms))
+        return Result(ok, "" if ok else f"up close, the wrist camera does not see a {what} ({why})")
 
     def go_to(self, what: str) -> Result:
         """Face, approach and confirm `what`, moving on to the next scan candidate when the

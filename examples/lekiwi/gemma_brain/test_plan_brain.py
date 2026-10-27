@@ -24,7 +24,10 @@ import sys
 import tempfile
 from pathlib import Path
 
+import numpy as np
+
 import plan_brain
+from arm import PlanError
 from gemma import Answer
 from plan_brain import SUPPORTED, PlanBrain
 from planner import Step, check_plan, objects_in, parse_plan
@@ -52,16 +55,35 @@ class FakePlanner:
 
 
 class FakeArm:
+    """At z (m, arm frame); move_to refuses when `stuck`. Records moves."""
+
+    z_min = -0.065
+
+    def __init__(self, z=0.15, stuck=False):
+        self.z, self.stuck, self.moves = z, stuck, []
+
+    def tcp(self):
+        m = np.eye(4)
+        m[:3, 3] = [0.2, 0.0, self.z]
+        return m
+
+    def move_to(self, xyz, **kw):
+        if self.stuck:
+            raise PlanError("arm_wrist_flex would hit its limit")
+        self.moves.append(("move_to", round(xyz[2], 3)))
+        self.z = xyz[2]
+
     def reset(self):
-        pass
+        self.moves.append(("reset",))
 
 
 class FakeSkills:
     """Records the skill calls; `fail` maps a call like 'fetch:red block' to how many times it fails."""
 
-    def __init__(self, fail=None):
+    def __init__(self, fail=None, arm=None, release_then_fail=False):
         self.calls, self.fail = [], dict(fail or {})
-        self.holding, self.base_ok, self.arm = None, True, FakeArm()
+        self.holding, self.base_ok, self.arm = None, True, arm or FakeArm()
+        self.release_then_fail = release_then_fail
 
     def _do(self, call: str) -> Result:
         self.calls.append(call)
@@ -86,6 +108,10 @@ class FakeSkills:
         r = self._do("place_in:" + what)
         if r.ok:
             self.holding = None
+        if self.release_then_fail:  # opened over the target, then the retreat was refused
+            self.holding = None
+            self.arm.z = 0.015
+            return Result(False, "robot error: arm_wrist_flex would hit its limit")
         return r
 
     def place_next_to(self, what):
@@ -176,6 +202,24 @@ def test_identical_replan_runs_once_more_only():
     ok, why = brain(FakePlanner(*plans), sk).run("red in cup")
     assert not ok and "didn't change" in why, why
     assert sk.calls.count("go_to:cup") == 2, sk.calls
+
+
+def test_released_then_failed_counts_as_placed():
+    # Oct 26: the brick dropped into the cup, then the retreat was refused. No replan to pick it
+    # again; the arm lifts straight up before folding.
+    sk = FakeSkills(release_then_fail=True)
+    planner = FakePlanner('pick "red block"\nplace "red block" in "cup"\ndone')
+    ok, why = brain(planner, sk).run("red in cup")
+    assert ok and "unverified" in why, why
+    assert planner.replans == [] and sk.calls.count("fetch:red block") == 1, sk.calls
+    assert sk.arm.moves == [("move_to", plan_brain.RESET_SAFE_Z_M), ("reset",)], sk.arm.moves
+
+
+def test_fold_stays_put_when_it_cant_lift_straight_up():
+    sk = FakeSkills(release_then_fail=True, arm=FakeArm(stuck=True))
+    ok, why = brain(FakePlanner('pick "red block"\nplace "red block" in "cup"\ndone'), sk).run("x")
+    assert not ok and "stayed where it was" in why, why
+    assert ("reset",) not in sk.arm.moves, sk.arm.moves  # no tilt-and-pull-in fold
 
 
 def test_starts_holding():

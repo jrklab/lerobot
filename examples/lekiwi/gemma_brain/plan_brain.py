@@ -36,7 +36,7 @@ import sys
 import time
 from pathlib import Path
 
-from arm import Arm, PlanError
+from arm import JAW_TIP_OFFSET_M, RESET_SAFE_Z_M, Arm, PlanError
 from brain import PICK_TRIES
 from gemma import LlamaCpp
 from planner import Planner, Step, check_plan, objects_in
@@ -106,6 +106,30 @@ class PlanBrain:
             return Result(False, f"could not reach the {target}: {r.reason}")
         return self.sk.place_in(target) if rel == "in" else self.sk.place_next_to(target)
 
+    def fold(self) -> str:
+        """Fold the arm to rest after a failure. From low down, straight up to RESET_SAFE_Z_M
+        first, keeping the gripper's orientation: Arm.reset's fallback there tilts the gripper
+        and pulls it in while still low, and on Oct 26 that dragged the cup 10 cm toward the
+        robot. If straight up is refused, the arm stays where it is. Returns why it stayed,
+        or "" when folded."""
+        arm = self.sk.arm
+        try:
+            p = arm.tcp()[:3, 3]
+            if p[2] < RESET_SAFE_Z_M:
+                try:
+                    arm.move_to([p[0], p[1], RESET_SAFE_Z_M], speed=0.03,
+                                z_min=min(arm.z_min, p[2] - JAW_TIP_OFFSET_M - 0.01))
+                except PlanError as e:
+                    self.log.ev("fold", ok=False, reason=str(e))
+                    return f"can't lift straight up from here ({e})"
+            arm.reset()
+        except (RobotError, PlanError) as e:
+            if isinstance(e, OperatorTookOver):
+                raise
+            self.log.ev("fold", ok=False, reason=str(e))
+            return str(e)
+        return ""
+
     def run_step(self, s: Step) -> Result:
         if s.verb == "pick":
             return self.pick(s.obj)
@@ -121,6 +145,7 @@ class PlanBrain:
         if steps is None:
             return False, why
         done: list[Step] = []
+        unverified: list[str] = []
         replans = repeats = 0
         while steps:
             s = steps[0]
@@ -128,6 +153,7 @@ class PlanBrain:
             if not r.ok:
                 print(f"    scan: {r.reason}")
             print(f"\n>>> {s}")
+            held_before = self.holding
             try:
                 r = self.run_step(s)
             except (RobotError, PlanError) as e:
@@ -137,6 +163,16 @@ class PlanBrain:
             self.holding = getattr(self.sk, "holding", None)
             self.log.ev("step_result", step=str(s), ok=r.ok, reason=r.reason, holding=self.holding)
             print(f"<<< {'OK' if r.ok else 'FAILED'}: {r.reason or 'done'}")
+            if not r.ok and s.verb == "place" and held_before == s.obj and self.holding is None:
+                # The gripper opened over the target, then something after it failed (Oct 26:
+                # the retreat from the cup). Placed, not verified: replanning would pick it again.
+                self.log.ev("place_unverified", step=str(s), reason=r.reason)
+                print(f"    released over the {s.target}: counting it as placed, unverified")
+                unverified.append(str(s))
+                r = Result(True)
+                why = self.fold()
+                if why:
+                    return False, f"placed ({s}, unverified), then the arm stayed where it was: {why}"
             if r.ok:
                 done.append(s)
                 steps = steps[1:]
@@ -144,12 +180,9 @@ class PlanBrain:
             if replans >= MAX_REPLANS:
                 return False, f"{s} failed after {MAX_REPLANS} replans: {r.reason}"
             replans += 1
-            try:
-                self.sk.arm.reset()
-            except (RobotError, PlanError) as e:
-                if isinstance(e, OperatorTookOver):
-                    raise
-                return False, f"{s} failed ({r.reason}); then the arm couldn't fold back to rest to replan: {e}"
+            why = self.fold()
+            if why:
+                return False, f"{s} failed ({r.reason}); the arm stayed where it was to replan: {why}"
             front, wrist = self.frames()
             try:
                 new, a = self.planner.replan(goal, done, s, r.reason, self.holding, front, wrist)
@@ -167,7 +200,8 @@ class PlanBrain:
             if problems:
                 self.log.ev("plan_rejected", problems=problems)
                 return False, f"{s} failed ({r.reason}); replan not runnable: " + "; ".join(problems)
-        return True, "done: " + "; ".join(map(str, done))
+        summary = "done: " + "; ".join(map(str, done))
+        return True, summary + (f" (unverified: {'; '.join(unverified)})" if unverified else "")
 
 
 def main() -> int:
@@ -209,8 +243,9 @@ def main() -> int:
         sk = Skills(robot, arm, LlamaCpp(args.vision_url), log)
         sk.turn_scan = not args.no_turn_scan
         sk.scan_sweep_deg = args.scan_sweep
+        pb = PlanBrain(sk, planner, log, robot, args.holding)
         try:
-            ok, summary = PlanBrain(sk, planner, log, robot, args.holding).run(args.goal)
+            ok, summary = pb.run(args.goal)
         except OperatorTookOver as e:
             summary = f"stopped: {e}"
         except OSError as e:
@@ -221,9 +256,12 @@ def main() -> int:
         finally:
             if "Ctrl-C" not in summary and "operator" not in summary and "unreachable" not in summary:
                 try:
-                    arm.reset()
-                except (RobotError, PlanError, OSError) as e:
-                    log.ev("reset", ok=False, reason=str(e))
+                    why = pb.fold()
+                except (OSError, RobotError) as e:  # incl. the operator taking over meanwhile
+                    why = str(e)
+                if why:
+                    log.ev("reset", ok=False, reason=why)
+                    print(f"\nThe arm stayed where it is ({why}): fold it with the gamepad's B button.")
     log.ev("result", success=ok, summary=summary)
     print(f"\n{'SUCCESS' if ok else 'NOT DONE'}: {summary}\nlog: {out}")
     return 0 if ok else 1
