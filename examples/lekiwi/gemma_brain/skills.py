@@ -22,8 +22,10 @@ Grasp, from a top-down pose above the block:
      no brick in view Gemma still returns one);
   2. centre: move in x/y until the block sits on the taught grasp pixel for this height
      (calib.json wrist_grasp_pixel), at 10, 6 and 3 cm;
+     (heights above the floor predicted for that spot: floor_at, no probe);
   3. touch: step down until the floor holds the jaws up (measured TCP above its free-air
-     sag), refusing if the touch comes much higher than the floor (landed on the block);
+     sag), refusing if the touch comes much higher than the predicted floor (landed on the
+     block); the touch is added to the floor fit;
   4. lift GRASP_LIFT_M off the floor, close, read the stall;
   5. lift LIFT_M; held = the jaws stalled on it and didn't close to empty, and the Pi's
      hold watch saw no drop (no camera: see lift_and_check).
@@ -75,18 +77,23 @@ ROLL_MIN_DEG, ROLL_MAX_DEG = -90.0, 90.0
 ROLL_OVERSHOOT_DEG = 10.0
 BASE_TURN_MARGIN_DEG = 10.0
 IMAGE_PX = np.array([640.0, 480.0])
-OPEN = 40.0
+# The open width before a grasp: 40 until the owner's Oct 27 demo opened to 24.6.
+OPEN = 25.0
 # The last stage, 1.5 cm (tips just above the 13 mm brick's studs), was added after the
 # owner saw the jaws closing on the brick's end (runs 005149: after a blind descent from 3 cm
 # the brick sat ~0.05 of the frame lower than taught, along its length).
 # 2 cm, not 1.5: with the tips 2 mm over the studs, a few mm of floor error at the brick
 # had the fixed jaw clip it on the way down and drag it (Oct 24 run 203916, green brick).
-SERVO_HEIGHTS = (0.10, 0.06, 0.03, 0.02)
+# 2 cm stage dropped Oct 27 with the floor probe: the floor is now predicted (floor_at), worst
+# error 8.4 mm, and at 3 cm that still leaves the jaws >2 cm up, clear of the 11.4 mm brick.
+SERVO_HEIGHTS = (0.10, 0.06, 0.03)
 # Per-height tolerance (pixels): 10 cm is the coarse line-up, 3 cm sets the grasp.
 # 1.5 cm: 20 px, not 10: that close the jaws partly hide the brick and Gemma's box jitters by
 # 15-30 px frame to frame (Oct 24 run 170013 oscillated 15-29 px at 10); the along-length
 # check before closing does the fine placement.
-SERVO_TOL_PX = (20.0, 14.0, 12.0, 20.0)  # the last: across the jaws only (see centre)
+SERVO_TOL_PX = (20.0, 14.0, 12.0)
+# Below this the centring corrects across the jaws only (see centre).
+ACROSS_ONLY_BELOW_M = 0.025
 SERVO_GAIN_LAST = 0.5  # gentler at the last stage, so noisy boxes don't make it overshoot
 # At 6 cm and below, Gemma's box jumps more between looks (Oct 24: the 6 cm stage chased
 # 0.54 <-> 0.68 swings and diverged): gentler, smaller steps there, and a box that lands more
@@ -119,21 +126,22 @@ SERVO_ITERS = 6
 # The floor touch: one contact-stop descent (see touch_floor), this fast, searching this far.
 TOUCH_SPEED = 0.012
 TOUCH_SEARCH_M = 0.06
-# The floor is measured beside the brick before the low centring stages: the stored floor
-# can be far off at a new spot (Oct 24 run 201924: 2.5 cm), and then the "1.5 cm" stage is
-# really 4 cm up, the aim is off and a jaw comes down on the brick (it was knocked 45 deg,
-# and its top taken for the floor). The probe touches FLOOR_PROBE_OFFSET_M past the jaw tips
-# from the brick, after a fast descent to FLOOR_PROBE_ABOVE_M over the highest floor seen.
-FLOOR_PROBE_OFFSET_M = 0.05
-FLOOR_PROBE_ABOVE_M = 0.025
-# The grasp touch stopping this far above the probed floor came down on the brick, not the floor.
-ON_BRICK_M = 0.006
+# The floor under the brick is predicted, not probed (Oct 27; the probe beside the brick took
+# ~10 s a pick): arm sag makes the touched floor depend on reach (-0.119 near to -0.147 m far
+# out), so z = a + b x + c y + d r^2 is fitted to every floor touch so far (floor_touches.json;
+# each grasp's touch is added). On 33 touches each predicted from the others: median 1.1 mm,
+# worst 8.4 mm off. Below FLOOR_FIT_MIN_POINTS touches, the last touch's floor is used.
+FLOOR_TOUCHES = Path(__file__).with_name("floor_touches.json")
+FLOOR_FIT_MIN_POINTS = 8
+# The grasp touch stopping this far above the predicted floor came down on the brick: between
+# the prediction's worst error (8.4 mm) and the brick's height (11.4 mm).
+ON_BRICK_M = 0.010
 GRASP_LIFT_M = 0.004  # jaw tips this far above the floor when closing (block body is 11.4 mm)
 PRE_CLOSE_MAX_FIX_M = 0.003
-# Just before closing, part of the brick must stick out beyond the jaw tips (owner's rule:
-# never fully inside the gripper, so it has margin not to miss): aim for OUTSIDE_AIM of its
-# length beyond the tips, accept OUTSIDE_MIN..OUTSIDE_MAX, else slide the gripper along the
-# brick's length (never toward it) by at most PRE_CLOSE_ALONG_MAX_M per try.
+# Just before closing, the share of the brick's length beyond the jaw tips: aim for
+# OUTSIDE_AIM, accept OUTSIDE_MIN..OUTSIDE_MAX, else slide the gripper along the brick's
+# length by at most PRE_CLOSE_ALONG_MAX_M per try. Half outside = the jaws close on the
+# brick's middle (owner, Oct 27: grab the middle; the demo's deeper 0.26 is not a target).
 # The fixed jaw is rigid with the camera, so its tip is always on the same image row
 # (0.769 in 4 of 5 frames, Oct 23-24; the moving jaw's tip shows lower when open). The
 # brick's full length at grasp height is BRICK_LEN_V (teach frame): its box is often cut
@@ -329,6 +337,27 @@ def jacobian(height: float, roll_deg: float = 0.0) -> np.ndarray:
     return (rot @ (j * IMAGE_PX[:, None])) / IMAGE_PX[:, None]
 
 
+def _floor_terms(x: float, y: float) -> list[float]:
+    return [1.0, x, y, x * x + y * y]
+
+
+def floor_at(x: float, y: float, fallback: float) -> float:
+    """The floor (TCP z where the jaws meet it) predicted at TCP x, y from floor_touches.json;
+    `fallback` until there are FLOOR_FIT_MIN_POINTS touches."""
+    pts = json.loads(FLOOR_TOUCHES.read_text())["points"] if FLOOR_TOUCHES.exists() else []
+    if len(pts) < FLOOR_FIT_MIN_POINTS:
+        return fallback
+    a = np.array([_floor_terms(p["x"], p["y"]) for p in pts])
+    coef, *_ = np.linalg.lstsq(a, np.array([p["z"] for p in pts]), rcond=None)
+    return float(np.array(_floor_terms(x, y)) @ coef)
+
+
+def add_floor_touch(x: float, y: float, z: float, run: str) -> None:
+    data = json.loads(FLOOR_TOUCHES.read_text()) if FLOOR_TOUCHES.exists() else {"points": []}
+    data["points"].append({"x": round(x, 4), "y": round(y, 4), "z": round(z, 4), "how": "touch", "run": run})
+    FLOOR_TOUCHES.write_text(json.dumps(data, indent=1) + "\n")
+
+
 def measured_angle(jpeg: bytes, box) -> tuple[float, str]:
     """The brick's long-axis angle from image vertical, and how it was measured: the
     OpenCV fit when its blob is plausible, else the box's shape (vertical vs horizontal only)."""
@@ -348,10 +377,10 @@ class Skills:
         self.fast = fast
         self.roll = 0.0  # current wrist roll target for top-down moves
         self.target = DEFAULT_TARGET  # what pick() is after, as Gemma will be asked for it
-        # The floor under the gripper (TCP z when the closed jaws touch it): calib.json's value
-        # until the first floor touch of the session, then what that touch measured.
+        # The floor under the gripper (TCP z when the closed jaws touch it): predicted where the
+        # gripper is about to work (floor_at), and set from each floor touch.
         self.floor_tcp = FLOOR_TCP_Z
-        self.probed_floor = None  # the floor beside the brick, from this grasp's probe
+        self.predicted_floor = None  # floor_at() for this grasp, the on-brick test's reference
         # The base can be locked (robot.base_enabled False): then the arm alone lines up.
         self.base_ok = getattr(robot, "base_enabled", True)
         # False: scan never turns the robot around; without the overhead camera it takes one
@@ -435,6 +464,7 @@ class Skills:
         self.roll = 0.0
         # One clearance-checked joint move from wherever the arm is (usually rest); it used to
         # go rest -> "ready" -> a straight line down, ~18 s.
+        self.floor_tcp = self.predicted_floor = floor_at(xy[0], xy[1], self.floor_tcp)
         self.arm.move_direct([xy[0], xy[1], self.floor_tcp + height], pitch_deg=PITCH, roll_deg=0.0)
         g = self.robot.gripper(OPEN)
         self.log.ev("above", tcp=self.tcp(), gripper=g["result"])
@@ -500,15 +530,12 @@ class Skills:
         if not r.ok:
             return r
         last_err = None
-        probed = False
         for i, h in enumerate(SERVO_HEIGHTS):
-            if i > 0 and not probed:
-                # The probe's trip away and back leaves the gripper a little off (Oct 24 run
-                # 204334: 139 px at 3 cm after skipping 6 cm), so the next stage always runs.
-                probed = True
-                r = self.probe_floor()
-                self.log.ev("step", name="probe_floor", ok=r.ok, reason=r.reason, data=r.data)
-                last_err = None
+            if i == 1:
+                # The floor where the centring at 10 cm left the gripper, before going lower.
+                p = self.cmd_tcp()
+                self.floor_tcp = self.predicted_floor = floor_at(p[0], p[1], self.floor_tcp)
+                self.log.ev("floor_predicted", xy=[round(float(p[0]), 4), round(float(p[1]), 4)], z=round(self.floor_tcp, 4))
             if h in SKIPPABLE_HEIGHTS and last_err is not None and last_err < SERVO_TOL_PX[i]:
                 self.log.ev("servo_skip", h=h, last_err_px=round(last_err, 1))
                 continue
@@ -542,7 +569,7 @@ class Skills:
                 prev_c = c
                 target = grasp_pixel(h_meas)
                 e = target - c
-                last = i == len(SERVO_HEIGHTS) - 1
+                last = h < ACROSS_ONLY_BELOW_M
                 if last:
                     # Across the jaws (image u) only: the along-length placement is the slide
                     # before closing (center_along_length). Correcting v here slid the fixed
@@ -572,42 +599,6 @@ class Skills:
                 return Result(False, f"did not converge at {100 * h:.0f} cm ({err_px:.0f} px off)")
         return Result(True)
 
-    def probe_floor(self) -> Result:
-        """Touch the floor beside the brick (FLOOR_PROBE_OFFSET_M beyond the jaw tips from it,
-        along its length: the image direction in which the brick moves past the tips), and
-        come back. Sets the session floor. The gripper starts centred over the brick at the
-        first stage. On any failure the floor stays as it was."""
-        self.probed_floor = None
-        p = self.cmd_tcp()
-        j = jacobian(max(self.height(), 0.0), self.roll)
-        d = np.linalg.solve(j, np.array([0.0, -1.0]))
-        d = FLOOR_PROBE_OFFSET_M * d / float(np.linalg.norm(d))
-        try:
-            for sign in (1.0, -1.0):  # the other side when that one is out of reach
-                side = [p[0] + sign * d[0], p[1] + sign * d[1], p[2]]
-                try:
-                    self.move_tcp(side, speed=FREE_EE_SPEED)
-                    break
-                except PlanError:
-                    if sign < 0:
-                        raise
-            z_fast = max(FLOOR_TCP_Z, self.floor_tcp) + FLOOR_PROBE_ABOVE_M
-            if z_fast < side[2]:
-                self.move_tcp([side[0], side[1], z_fast], speed=FREE_EE_SPEED)
-            search = (z_fast - min(FLOOR_TCP_Z, self.floor_tcp)) + 0.03
-            r = self.touch_floor(search=search)
-        except (PlanError, RobotError) as e:
-            r = Result(False, f"probe move failed: {e}")
-        try:
-            q = self.cmd_tcp()
-            self.move_tcp([q[0], q[1], p[2]], speed=FREE_EE_SPEED)
-            self.move_tcp(p, speed=FREE_EE_SPEED)
-        except (PlanError, RobotError) as e:
-            return Result(False, f"could not get back over the brick: {e}")
-        if r.ok:
-            self.probed_floor = self.floor_tcp
-        return r
-
     def touch_floor(self, search: float = TOUCH_SEARCH_M) -> Result:
         """One straight descent the Pi stops itself where the jaws meet the floor (a
         contact_stop trajectory: it watches the measured against the commanded TCP height every
@@ -626,12 +617,13 @@ class Skills:
         if not r.get("contact"):
             return Result(False, f"no floor within {100 * search:.0f} cm below the start")
         z = float(r["z_meas"])
-        if self.probed_floor is not None and z > self.probed_floor + ON_BRICK_M:
+        if self.predicted_floor is not None and z > self.predicted_floor + ON_BRICK_M:
             # Stopped on the brick, not the floor: don't take it for the floor, don't close.
-            self.log.ev("on_brick", z=round(z, 4), floor=round(self.probed_floor, 4))
+            self.log.ev("on_brick", z=round(z, 4), floor=round(self.predicted_floor, 4))
             p = self.cmd_tcp()
-            self.move_tcp([p[0], p[1], self.probed_floor + SERVO_HEIGHTS[0]], speed=FREE_EE_SPEED)
-            return Result(False, f"a jaw came down on the brick ({1000 * (z - self.probed_floor):.0f} mm above the floor)")
+            self.move_tcp([p[0], p[1], self.predicted_floor + SERVO_HEIGHTS[0]], speed=FREE_EE_SPEED)
+            return Result(False, f"a jaw came down on the brick ({1000 * (z - self.predicted_floor):.0f} mm above the floor)")
+        add_floor_touch(float(p[0]), float(p[1]), z, self.log.out.name)
         free_gap = float(r.get("free_gap_mm", 0.0)) / 1000.0  # measured - commanded in free air (sag: negative)
         self.log.ev("floor", previous=round(self.floor_tcp, 4), now=round(z, 4), shift_mm=round(1000 * (z - self.floor_tcp), 1))
         self.floor_tcp = z
