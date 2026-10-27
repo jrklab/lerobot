@@ -18,7 +18,7 @@
 the robot itself: one brick on the floor 0.6-1 m in front, roughly straight ahead, ~1 m of
 free floor up to it.
 
-    .venv/bin/python calibrate_front.py ["red Lego brick"]
+    .venv/bin/python calibrate_front.py ["red Lego brick"] [--vision-url http://127.0.0.1:8081]
 
 1. Turn test: the brick's image column at heading 0, +8 and -8 deg -> FRONT_U_PER_DEG.
 2. Drive test: straight at it in 8 cm steps (at most 1 m), logging where its box meets the
@@ -45,7 +45,7 @@ import numpy as np
 
 import skills as S
 from arm import Arm
-from gemma import Gemma
+from gemma import Gemma, LlamaCpp
 from robot import Robot
 
 TURN_DEG = 8.0
@@ -60,6 +60,8 @@ STOP_BOTTOM = 0.75
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("target", nargs="?", default="red Lego brick")
+    ap.add_argument("--vision-url", default=None,
+                    help="llama-server for the boxes (e.g. http://127.0.0.1:8081, 26B); default: Ollama")
     args = ap.parse_args()
     out = Path(__file__).parent / "runs" / (datetime.datetime.now().strftime("%Y%m%dT%H%M%S") + "-front-calib")
     log = S.Log(out)
@@ -67,7 +69,7 @@ def main() -> None:
     robot = Robot()
     with robot:
         arm = Arm(robot)
-        sk = S.Skills(robot, arm, Gemma(), log)
+        sk = S.Skills(robot, arm, LlamaCpp(args.vision_url) if args.vision_url else Gemma(), log)
         sk.target = args.target
         arm.reset()
 
