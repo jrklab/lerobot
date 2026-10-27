@@ -211,6 +211,21 @@ def test_contact_follow_check_ignores_an_arm_hanging_below_its_command():
     assert _watch(cmd2, meas2)
 
 
+def test_contact_held_up_check_waits_until_the_arm_follows():
+    # Oct 27: hanging 3.4 mm below the command, the arm stays put for the first ~0.4 s; the
+    # free gap must not be learnt then (it was, and "held up" fired at 0.47 s, 24 mm up).
+    n = 60
+    cmd = [-0.0812 - 0.011 * i * PERIOD for i in range(n)]
+    meas = [-0.0846 if i < 12 else cmd[i] - 0.0034 for i in range(n)]
+    assert _watch(cmd, meas) == ""
+
+
+def test_contact_detected_when_starting_on_the_brick():
+    cmd = [-0.0812 - 0.011 * i * PERIOD for i in range(40)]
+    meas = [-0.0815] * 40  # resting on something: never moves
+    assert "from the start" in _watch(cmd, meas)
+
+
 def test_loaded_but_tracking_joint_is_not_a_stall():
     sim = Sim()
     # Holding the arm out against gravity: loaded and stationary, but on target.

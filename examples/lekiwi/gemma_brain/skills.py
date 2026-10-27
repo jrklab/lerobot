@@ -206,9 +206,10 @@ APPROACH_MAX_STEPS = 20
 # what's left (the owner saw the arm reaching far for the brick at the old 0.22, Oct 24; in
 # the old model's coordinates, which put the gripper ~10 cm nearer than it was).
 # The reach point the base parks the brick under (0.10 m up, then the arm servos): the middle
-# of where the gripper can stay vertical at 0.10 m (0.14-0.28 m with the homing-tick joint
-# zero, Oct 27), leaving ~6 cm for the servo either way. Was 0.17 in the old model.
-ABOVE_XY = (0.22, 0.0)
+# of where the gripper can stay vertical at 0.10 m is 0.21 (0.14-0.28 m with the homing-tick
+# joint zero, Oct 27); 0.25 (owner, Oct 27: at 0.22 the brick sat too close to the base)
+# leaves 3 cm for the servo outwards, more inwards. Was 0.17 in the old model.
+ABOVE_XY = (0.25, 0.0)
 ARM_REACH_M = 0.015
 # After the front-camera approach (it can't stop much closer than ~24 cm: the brick drops out
 # of the bottom of its view), drive this much further before looking down with the wrist

@@ -106,7 +106,11 @@ SETTLE_TIMEOUT_S = 1.0
 # which also catches starting already in contact). The commanded distance counts only below
 # where the TCP measured at the window's start: an arm hanging below its command (the
 # vertical gripper droops ~4 mm) doesn't move until the command passes it, and counting from
-# the command fired on every touch, 22-26 mm up (Oct 27, run 20261027T085930).
+# the command fired on every touch, 22-26 mm up (Oct 27, run 20261027T085930). For the same
+# reason both tests wait until the TCP has moved CONTACT_FOLLOW_MIN_M down before they start
+# (the free gap learnt while it still hung grew as the command went on: "held up" at 0.47 s,
+# run 20261027T090823); starting already in contact is the command getting
+# CONTACT_FOLLOW_MIN_M / CONTACT_FOLLOW_FRACTION below the TCP before it has moved that far.
 # On contact: hold the measured pose.
 CONTACT_WARMUP_S = 0.15
 CONTACT_BASELINE_S = 0.2
@@ -412,6 +416,16 @@ class AutoController:
             return ""
         zc = self._tcp_z(targets)
         zm = self._tcp_z({j: joint_state[j]["pos"] for j in IK_ARM_JOINTS})
+        if "moving_since" not in cmd:
+            z0 = cmd.setdefault("z_meas_start", zm)
+            if z0 - zm < CONTACT_FOLLOW_MIN_M:
+                below = min(cmd.setdefault("z_cmd_start", zc), z0) - zc
+                if below > CONTACT_FOLLOW_MIN_M / CONTACT_FOLLOW_FRACTION:
+                    cmd["contact_last"] = (zc, zm, zm - zc)
+                    return f"not following from the start: moved {1000 * (z0 - zm):.1f} mm, command {1000 * below:.1f} mm below"
+                return ""
+            cmd["moving_since"] = t
+        t -= cmd["moving_since"]  # the tests below run from when the TCP started following
         hist = cmd["watch"]
         hist.append((t, zc, zm))
         if t < CONTACT_WARMUP_S + CONTACT_BASELINE_S:
