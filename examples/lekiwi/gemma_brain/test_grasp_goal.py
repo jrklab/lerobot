@@ -54,3 +54,48 @@ def test_roll_range_is_centred_on_the_rest_joint_angle():
     # the drop's roll is the rest pose's wrist angle: inside the range, near its middle
     assert lo < skills.DROP_ROLL_DEG < hi
     assert abs((lo + hi) / 2 - skills.DROP_ROLL_DEG) < 20
+
+
+def test_grasp_gap_is_zero_when_the_edge_at_tip_depth_meets_the_jaw():
+    tips = skills.CAM_ABOVE_TIPS_M
+    top = tips - (skills.BRICK_HEIGHT_M - skills.GRASP_LIFT_M)
+    p0 = skills.DESCENT_P0[0]
+    # the top face's edge as it appears when the brick's side is right at the jaw's inner edge
+    u = p0 + (skills.FIXED_JAW_INNER_U - p0) * tips / top
+    assert abs(skills.grasp_gap_m([0.3, 0.5, u, 0.8])) < 1e-9
+    assert skills.grasp_gap_m([0.3, 0.5, u - 0.02, 0.8]) > 0.002
+
+
+class _Log:
+    def __init__(self):
+        self.events = []
+
+    def ev(self, event, **kw):
+        self.events.append((event, kw))
+
+
+def _grasper(gaps):
+    sk = skills.Skills.__new__(skills.Skills)
+    sk.log, sk.aim_shift_m, sk.target = _Log(), 0.0, "red block"
+    sk.centre_calls = []
+    sk.centre = lambda start=0: (sk.centre_calls.append(start), skills.Result(True))[1]
+    sk.land = lambda: skills.Result(True, data={"gap_m": gaps.pop(0)})
+    sk.wrist = lambda tag, settle=0.0: b""
+    sk.close = lambda: skills.Result(True)
+    sk.lift_and_check = lambda: skills.Result(True)
+    return sk
+
+
+def test_grasp_redoes_once_from_the_last_servo_height_when_the_gap_is_wide():
+    sk = _grasper([0.009, 0.004])
+    assert sk.grasp(None).ok
+    assert sk.centre_calls == [0, len(skills.SERVO_HEIGHTS) - 1]
+    assert abs(sk.aim_shift_m - (0.009 - skills.GRASP_MARGIN_M)) < 1e-9  # aim closer to the jaw
+
+
+def test_grasp_closes_without_redo_when_the_gap_is_in_range_and_after_one_redo_anyway():
+    sk = _grasper([0.003])
+    assert sk.grasp(None).ok and sk.centre_calls == [0]
+    sk = _grasper([-0.004, -0.003])
+    assert sk.grasp(None).ok and sk.centre_calls == [0, len(skills.SERVO_HEIGHTS) - 1]
+    assert sk.aim_shift_m < 0  # brick under the jaw: aim further from it

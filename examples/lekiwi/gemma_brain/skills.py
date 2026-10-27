@@ -66,6 +66,14 @@ FIXED_JAW_TIP_V = CALIB["wrist_jaws"]["value"]["fixed_tip_v"]
 # model, from the logged picks (calibrate_descent.py). A brick landing within it of the aim
 # still leaves the jaw beside it; the larger misses are for the check before closing.
 GRASP_MARGIN_M = float(np.median(np.abs(CALIB["wrist_descent"]["last_descent_right_edge_mm"]))) / 1000
+# The check before closing (step 5.3): the fixed jaw's gap to the brick's side, measured in
+# the wrist frame with the jaws at the floor, must be 0..GRASP_GAP_MAX_M, else lift to the
+# last servo height, re-aim by the measured landing error and land again (GRASP_REDOS times).
+# From the 33 logged closes (Oct 26-27, gap corrected for the brick's height): square grips
+# at 0.1-5.6 mm, tilted grips at 4.9-11.0 mm, empty closes spread over 0.1-11.7 mm.
+GRASP_GAP_MAX_M = 0.005
+GRASP_REDOS = 1
+BRICK_HEIGHT_M = 0.0114  # 2x4 brick body, spec; its box in the wrist image is the top face
 GRASP_PIXEL = [(p["height_m"], np.array(p["center"])) for p in CALIB["wrist_grasp_pixel"]["value"]]
 
 PITCH = 90.0
@@ -346,14 +354,15 @@ def descend(point, h_from: float, h_to: float) -> np.ndarray:
     return DESCENT_P0 + (np.asarray(point, float) - DESCENT_P0) * s
 
 
-def grasp_goal(height: float) -> np.ndarray:
+def grasp_goal(height: float, shift_m: float = 0.0) -> np.ndarray:
     """(u of the brick's right edge, v of its centre) in the wrist image at this gripper
     height, such that a straight descent to the grasp leaves its right side GRASP_MARGIN_M
     from the fixed jaw's inner edge and its middle on the jaw tips' row (half the brick
     beyond the tips: the owner's "grab the middle"). Goals come from the measured jaw and
-    the descent model, not from a taught brick, so they hold for any brick size."""
+    the descent model, not from a taught brick, so they hold for any brick size. shift_m
+    moves the aim that much closer to the fixed jaw (a re-aim after a measured landing)."""
     u_per_m = float(np.linalg.norm(jacobian(GRASP_LIFT_M)[0]))
-    at_grasp = np.array([FIXED_JAW_INNER_U - GRASP_MARGIN_M * u_per_m, FIXED_JAW_TIP_V])
+    at_grasp = np.array([FIXED_JAW_INNER_U - (GRASP_MARGIN_M - shift_m) * u_per_m, FIXED_JAW_TIP_V])
     return descend(at_grasp, GRASP_LIFT_M, height)
 
 
@@ -377,6 +386,17 @@ def roll_range(calib) -> tuple[float, float]:
     jmin = max(rest - ROLL_FROM_REST_DEG, lo + ROLL_OVERSHOOT_DEG)
     jmax = min(rest + ROLL_FROM_REST_DEG, hi - ROLL_OVERSHOOT_DEG)
     return tuple(sorted(((jmin - j0) / slope, (jmax - j0) / slope)))
+
+
+def grasp_gap_m(box) -> float:
+    """The fixed jaw's gap to the brick's right side, in metres, from a wrist frame taken with
+    the jaws at grasp height: the box is the brick's top face, BRICK_HEIGHT_M above the floor
+    and so nearer the camera than the jaw tips; its edge is brought to the tips' depth before
+    comparing with the jaw's inner edge. Negative: the brick reaches under the jaw."""
+    tips = CAM_ABOVE_TIPS_M
+    top = tips - (BRICK_HEIGHT_M - GRASP_LIFT_M)
+    u_edge = DESCENT_P0[0] + (box[2] - DESCENT_P0[0]) * top / tips
+    return float((FIXED_JAW_INNER_U - u_edge) / np.linalg.norm(jacobian(GRASP_LIFT_M)[0]))
 
 
 def jacobian(height: float, roll_deg: float = 0.0) -> np.ndarray:
@@ -436,6 +456,7 @@ class Skills:
         self.floor_tcp = FLOOR_TCP_Z
         self.predicted_floor = None  # floor_at() for this grasp, the on-brick test's reference
         self.brick_len_v = None  # brick length in the image at grasp height, from the last servo look
+        self.aim_shift_m = 0.0  # grasp_goal's re-aim after a measured landing (step 5.3)
         # The base can be locked (robot.base_enabled False): then the arm alone lines up.
         self.base_ok = getattr(robot, "base_enabled", True)
         # False: scan never turns the robot around; without the overhead camera it takes one
@@ -520,6 +541,7 @@ class Skills:
         # One clearance-checked joint move from wherever the arm is (usually rest); it used to
         # go rest -> "ready" -> a straight line down, ~18 s.
         self.brick_len_v = None
+        self.aim_shift_m = 0.0
         self.floor_tcp = self.predicted_floor = floor_at(xy[0], xy[1], self.floor_tcp)
         self.arm.move_direct([xy[0], xy[1], self.floor_tcp + height], pitch_deg=PITCH, roll_deg=0.0)
         g = self.robot.gripper(OPEN)
@@ -558,15 +580,19 @@ class Skills:
             self.move_tcp(p, speed=0.02)
         return Result(True)
 
-    def centre(self) -> Result:
+    def centre(self, start: int = 0) -> Result:
         """Servo the brick onto grasp_goal at each SERVO_HEIGHTS, going down between: its
-        right edge (the fixed jaw's side) and the centre row, not its box centre."""
-        r = self.align_roll()
-        self.log.ev("step", name="roll", ok=r.ok, reason=r.reason, data=r.data)
-        if not r.ok:
-            return r
+        right edge (the fixed jaw's side) and the centre row, not its box centre. start > 0:
+        from that stage on, the roll kept (a re-aim after a landing)."""
+        if start == 0:
+            r = self.align_roll()
+            self.log.ev("step", name="roll", ok=r.ok, reason=r.reason, data=r.data)
+            if not r.ok:
+                return r
         last_err = None
         for i, h in enumerate(SERVO_HEIGHTS):
+            if i < start:
+                continue
             if i == 1:
                 # The floor where the centring at 10 cm left the gripper, before going lower.
                 p = self.cmd_tcp()
@@ -575,7 +601,7 @@ class Skills:
             if h in SKIPPABLE_HEIGHTS and last_err is not None and last_err < SERVO_TOL_PX[i]:
                 self.log.ev("servo_skip", h=h, last_err_px=round(last_err, 1))
                 continue
-            if i > 0:
+            if i > 0 or start > 0:
                 p = self.cmd_tcp()
                 self.move_tcp([p[0], p[1], self.floor_tcp + h], speed=FREE_EE_SPEED)
             expect = None  # where the last correction should have put the brick in the image
@@ -605,7 +631,7 @@ class Skills:
                         self.move_tcp([p[0], p[1], self.floor_tcp + SERVO_HEIGHTS[0]], speed=FREE_EE_SPEED)
                         return Result(False, f"the brick moved with the gripper at {100 * h:.0f} cm: a jaw was pushing it")
                 prev_c = c
-                target = grasp_goal(h_meas)
+                target = grasp_goal(h_meas, self.aim_shift_m)
                 e = target - c
                 last = h < ACROSS_ONLY_BELOW_M
                 if last:
@@ -676,13 +702,14 @@ class Skills:
         self.floor_tcp = z
         return Result(True, data={"z": z, "z_cmd": z - free_gap, "how": r.get("how"), "start_xy": [float(p[0]), float(p[1])]})
 
-    def center_along_length(self) -> None:
+    def center_along_length(self) -> list | None:
         """Just before closing: make sure part of the brick sticks out beyond the jaw tips
         (OUTSIDE_MIN..OUTSIDE_MAX of its length, aiming for OUTSIDE_AIM, i.e. its middle at
         the tips), so the jaws close on its middle with margin, not on one end with the rest
         deep inside the gripper. The wrist is rolled so the brick's long side is vertical
         (image v) and the jaws close along u; only the along-length error is corrected, so the
-        gripper slides beside the brick and can't push it."""
+        gripper slides beside the brick and can't push it. Returns the last box seen (None if
+        the brick wasn't boxed)."""
         for k in range(PRE_CLOSE_ALONG_TRIES + 1):
             got = self.see_block(f"pre_close_check_{k}", check_present=False, want_box=True)
             if got is None:
@@ -700,7 +727,7 @@ class Skills:
             outside = float(np.clip((FIXED_JAW_TIP_V - box[1]) / length, 0.0, 1.0))
             self.log.ev("along", k=k, box=box, outside=round(outside, 2), length_v=round(length, 3))
             if OUTSIDE_MIN <= outside <= OUTSIDE_MAX or k == PRE_CLOSE_ALONG_TRIES:
-                return
+                return box
             # More outside = the brick higher in the image (smaller v).
             ev = -(OUTSIDE_AIM - outside) * length
             h = max(self.height(), 0.0)
@@ -1127,15 +1154,46 @@ class Skills:
         steps = [
             ("above", lambda: self.go_above(xy) if xy is not None else Result(True)),
             ("centre", self.centre),
-            ("touch", self.touch_floor),
         ]
-        touch = None
         for name, fn in steps:
             r = fn()
             self.log.ev("step", name=name, ok=r.ok, reason=r.reason, data=r.data)
             if not r.ok:
                 return Result(False, f"{name}: {r.reason}")
-            touch = r if name == "touch" else touch
+        for redo in range(GRASP_REDOS + 1):
+            r = self.land()
+            self.log.ev("step", name="land", ok=r.ok, reason=r.reason, data=r.data)
+            if not r.ok:
+                return Result(False, f"land: {r.reason}")
+            gap = r.data.get("gap_m")
+            if gap is None or 0.0 <= gap <= GRASP_GAP_MAX_M or redo == GRASP_REDOS:
+                break
+            # Landed off: re-aim by the landing error and come down again from the last servo
+            # height. Positive shift: aim closer to the fixed jaw.
+            self.aim_shift_m += gap - GRASP_MARGIN_M
+            self.log.ev("regrasp", gap_mm=round(1000 * gap, 1), aim_shift_mm=round(1000 * self.aim_shift_m, 1))
+            r = self.centre(start=len(SERVO_HEIGHTS) - 1)
+            self.log.ev("step", name="centre_again", ok=r.ok, reason=r.reason, data=r.data)
+            if not r.ok:
+                return Result(False, f"centre again: {r.reason}")
+        self.wrist("pre_close", settle=0.1)
+        for name, fn in (("close", self.close), ("lift", self.lift_and_check)):
+            r = fn()
+            self.log.ev("step", name=name, ok=r.ok, reason=r.reason, data=r.data)
+            if not r.ok:
+                return Result(False, f"{name}: {r.reason}")
+        self.holding = self.target
+        return Result(True, f"holding the {self.target}")
+
+    def land(self) -> Result:
+        """From the last servo height: touch the floor, set the jaws GRASP_LIFT_M above it,
+        slide along the brick's length if needed (center_along_length), and measure the fixed
+        jaw's gap to the brick (grasp_gap_m) in that frame. data["gap_m"]: None when the brick
+        wasn't boxed there."""
+        touch = self.touch_floor()
+        self.log.ev("step", name="touch", ok=touch.ok, reason=touch.reason, data=touch.data)
+        if not touch.ok:
+            return Result(False, f"touch: {touch.reason}")
         # Jaws GRASP_LIFT_M above the last free step, in commanded terms, plus at most
         # PRE_CLOSE_MAX_FIX_M of correction from the measured height: after a touch the
         # measured TCP has read 5-11 mm below the command, and chasing it fully (Oct 23 run
@@ -1157,15 +1215,12 @@ class Skills:
             self.move_tcp([p[0], p[1], z_cmd + fix], speed=0.008)
             time.sleep(0.3)
         self.log.ev("pre_close", z_cmd=z_cmd + fix, z_meas=float(self.tcp()[2]), goal=goal, fix_mm=round(1000 * fix, 1))
-        self.center_along_length()
-        self.wrist("pre_close", settle=0.1)
-        for name, fn in (("close", self.close), ("lift", self.lift_and_check)):
-            r = fn()
-            self.log.ev("step", name=name, ok=r.ok, reason=r.reason, data=r.data)
-            if not r.ok:
-                return Result(False, f"{name}: {r.reason}")
-        self.holding = self.target
-        return Result(True, f"holding the {self.target}")
+        box = self.center_along_length()
+        gap = grasp_gap_m(box) if box is not None else None
+        ok = gap is not None and 0.0 <= gap <= GRASP_GAP_MAX_M
+        self.log.ev("grasp_check", gap_mm=None if gap is None else round(1000 * gap, 1), ok=ok,
+                    aim_shift_mm=round(1000 * self.aim_shift_m, 1))
+        return Result(True, data={"gap_m": gap})
 
     def front_guess(self, what: str) -> tuple[float, float] | None:
         """Rough arm-frame (x, y) of `what` on the floor from one front-camera look: bearing
