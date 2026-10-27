@@ -17,7 +17,6 @@
 
 import cv2
 import numpy as np
-
 from vision import jaw_geometry
 
 W, H = 640, 480
