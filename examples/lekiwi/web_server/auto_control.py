@@ -103,7 +103,11 @@ SETTLE_TIMEOUT_S = 1.0
 # CONTACT_WARMUP_S); contact is either the floor holding it up (gap grows past the free gap
 # by contact_gap_mm on CONTACT_CONFIRM_TICKS ticks) or the TCP no longer following (over the
 # last CONTACT_FOLLOW_S it moved under CONTACT_FOLLOW_FRACTION of the commanded distance,
-# which also catches starting already in contact). On contact: hold the measured pose.
+# which also catches starting already in contact). The commanded distance counts only below
+# where the TCP measured at the window's start: an arm hanging below its command (the
+# vertical gripper droops ~4 mm) doesn't move until the command passes it, and counting from
+# the command fired on every touch, 22-26 mm up (Oct 27, run 20261027T085930).
+# On contact: hold the measured pose.
 CONTACT_WARMUP_S = 0.15
 CONTACT_BASELINE_S = 0.2
 CONTACT_CONFIRM_TICKS = 2
@@ -425,7 +429,8 @@ class AutoController:
             cmd["held_ticks"] = 0
         old = next((h for h in reversed(hist) if t - h[0] >= CONTACT_FOLLOW_S), None)
         if old is not None:
-            commanded, measured = old[1] - zc, old[2] - zm  # descent over the window
+            # descent over the window; the command's only from below where the TCP was
+            commanded, measured = min(old[1], old[2]) - zc, old[2] - zm
             if commanded > CONTACT_FOLLOW_MIN_M and measured < CONTACT_FOLLOW_FRACTION * commanded:
                 return f"not following: moved {1000 * measured:.1f} of {1000 * commanded:.1f} mm commanded"
         return ""

@@ -185,6 +185,32 @@ def test_contact_stops_and_holds_measured_pose():
     assert abs(sim.targets[lift] - sim.pos[lift]) < 1e-6  # holding where it stopped, not pushing
 
 
+def _watch(cmd_z, meas_z):
+    """Run AutoController._watch_contact over two height tracks (one per tick)."""
+    auto = AutoController(norm_to_rad, clock=lambda: 0.0)
+    cmd = {"watch": [], "contact_gap_m": 0.0015}
+    for i, (zc, zm) in enumerate(zip(cmd_z, meas_z, strict=True)):
+        # the targets carry a marker; the measured pose is rebuilt from joint_state without it
+        auto._tcp_z = lambda js, zc=zc, zm=zm: zc if "commanded" in js else zm
+        how = auto._watch_contact(cmd, i * PERIOD, {**READY, "commanded": 0.0}, {j: {"pos": 0.0} for j in IK_ARM_JOINTS})
+        if how:
+            return how
+    return ""
+
+
+def test_contact_follow_check_ignores_an_arm_hanging_below_its_command():
+    # Oct 27: the vertical gripper hung 4 mm below its command; the command descends 11 mm/s,
+    # and the arm only follows once the command passes it.
+    n = 40
+    cmd = [-0.0812 - 0.011 * i * PERIOD for i in range(n)]
+    meas = [min(-0.0853, c - 0.0041 + 0.004) for c in cmd]
+    assert _watch(cmd, meas) == ""
+    # Stopped by the floor: the command goes on, the arm doesn't.
+    cmd2 = cmd + [cmd[-1] - 0.011 * i * PERIOD for i in range(1, 20)]
+    meas2 = meas + [meas[-1]] * 19
+    assert _watch(cmd2, meas2)
+
+
 def test_loaded_but_tracking_joint_is_not_a_stall():
     sim = Sim()
     # Holding the arm out against gravity: loaded and stationary, but on target.
