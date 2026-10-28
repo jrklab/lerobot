@@ -100,7 +100,7 @@ def main() -> None:
                     sk.seen.clear()  # the base moves: last frame's boxes don't track
                     back = sk.move("base", delta=(-args.back, 0.0))
                     row = {"trial": k + 1, "ok": r.ok, "failed": r.data.get("failed"), "reason": r.reason,
-                           "s": round(time.time() - t0), "put_down": None if put is None else put.ok, "backed": back.ok}
+                           "s": round(time.time() - t0), "put_down": put, "backed": back.ok}
                     results.append(row)
                     log.ev("trial", **row)
                     print(f"trial {k + 1}: {'OK' if r.ok else 'FAILED at ' + str(r.data.get('failed'))} "
