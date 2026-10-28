@@ -162,9 +162,18 @@ class FrontApproachGoal:
         return {"delta": (prm.SERVO_GAIN.value * max(here - there, 0.0), 0.0)}
 
 
+def round_centre(box) -> np.ndarray:
+    """The centre of a round container's opening from its box: the far edge (box top) plus half
+    the width, as the gripper and the held object hide its near side and the model's box ends
+    anywhere from above the jaws to the frame bottom (Oct 27: box centres jumped 0.1 between
+    looks of a still cup; this measure moved 0.005)."""
+    x0, y0, x1, _ = box
+    return np.array([(x0 + x1) / 2, y0 + (x1 - x0) * IMAGE_PX[0] / IMAGE_PX[1] / 2])
+
+
 class AboveGoal:
-    """A container's box centre on the spot the owner's demo had it at the pause above it,
-    seen from the same height (PLACE_HOVER_M): image-to-image, no depth model needed."""
+    """A container's opening centre (round_centre) on the spot the owner's demo had it at the
+    pause above it, seen from the same height (PLACE_HOVER_M): image to image, no depth model."""
 
     cam = "wrist"
     part = "arm"
@@ -176,10 +185,10 @@ class AboveGoal:
         view = prm.demo_place_view()
         if view is None:
             raise MissingCalibrationError("no container view in the demo extract: run demo_extract.py --place-target")
-        self.centre = np.array(view[0])
+        self.centre = round_centre(view[0])
 
     def error(self, det: Detection, sk) -> np.ndarray:
-        return self.centre - det.center
+        return self.centre - round_centre(det.box)
 
     def done(self, err: np.ndarray, sk) -> bool:
         tol = np.abs(np.linalg.norm(sk.geom.jacobian(sk.height(), sk.roll), axis=1)) * self.tol_m.value

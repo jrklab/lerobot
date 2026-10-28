@@ -45,11 +45,11 @@ def _demo(key: str, fallback: float) -> float:
 
 
 def demo_place_view() -> tuple[list[float], float] | None:
-    """The container's box centre in the wrist image at the demo's pause above it, and that
-    height (jaw tips above the floor): where the owner held the brick before lowering it in."""
+    """The container's box in the wrist image at the demo's pause above it, and that height
+    (jaw tips above the floor): where the owner held the brick before lowering it in."""
     try:
         d = json.loads(DEMO_EXTRACT.read_text())
-        return list(d["pre_release"]["centre"]), float(d["above_target_z_above_floor_m"])
+        return list(d["pre_release"]["box"]), float(d["above_target_z_above_floor_m"])
     except (OSError, KeyError, ValueError, TypeError):
         return None
 

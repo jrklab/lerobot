@@ -340,7 +340,7 @@ def _chain_sk(calls, held=True):
 def test_place_in_runs_over_lower_release(monkeypatch):
     from v2 import chains
 
-    monkeypatch.setattr(prm, "demo_place_view", lambda: ([0.45, 0.40], 0.106))
+    monkeypatch.setattr(prm, "demo_place_view", lambda: ([0.15, 0.05, 0.75, 0.80], 0.106))
     monkeypatch.setattr(chains.actions, "approach", lambda sk, o: chains.Result(True))
     calls = []
     sk = _chain_sk(calls)
@@ -383,7 +383,7 @@ def test_beside_goal_aims_left_of_the_taught_spot():
 
 
 def test_above_goal_converges_on_a_container(monkeypatch):
-    monkeypatch.setattr(prm, "demo_place_view", lambda: ([0.45, 0.40], 0.106))
+    monkeypatch.setattr(prm, "demo_place_view", lambda: ([0.15, 0.05, 0.75, 0.80], 0.106))
     goal = goals.AboveGoal()
 
     class World:
@@ -477,3 +477,12 @@ def test_held_needs_the_hold_watch_not_just_a_high_reading():
     for pos, state, want in ((6.8, "holding", True), (22.9, None, False), (1.6, "holding", False), (6.0, "dropped", False)):
         sk.robot = R(pos, state)
         assert sk.held() is want, (pos, state)
+
+
+def test_round_centre_ignores_where_the_hidden_near_side_ends():
+    # two consecutive looks of the still cup (Oct 27), the near side ending at 0.953 and 0.753
+    a = goals.round_centre([0.113, 0.025, 0.776, 0.953])
+    b = goals.round_centre([0.116, 0.033, 0.784, 0.753])
+    assert np.linalg.norm(a - b) < 0.02
+    boxes_centre_v = ((0.025 + 0.953) / 2, (0.033 + 0.753) / 2)
+    assert abs(boxes_centre_v[0] - boxes_centre_v[1]) > 0.09  # what the box centre did
