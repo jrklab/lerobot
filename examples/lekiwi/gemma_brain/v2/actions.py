@@ -124,7 +124,7 @@ def hover_at(sk: Skills2, height: Param) -> Result:
 
 
 def bring_into_view(sk: Skills2, container: str) -> Result:
-    """Arm moves until the whole container is inside the wrist frame, aiming its visible box's
+    """Base moves until the whole container is inside the wrist frame, aiming its visible box's
     centre at the spot under the gripper (where the taught brick's middle was). Coarse: the
     floor's Jacobian and SERVO_GAIN; the two-height location after it is the precise part. The
     main model only (Oct 28: with the cup out of view the fast one boxed the held brick as the
@@ -146,7 +146,10 @@ def bring_into_view(sk: Skills2, container: str) -> Result:
         j = sk.geom.jacobian(sk.height(), sk.roll)
         # Moving the TCP by d moves a floor point's image by j @ d: bring the centre to the spot.
         d = prm.SERVO_GAIN.value * np.linalg.solve(j, grasp_spot(sk.geom) - np.array(det.center))
-        r = sk.move("arm", delta=(float(d[0]), float(d[1]), 0.0))
+        # The base, not the arm: a container ~4 cm past the reach point is past the vertical
+        # gripper's reach at the place hover (Oct 28: refused at x 0.28). It shares the arm's
+        # x (forward) and y (left) axes, so the same move vector drives it.
+        r = sk.move("base", delta=(float(d[0]), float(d[1])))
         if not r.ok:
             return r
     return Result(False, f"the {container} stays partly out of the wrist frame")
