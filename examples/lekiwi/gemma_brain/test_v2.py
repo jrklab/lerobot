@@ -438,3 +438,28 @@ def test_lift_halves_where_the_full_lift_is_out_of_reach():
 
     r = actions.lift(S())
     assert r.ok and tried == [round(prm.LIFT_M.value, 4), round(prm.LIFT_M.value / 2, 4)]
+
+
+def test_contact_moves_always_carry_their_own_floor_guard():
+    # Oct 27 place-in: a contact-stop move from 10.6 to 7.4 cm passed no z_min, the Pi used its
+    # stale default and refused it.
+    sim, sk = skills_over(-0.12, -0.12)
+    sent = []
+    orig = sk.robot.trajectory
+    sk.robot.trajectory = lambda wps, durs, z_min=None, contact_stop=False: (sent.append(z_min), orig(wps, durs, z_min, contact_stop))[1]
+    assert sk.move("arm", height=0.10).ok
+    assert sk.move("arm", height=0.07, until_contact=True).ok
+    assert sent[-1] is not None and sent[-1] < -0.12 + 0.07
+
+
+def test_a_robot_refusal_is_a_failed_step_not_a_crash():
+    from robot import RobotError
+
+    sim, sk = skills_over(-0.12, -0.12)
+
+    def refuse(*a, **k):
+        raise RobotError("trajectory refused")
+
+    sk.robot.trajectory = refuse
+    r = sk.move("arm", height=0.03, until_contact=True)
+    assert not r.ok and "refused" in r.reason

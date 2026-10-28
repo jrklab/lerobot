@@ -36,6 +36,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 from arm import FLOOR_CLEARANCE_M, JAW_TIP_OFFSET_M, NAMED_POSES, Arm, PlanError, plan_ee_line
+from robot import RobotError
 from vision import colour_matches, measured_angle_of, snap_box
 
 from v2 import params as prm
@@ -118,8 +119,10 @@ class Skills2:
         low = min(goal[2], p[2]) - floor < FLOOR_CLEARANCE_M + JAW_TIP_OFFSET_M
         speed = speed or (prm.NEAR_SPEED_MPS.value if low else prm.FREE_SPEED_MPS.value)
         search = prm.LAND_SEARCH_M.value if until_contact else 0.0
-        # Low moves get a guard just under them; the Pi checks the TCP, so the jaw tips' offset too.
-        z_min = (min(goal[2], p[2]) - search - JAW_TIP_OFFSET_M - prm.LOW_MOVE_GUARD_M.value) if low else None
+        # Low and contact-stop moves get a guard just under them; the Pi checks the jaw tips, so
+        # their offset too. A contact-stop move without one got the Pi's built-in default, which
+        # predates the joint-zero fix (-0.050, the floor is ~-0.126): refused (Oct 27 place-in).
+        z_min = (min(goal[2], p[2]) - search - JAW_TIP_OFFSET_M - prm.LOW_MOVE_GUARD_M.value) if low or until_contact else None
         try:
             if until_contact:
                 wps, durs = plan_ee_line(self.arm.calib, self.arm.targets(), goal.tolist(), VERTICAL, roll, speed,
@@ -130,6 +133,8 @@ class Skills2:
                 res = {}
         except PlanError as e:
             return Result(False, f"can't move there: {e}", {"goal": goal.round(4).tolist()})
+        except RobotError as e:  # refused or stopped on the Pi: a failed step, not a crash
+            return Result(False, f"the robot refused or stopped the move: {e}", {"goal": goal.round(4).tolist()})
         self.roll = roll
         data = {"goal": goal.round(4).tolist(), "floor": round(floor, 4), "contact": False}
         if res.get("contact"):
