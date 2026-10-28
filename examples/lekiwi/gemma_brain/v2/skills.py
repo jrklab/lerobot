@@ -180,9 +180,21 @@ class Skills2:
 
     # --- find ---
 
-    def frame(self, cam: str) -> bytes:
+    def frame(self, cam: str) -> bytes | None:
+        """A frame captured after this call, or None. A failed request re-measures the Mac-Pi
+        clock offset and tries once more: the Pi has no time source and its clock jumped ~36 s
+        mid-run (Oct 27 trials), so "a frame after now" asked for one from its future (HTTP 504)."""
         time.sleep(prm.LOOK_SETTLE_S.value)
-        jpeg, _ = self.robot.frame(cam, after=time.time())
+        try:
+            jpeg, _ = self.robot.frame(cam, after=time.time())
+        except RobotError as e:
+            self.ev("frame_retry", cam=cam, error=str(e))
+            self.robot._clock_offset = None  # the next request measures it again
+            try:
+                jpeg, _ = self.robot.frame(cam, after=time.time())
+            except RobotError as e2:
+                self.ev("frame_failed", cam=cam, error=str(e2))
+                return None
         if self.log is not None:
             self.log.frame(f"{cam}_look", jpeg)
         return jpeg
@@ -193,6 +205,8 @@ class Skills2:
         (E2B boxes something even when nothing is there), else the main model is asked. The
         wrist box is snapped to the object's colour blob. angle: also its long-side angle."""
         jpeg = self.frame(cam)
+        if jpeg is None:
+            return None
         prompt = f"the {obj} on the floor"
         tracked = self.seen.get(f"{cam}:{obj}")
         a, by = None, ""

@@ -526,3 +526,23 @@ def test_front_approach_is_done_within_the_line_ups_reach_and_aims_just_short():
     assert g.remaining(near, S()) <= prm.REACH_TOL_M.value and g.done(near, S())
     not_yet = g.error(Detection(box=[0.43, 0.56, 0.47, 0.653]), S())  # Oct 27 run: 2.3 cm to go
     assert not g.done(not_yet, S())
+
+
+def test_a_failed_frame_request_resyncs_the_clock_and_retries(monkeypatch):
+    import v2.skills as skills_v2
+    from robot import RobotError
+
+    monkeypatch.setattr(skills_v2.time, "sleep", lambda s: None)
+
+    class R:
+        _clock_offset, calls = 36.0, 0
+
+        def frame(self, cam, after=0.0):
+            self.calls += 1
+            if self._clock_offset is not None:
+                raise RobotError("GET /auto/frame/front: HTTP 504")
+            return b"jpeg", after
+
+    sk = finder(b"", None, None)
+    sk.robot = R()
+    assert sk.frame("front") == b"jpeg" and sk.robot.calls == 2
