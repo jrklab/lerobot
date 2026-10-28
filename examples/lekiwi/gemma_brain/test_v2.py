@@ -48,6 +48,9 @@ class SimRobot(_SimRobot):
     def gripper(self, pos, speed=None):
         return self.run({"cmd": "gripper", "pos": pos, "speed": speed})
 
+    def frame(self, cam, after=0.0):
+        return b"", after
+
 
 def geom(floor_z):
     return Geometry(floor_coef=np.array([floor_z, 0.0, 0.0]), floor_points=3, jac=np.array([[4.2, 0.5], [0.7, -5.3]]),

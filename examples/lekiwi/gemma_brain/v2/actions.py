@@ -40,6 +40,8 @@ def land(sk: Skills2) -> Result:
     if not r.ok or not r.data.get("contact"):
         return r
     above = r.data["contact_z"] - r.data["floor"]
+    sk.frame("wrist", "contact")  # what the jaws met, for the record (Oct 27 trial 5: 11 mm up)
+    sk.ev("land_contact", above_floor_m=round(above, 4), detector=r.data.get("detector"))
     if above > prm.BRICK_HEIGHT_M.value / 2:
         return Result(False, f"met something {above:.3f} m above the floor", r.data)
     # The floor, a little higher than predicted: back up to the grasp lift above it.

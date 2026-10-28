@@ -186,7 +186,7 @@ class Skills2:
 
     # --- find ---
 
-    def frame(self, cam: str) -> bytes | None:
+    def frame(self, cam: str, tag: str = "look") -> bytes | None:
         """A frame captured after this call, or None. A failed request re-measures the Mac-Pi
         clock offset and tries once more: the Pi has no time source and its clock jumped ~36 s
         mid-run (Oct 27 trials), so "a frame after now" asked for one from its future (HTTP 504)."""
@@ -202,7 +202,7 @@ class Skills2:
                 self.ev("frame_failed", cam=cam, error=str(e2))
                 return None
         if self.log is not None:
-            self.log.frame(f"{cam}_look", jpeg)
+            self.log.frame(f"{cam}_{tag}", jpeg)
         return jpeg
 
     def find(self, obj: str, cam: str = "wrist", angle: bool = False) -> Detection | None:
