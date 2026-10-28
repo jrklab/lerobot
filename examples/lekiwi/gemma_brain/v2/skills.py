@@ -268,6 +268,10 @@ class Skills2:
         return Result(True, data={**res, "held": True})
 
     def held(self) -> bool:
+        """The Pi's hold watch has the jaws closed on something (state "holding"; it clears when
+        they open and says "dropped" when they close further), and they stopped short of
+        closed-empty. The motor reading alone isn't enough: open jaws read high too (Oct 27
+        place-in said "still holding" after opening, with the brick in the cup)."""
         st = self.robot.status()
         hold = st.get("gripper_hold") or {}
-        return st["joints"]["arm_gripper"] >= prm.GRIPPER_EMPTY_MAX.value and hold.get("state") != "dropped"
+        return hold.get("state") == "holding" and st["joints"]["arm_gripper"] >= prm.GRIPPER_EMPTY_MAX.value

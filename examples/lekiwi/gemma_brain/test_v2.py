@@ -463,3 +463,17 @@ def test_a_robot_refusal_is_a_failed_step_not_a_crash():
     sk.robot.trajectory = refuse
     r = sk.move("arm", height=0.03, until_contact=True)
     assert not r.ok and "refused" in r.reason
+
+
+def test_held_needs_the_hold_watch_not_just_a_high_reading():
+    class R:
+        def __init__(self, pos, state):
+            self.st = {"joints": {"arm_gripper": pos}, "gripper_hold": {"state": state} if state else None}
+
+        def status(self):
+            return self.st
+
+    sk = Skills2.__new__(Skills2)
+    for pos, state, want in ((6.8, "holding", True), (22.9, None, False), (1.6, "holding", False), (6.0, "dropped", False)):
+        sk.robot = R(pos, state)
+        assert sk.held() is want, (pos, state)
