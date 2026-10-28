@@ -343,12 +343,13 @@ def test_place_in_runs_over_lower_release(monkeypatch):
     monkeypatch.setattr(prm, "demo_place_view", lambda: ([0.15, 0.05, 0.75, 0.80], 0.106))
     monkeypatch.setattr(chains.actions, "approach", lambda sk, o: chains.Result(True))
     calls = []
+    monkeypatch.setattr(chains.actions, "over_container", lambda sk, c: (calls.append("over"), chains.Result(True))[1])
     sk = _chain_sk(calls)
     seq = iter([True, True, False])  # held before, ... , empty after the release
     sk.held = lambda: next(seq)
     r = chains.place_in(sk, "red block", "paper cup")
     assert r.ok, r
-    assert calls == ["move", "AboveGoal:base", "AboveGoal:arm", "move", "open", "move"]
+    assert calls == ["move", "over", "move", "open", "move"]
 
 
 def test_place_needs_something_held():
@@ -486,3 +487,26 @@ def test_round_centre_ignores_where_the_hidden_near_side_ends():
     assert np.linalg.norm(a - b) < 0.02
     boxes_centre_v = ((0.025 + 0.953) / 2, (0.033 + 0.753) / 2)
     assert abs(boxes_centre_v[0] - boxes_centre_v[1]) > 0.09  # what the box centre did
+
+
+def test_locate_from_two_heights_recovers_a_cup_placed_in_a_simulated_view():
+    # A camera model consistent with geometry.py: a point at (dx, dy) from the TCP's vertical
+    # and height r is seen at under_tcp(z) - J(h) (d + h) / z @ (dx, dy), z = d + h - r.
+    from v2.geometry import locate_from_two_heights
+
+    g = jaw_geom()
+    g.grasp_box, g.grasp_target_height = [0.411, 0.613, 0.545, 0.927], 0.0015
+    d, rim, true = g.cam_above_tips, 0.07, np.array([0.012, -0.020])
+    taught = np.array([(0.411 + 0.545) / 2, (0.613 + 0.927) / 2])
+    z_t = d + 0.0015 - prm.BRICK_HEIGHT_M.value
+
+    def view(h, diameter=0.08):
+        z = d + h - rim
+        under = g.descent_p0 + (taught - g.descent_p0) * z_t / z
+        c = under - (g.jacobian(h) * (d + h) / z) @ true
+        w = diameter * np.linalg.norm(g.jacobian(h)[0]) * (d + h) / z
+        return c, w, h
+
+    (c1, w1, h1), (c2, w2, h2) = view(0.106), view(0.131)
+    delta, height = locate_from_two_heights(g, c1, w1, h1, c2, w2, h2)
+    assert abs(height - rim) < 1e-6 and np.allclose(delta, true, atol=1e-6)

@@ -19,7 +19,8 @@ params.py or geometry.py one, so a new action adds a name, not a parameter to ca
 from __future__ import annotations
 
 from v2 import params as prm
-from v2.goals import AboveGoal, AngleGoal, BesideGoal, FrontApproachGoal, ReachGoal
+from v2.geometry import locate_from_two_heights
+from v2.goals import AngleGoal, BesideGoal, FrontApproachGoal, ReachGoal, round_centre
 from v2.params import Param
 from v2.skills import Result, Skills2
 
@@ -88,9 +89,28 @@ def hover_at(sk: Skills2, height: Param) -> Result:
 
 
 def over_container(sk: Skills2, container: str) -> Result:
-    """Base, then arm: the container where the owner's demo had it before lowering in."""
-    r = sk.servo(container, AboveGoal(tol_m=prm.REACH_TOL_M), part="base")
-    return sk.servo(container, AboveGoal()) if r.ok else r
+    """Put the gripper over a stationary container (owner, Oct 27: it won't move): look from the
+    place hover and from PLACE_LOOK_RISE_M higher, locate its opening centre and rim height
+    from the two views (geometry.locate_from_two_heights), move over it once, without looking
+    again. Looking while moving over it failed: from above, the cup overflows the frame."""
+    views = []
+    for k in range(len(("low", "high"))):
+        if k:
+            r = sk.move("arm", delta=(0.0, 0.0, prm.PLACE_LOOK_RISE_M.value))
+            if not r.ok:
+                return r
+        det = sk.find(container, "wrist")
+        if det is None:
+            return Result(False, f"no {container} in the wrist camera", {"look": k})
+        x0, y0, x1, y1 = det.box
+        if y0 <= 0 or x0 <= 0 or x1 >= 1:
+            return Result(False, f"the {container} runs off the frame: move it under the reach point", {"box": det.box})
+        views.append((round_centre(det.box), x1 - x0, sk.height()))
+    (c1, w1, h1), (c2, w2, h2) = views
+    delta, rim = locate_from_two_heights(sk.geom, c1, w1, h1, c2, w2, h2, sk.roll)
+    sk.ev("located", obj=container, delta=[round(float(v), 4) for v in delta], rim_height=round(rim, 4))
+    r = sk.move("arm", delta=(float(delta[0]), float(delta[1]), -prm.PLACE_LOOK_RISE_M.value))
+    return Result(r.ok, r.reason, {**r.data, "rim_height": rim, "moved": delta.tolist()})
 
 
 def beside(sk: Skills2, ref: str) -> Result:

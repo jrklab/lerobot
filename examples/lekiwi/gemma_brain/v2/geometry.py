@@ -31,6 +31,8 @@ from pathlib import Path
 
 import numpy as np
 
+from v2 import params as prm
+
 HERE = Path(__file__).resolve().parent.parent
 IMAGE_PX = np.array([640.0, 480.0])  # convention: the cameras' 640x480 frames
 MAKERS = {
@@ -117,6 +119,32 @@ class Geometry:
         """Where a floor point seen at image `point` with the tips h_from up appears at h_to."""
         s = (self.cam_above_tips + h_from) / (self.cam_above_tips + h_to)
         return self.descent_p0 + (np.asarray(point, float) - self.descent_p0) * s
+
+
+def locate_from_two_heights(geom: Geometry, c1, w1: float, h1: float, c2, w2: float, h2: float,
+                            roll_deg: float = 0.0) -> tuple[np.ndarray, float]:
+    """A stationary object seen twice from straight above, the jaw tips h1 then h2 above the
+    floor (a vertical move between): its (dx, dy) from the point under the TCP, in metres, and
+    the height above the floor of the plane its box outlines (a cup's rim).
+
+    Image size scales as 1 / depth, depth = cam_above_tips + h - height, so the width ratio
+    gives the height. The point under the TCP at a depth is where the taught brick's middle
+    was (it was held between the jaws), moved along the descent from descent_p0; the image
+    offset from it, divided by the Jacobian scaled to that depth, is the offset in metres."""
+    d = geom.cam_above_tips
+    s = w1 / w2
+    height = (d * (1 - s) + h2 - s * h1) / (1 - s)
+    x0, y0, x1, y1 = geom.grasp_box
+    taught_centre = np.array([(x0 + x1) / 2, (y0 + y1) / 2])
+    z_taught = d + geom.grasp_target_height - prm.BRICK_HEIGHT_M.value  # the taught brick's top face
+    offsets = []
+    for c, h in ((c1, h1), (c2, h2)):
+        z = d + h - height
+        under_tcp = geom.descent_p0 + (taught_centre - geom.descent_p0) * z_taught / z
+        j = geom.jacobian(h, roll_deg) * (d + h) / z  # image per metre of TCP motion, at depth z
+        # an object +delta from the TCP looks like the TCP moved -delta
+        offsets.append(-np.linalg.solve(j, np.asarray(c, float) - under_tcp))
+    return np.mean(offsets, axis=0), float(height)
 
 
 def require_grasp_target(geom: Geometry) -> np.ndarray:
