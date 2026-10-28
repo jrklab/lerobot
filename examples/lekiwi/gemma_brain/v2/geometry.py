@@ -147,6 +147,16 @@ def locate_from_two_heights(geom: Geometry, c1, w1: float, h1: float, c2, w2: fl
     return np.mean(offsets, axis=0), float(height)
 
 
+def look_offsets(step_deg: float) -> list[float]:
+    """Headings (deg from the start, left positive) for a look around: alternately left and
+    right in widening steps, ending turned right round."""
+    offsets, k = [], 1
+    while k * step_deg < 180:  # convention: half a turn either way covers the circle
+        offsets += [k * step_deg, -k * step_deg]
+        k += 1
+    return offsets + [180.0]  # convention: facing backwards
+
+
 def require_grasp_target(geom: Geometry) -> np.ndarray:
     if geom.grasp_target is None:
         raise MissingCalibrationError("calib.json has no 'wrist_grasp_target': run teach_grasp.py (the owner's midpoint teach)")

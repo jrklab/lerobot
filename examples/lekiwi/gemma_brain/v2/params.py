@@ -80,6 +80,8 @@ FINAL_LOOK_HEIGHT_M = Param(0.03, "RULE", "last servo height: jaws clear of the 
 PLACE_LOOK_RISE_M = Param(0.025, "RULE", "second look over a container, this much higher: the width ratio gives its rim height (vertical reach at 25 cm allows ~13 cm)")
 PLACE_TOL_M = Param(0.002, "RULE", "how centred over a container before lowering: as tight as the grasp servo (SERVO_TOL_M); at 1 cm, measured at the floor, the brick landed in the cup near the rim (the rim is nearer the camera: ~1.5x the error; Oct 27)")
 NEXT_GAP_FRACTION = Param(0.5, "RULE", "gap left beside the reference object, as a share of the held brick's width in the image")
+LOOK_OVERLAP = Param(0.5, "RULE", "look-around: consecutive front views overlap by this share of the view (turn step = the rest of the view's width, from the front camera's calibration)")
+LOOK_BACK_M = Param(0.3, "RULE", "look-around: back up this far once if a full turn didn't find it (it may be too close to the front camera)")
 LAND_SEARCH_M = Param(0.008, "RULE", "how far past its goal a contact-stop move may go: the old floor fit's worst error (8.4 mm)")
 SERVO_TOL_M = Param(0.002, "RULE", "servo position tolerance at the object: under the last descent's landing scatter (2.5 mm), so the servo isn't what limits a grasp")
 REACH_TOL_M = Param(0.015, "RULE", "line-up: close enough for the arm to take the rest, with room: vertical reach at the hover goes 3 cm past the reach point, half of it (at 3 cm the arm then needed 4.4 cm after a large roll and was refused, Oct 27; v1's ARM_REACH_M was 1.5 cm)")

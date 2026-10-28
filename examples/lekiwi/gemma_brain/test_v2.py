@@ -622,3 +622,39 @@ def test_v2_executor_retries_a_failed_pick(monkeypatch):
     assert ok, summary
     assert calls == ["pick red block", "pick red block"]
     assert pb.sk.holding == "red block"
+
+
+def test_look_around_turns_left_and_right_until_it_finds_the_object():
+    from v2 import params as prm_
+    from v2.geometry import look_offsets
+    from v2.skills import Result
+
+    class World:
+        """The object is seen when it's within half the view of the base's heading."""
+
+        def __init__(self, bearing, near=False):
+            self.geom = geom(-0.11)
+            self.geom.front = {"u_per_deg": 0.0184}
+            self.heading, self.bearing, self.near, self.turns, self.backs = 0.0, bearing, near, [], 0
+
+        def find(self, obj, cam):
+            half_view = 0.5 / self.geom.front["u_per_deg"]
+            visible = abs((self.bearing - self.heading + 180) % 360 - 180) <= half_view and not self.near
+            return Detection(box=[0.4, 0.4, 0.5, 0.5]) if visible else None
+
+        def move(self, part, delta=None, roll=None, **kw):
+            if roll is not None:
+                self.turns.append(roll)
+                self.heading += roll
+            else:
+                self.backs += 1
+                self.near = False  # backing up brings it into view
+            return Result(True)
+
+    w = World(bearing=-50.0)
+    r = actions.look_around(w, "red block")
+    assert r.ok and abs(w.heading - w.bearing) <= 0.5 / 0.0184
+    w = World(bearing=0.0, near=True)
+    assert actions.look_around(w, "red block").ok and w.backs == 1
+    steps = look_offsets((1 - prm_.LOOK_OVERLAP.value) / 0.0184)
+    assert steps[:2] == [steps[0], -steps[0]] and steps[-1] == 180.0

@@ -19,7 +19,7 @@ params.py or geometry.py one, so a new action adds a name, not a parameter to ca
 from __future__ import annotations
 
 from v2 import params as prm
-from v2.geometry import locate_from_two_heights
+from v2.geometry import locate_from_two_heights, look_offsets
 from v2.goals import AngleGoal, BesideGoal, FrontApproachGoal, ReachGoal, round_centre
 from v2.params import Param
 from v2.skills import Result, Skills2
@@ -64,9 +64,40 @@ def lift(sk: Skills2) -> Result:
     return Result(held, "" if held else "nothing held after the lift", {**r.data, "held": held})
 
 
+def look_around(sk: Skills2, obj: str) -> Result:
+    """Turn the base until the front camera finds `obj`: alternately left and right in widening
+    steps of (1 - LOOK_OVERLAP) of the view's width, all the way round; then back up
+    LOOK_BACK_M once (it may be too close to see) and turn round again. The base ends facing
+    the view it was found in. Oct 27 trial: the brick wasn't in the single forward view."""
+    if sk.find(obj, "front") is not None:
+        return Result(True, data={"turned": 0.0})
+    step = (1 - prm.LOOK_OVERLAP.value) / sk.geom.front["u_per_deg"]  # share of the view's width, in deg
+    for backed in (False, True):
+        if backed:
+            r = sk.move("base", delta=(-prm.LOOK_BACK_M.value, 0.0))
+            if not r.ok:
+                return r
+            if sk.find(obj, "front") is not None:
+                return Result(True, data={"turned": 0.0, "backed": True})
+        at = 0.0
+        for off in look_offsets(step):
+            r = sk.move("base", roll=off - at)
+            if not r.ok:
+                return r
+            at = off
+            if sk.find(obj, "front") is not None:
+                return Result(True, data={"turned": at, "backed": backed})
+        r = sk.move("base", roll=-at)  # face the start again before backing up or giving up
+        if not r.ok:
+            return r
+    return Result(False, f"no {obj} in a full look around, nor after backing up")
+
+
 def approach(sk: Skills2, obj: str) -> Result:
-    """Base: turn and drive until the front camera sees the object at the reach point."""
-    return sk.servo(obj, FrontApproachGoal())
+    """Base: find the object (looking around if it isn't in the forward view), then turn and
+    drive until the front camera sees it at the reach point."""
+    r = look_around(sk, obj)
+    return sk.servo(obj, FrontApproachGoal()) if r.ok else r
 
 
 def hover(sk: Skills2) -> Result:
