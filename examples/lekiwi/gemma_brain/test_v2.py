@@ -522,5 +522,7 @@ def test_front_approach_is_done_within_the_line_ups_reach_and_aims_just_short():
     far = g.error(Detection(box=[0.43, 0.40, 0.47, 0.45]), S())
     rem = g.remaining(far, S())
     assert not g.done(far, S()) and abs(g.step(far, S())["delta"][0] - (rem - prm.REACH_TOL_M.value / 2)) < 1e-9
-    near = g.error(Detection(box=[0.43, 0.56, 0.47, 0.653]), S())  # Oct 27 run, 2.3 cm to go
-    assert g.done(near, S())
+    near = g.error(Detection(box=[0.43, 0.60, 0.47, 0.675]), S())  # ~1 cm to go
+    assert g.remaining(near, S()) <= prm.REACH_TOL_M.value and g.done(near, S())
+    not_yet = g.error(Detection(box=[0.43, 0.56, 0.47, 0.653]), S())  # Oct 27 run: 2.3 cm to go
+    assert not g.done(not_yet, S())
