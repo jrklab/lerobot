@@ -21,7 +21,7 @@ from __future__ import annotations
 import numpy as np
 
 from v2 import params as prm
-from v2.geometry import grasp_spot, locate_from_two_heights, look_offsets
+from v2.geometry import front_object_height, grasp_spot, locate_from_one_view, look_offsets
 from v2.goals import AngleGoal, BesideGoal, FrontApproachGoal, ReachGoal, round_centre
 from v2.params import Param
 from v2.skills import Result, Skills2
@@ -99,7 +99,13 @@ def approach(sk: Skills2, obj: str) -> Result:
     """Base: find the object (looking around if it isn't in the forward view), then turn and
     drive until the front camera sees it at the reach point."""
     r = look_around(sk, obj)
-    return sk.servo(obj, FrontApproachGoal()) if r.ok else r
+    if r.ok:
+        r = sk.servo(obj, FrontApproachGoal())
+    det = sk.seen.get(f"front:{obj}")
+    if r.ok and det is not None:  # side-on, for placing into it later (front_object_height)
+        sk.heights[obj] = front_object_height(sk.geom, det.box)
+        sk.ev("object_height", obj=obj, height_m=round(sk.heights[obj], 4))
+    return r
 
 
 def hover(sk: Skills2) -> Result:
@@ -156,35 +162,27 @@ def bring_into_view(sk: Skills2, container: str) -> Result:
 
 
 def over_container(sk: Skills2, container: str) -> Result:
-    """Put the gripper over a stationary container (owner, Oct 27: it won't move): look from the
-    place hover and from PLACE_LOOK_RISE_M higher, locate its opening centre and rim height
-    from the two views (geometry.locate_from_two_heights), move over it once, without looking
-    again. Looking while moving over it failed: from above, the cup overflows the frame."""
+    """Put the gripper over a stationary container (owner, Oct 27: it won't move): bring it
+    wholly into the wrist view with the base, locate its opening's centre from one look with
+    its rim height as the front camera measured it during the approach, and move over it once
+    without looking again. Two looks 2.5 cm apart gave rim heights from -1.5 to 5.2 cm for the
+    same cup (box widths vary by a few % between looks); the front camera gave 4.4 cm +/-0.25
+    in 18 views (Oct 28)."""
+    rim = sk.heights.get(container)
+    if rim is None:
+        return Result(False, f"no side-on measurement of the {container}'s height (the approach makes it)")
     r = bring_into_view(sk, container)
     if not r.ok:
         return r
-    views = []
-    for k in range(len(("low", "high"))):
-        if k:
-            r = sk.move("arm", delta=(0.0, 0.0, prm.PLACE_LOOK_RISE_M.value))
-            if not r.ok:
-                return r
-        det = sk.find(container, "wrist", fast_ok=False)
-        if det is None:
-            return Result(False, f"no {container} in the wrist camera", {"look": k})
-        x0, y0, x1, y1 = det.box
-        if y0 <= 0 or x0 <= 0 or x1 >= 1:
-            return Result(False, f"the {container} runs off the frame", {"box": det.box})
-        views.append((round_centre(det.box), x1 - x0, sk.height()))
-    (c1, w1, h1), (c2, w2, h2) = views
-    delta, rim = locate_from_two_heights(sk.geom, c1, w1, h1, c2, w2, h2, sk.roll)
+    det = sk.find(container, "wrist", fast_ok=False)
+    if det is None:
+        return Result(False, f"no {container} in the wrist camera")
+    delta = locate_from_one_view(sk.geom, round_centre(det.box), sk.height(), rim, sk.roll)
     sk.ev("located", obj=container, delta=[round(float(v), 4) for v in delta], rim_height=round(rim, 4))
-    if not 0.0 <= rim < h1 or np.linalg.norm(delta) > prm.PLACE_MAX_OFFSET_M.value:
-        # Not a container under the gripper: the boxes weren't of it (Oct 28: the held brick
-        # boxed as the cup gave a rim 0.44 m below the floor and a 27 cm offset).
-        return Result(False, f"the {container}'s measurement makes no sense (rim {rim:.3f} m, offset "
-                             f"{np.linalg.norm(delta):.3f} m)", {"rim_height": rim, "delta": delta.tolist()})
-    r = sk.move("arm", delta=(float(delta[0]), float(delta[1]), -prm.PLACE_LOOK_RISE_M.value))
+    if np.linalg.norm(delta) > prm.PLACE_MAX_OFFSET_M.value:
+        return Result(False, f"the {container} measures {np.linalg.norm(delta):.3f} m off: not under the gripper",
+                      {"delta": delta.tolist()})
+    r = sk.move("arm", delta=(float(delta[0]), float(delta[1]), 0.0))
     return Result(r.ok, r.reason, {**r.data, "rim_height": rim, "moved": delta.tolist()})
 
 

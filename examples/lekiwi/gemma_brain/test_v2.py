@@ -492,28 +492,27 @@ def test_round_centre_ignores_where_the_hidden_near_side_ends():
     assert abs(boxes_centre_v[0] - boxes_centre_v[1]) > 0.09  # what the box centre did
 
 
-def test_locate_from_two_heights_recovers_a_cup_placed_in_a_simulated_view():
+def test_locate_from_one_view_recovers_a_cup_placed_in_a_simulated_view():
     # A camera model consistent with geometry.py: a point at (dx, dy) from the TCP's vertical
     # and height r is seen at under_tcp(z) - J(h) (d + h) / z @ (dx, dy), z = d + h - r.
-    from v2.geometry import locate_from_two_heights
+    from v2.geometry import locate_from_one_view
 
     g = jaw_geom()
     g.grasp_box, g.grasp_target_height = [0.411, 0.613, 0.545, 0.927], 0.0015
-    d, rim, true = g.cam_above_tips, 0.07, np.array([0.012, -0.020])
+    d, rim, true, h = g.cam_above_tips, 0.044, np.array([0.012, -0.020]), 0.106
     taught = np.array([(0.411 + 0.545) / 2, (0.613 + 0.927) / 2])
-    z_t = d + 0.0015 - prm.BRICK_HEIGHT_M.value
+    z_t, z = d + 0.0015 - prm.BRICK_HEIGHT_M.value, d + h - rim
+    c = g.descent_p0 + (taught - g.descent_p0) * z_t / z - (g.jacobian(h) * (d + h) / z) @ true
+    assert np.allclose(locate_from_one_view(g, c, h, rim), true, atol=1e-9)
 
-    def view(h, diameter=0.08):
-        z = d + h - rim
-        under = g.descent_p0 + (taught - g.descent_p0) * z_t / z
-        c = under - (g.jacobian(h) * (d + h) / z) @ true
-        w = diameter * np.linalg.norm(g.jacobian(h)[0]) * (d + h) / z
-        return c, w, h
 
-    (c1, w1, h1), (c2, w2, h2) = view(0.106), view(0.131)
-    delta, height = locate_from_two_heights(g, c1, w1, h1, c2, w2, h2)
-    assert abs(height - rim) < 1e-6 and np.allclose(delta, true, atol=1e-6)
+def test_front_object_height_of_the_cup_in_two_logged_views():
+    from v2.geometry import front_object_height
 
+    g = geom(-0.11)
+    g.front = {"u_per_deg": 0.0184, "range_k": 0.0583, "range_horizon_v": 0.335}
+    near, far = front_object_height(g, [0.25, 0.321, 0.7, 0.803]), front_object_height(g, [0.5, 0.333, 0.88, 0.647])
+    assert abs(near - far) < 0.003 and 0.04 < near < 0.05  # Oct 28: 4.3 and 4.2 cm
 
 def test_front_approach_is_done_within_the_line_ups_reach_and_aims_just_short():
     class S:

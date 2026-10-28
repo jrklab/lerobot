@@ -66,6 +66,7 @@ class Skills2:
         self.main, self.fast = main, fast  # box models: the main one (26B) and the fast one (E2B)
         self.roll = 0.0
         self.seen: dict[str, Detection] = {}  # the last detection of each object, per camera
+        self.heights: dict[str, float] = {}  # object heights measured side-on by the front camera
         self._roll_range = None
         # The Arm's whole-arm floor clearance from the measured floor (arm.DEFAULT_FLOOR_Z_M,
         # -0.100, predates the joint-zero fix; the measured floor is ~-0.126 at the jaw tips).

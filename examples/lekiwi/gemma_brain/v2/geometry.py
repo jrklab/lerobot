@@ -121,30 +121,31 @@ class Geometry:
         return self.descent_p0 + (np.asarray(point, float) - self.descent_p0) * s
 
 
-def locate_from_two_heights(geom: Geometry, c1, w1: float, h1: float, c2, w2: float, h2: float,
-                            roll_deg: float = 0.0) -> tuple[np.ndarray, float]:
-    """A stationary object seen twice from straight above, the jaw tips h1 then h2 above the
-    floor (a vertical move between): its (dx, dy) from the point under the TCP, in metres, and
-    the height above the floor of the plane its box outlines (a cup's rim).
+def front_object_height(geom: Geometry, box) -> float:
+    """An object's height (m) from its front-camera box: the camera's height over the floor is
+    range_k / f (the range model k / (bottom - horizon) is a pinhole's distance), and the object
+    spans (bottom - top) / (bottom - horizon) of it. All from calibrate_front.py; a paper cup
+    came out 4.4 cm in 18 views from 0.5 m to the reach point, within 0.25 cm (Oct 28)."""
+    f = geom.front
+    f_v = f["u_per_deg"] * np.degrees(1.0) * IMAGE_PX[0] / IMAGE_PX[1]  # height fractions per radian
+    bottom, top = box[3], box[1]
+    return float(f["range_k"] / f_v * (bottom - top) / max(bottom - f["range_horizon_v"], 1e-3))  # convention: keeps the division finite at the horizon
 
-    Image size scales as 1 / depth, depth = cam_above_tips + h - height, so the width ratio
-    gives the height. The point under the TCP at a depth is where the taught brick's middle
-    was (it was held between the jaws), moved along the descent from descent_p0; the image
-    offset from it, divided by the Jacobian scaled to that depth, is the offset in metres."""
+
+def locate_from_one_view(geom: Geometry, c, h: float, height: float, roll_deg: float = 0.0) -> np.ndarray:
+    """(dx, dy) in metres from the point under the TCP to an object's point seen at image `c`,
+    the jaw tips h above the floor, the point `height` above the floor. The point under the TCP
+    at a depth is where the taught brick's middle was (it was held between the jaws), moved
+    along the descent from descent_p0; the image offset from it, divided by the Jacobian scaled
+    to that depth, is the offset in metres."""
     d = geom.cam_above_tips
-    s = w1 / w2
-    height = (d * (1 - s) + h2 - s * h1) / (1 - s)
     x0, y0, x1, y1 = geom.grasp_box
     taught_centre = np.array([(x0 + x1) / 2, (y0 + y1) / 2])
-    z_taught = d + geom.grasp_target_height - prm.BRICK_HEIGHT_M.value  # the taught brick's top face
-    offsets = []
-    for c, h in ((c1, h1), (c2, h2)):
-        z = d + h - height
-        under_tcp = geom.descent_p0 + (taught_centre - geom.descent_p0) * z_taught / z
-        j = geom.jacobian(h, roll_deg) * (d + h) / z  # image per metre of TCP motion, at depth z
-        # an object +delta from the TCP looks like the TCP moved -delta
-        offsets.append(-np.linalg.solve(j, np.asarray(c, float) - under_tcp))
-    return np.mean(offsets, axis=0), float(height)
+    z_taught = d + geom.grasp_target_height - prm.BRICK_HEIGHT_M.value
+    z = d + h - height
+    under_tcp = geom.descent_p0 + (taught_centre - geom.descent_p0) * z_taught / z
+    j = geom.jacobian(h, roll_deg) * (d + h) / z
+    return -np.linalg.solve(j, np.asarray(c, float) - under_tcp)
 
 
 def grasp_spot(geom: Geometry) -> np.ndarray:
