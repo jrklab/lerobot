@@ -145,10 +145,18 @@ class FrontApproachGoal:
         f = sk.geom.front
         return np.array([f["u_target"] - det.center[0], f["near_bottom"] - det.box[3]])
 
+    def remaining(self, err: np.ndarray, sk) -> float:
+        """Metres still to drive, by the front camera's range model (rms 7 mm)."""
+        f = sk.geom.front
+        bottom = f["near_bottom"] - float(err[1])
+        return sk.geom.front_range(bottom) - sk.geom.front_range(f["near_bottom"])
+
     def done(self, err: np.ndarray, sk) -> bool:
+        # Within the wrist line-up's reach: it takes the rest (Oct 27: waiting for the exact row
+        # spent 8 looks on drives the base barely made, 1.2 cm commanded -> 0.2 cm moved).
         f = sk.geom.front
         u_tol = f["u_per_deg"] * prm.MIN_BASE_TURN_DEG.value  # about what the smallest turn fixes
-        return abs(float(err[0])) <= u_tol and float(err[1]) <= 0.0  # bottom at or past the row
+        return abs(float(err[0])) <= u_tol and self.remaining(err, sk) <= prm.REACH_TOL_M.value
 
     def step(self, err: np.ndarray, sk) -> dict:
         f = sk.geom.front
@@ -156,10 +164,9 @@ class FrontApproachGoal:
             # A left turn moves the object right in the image.
             turn = float(err[0]) / f["u_per_deg"]
             return {"roll": float(np.sign(turn) * max(abs(turn), prm.MIN_BASE_TURN_DEG.value))}
-        # Drive a share of the way to where its bottom edge would reach the reach-point row.
-        bottom = f["near_bottom"] - float(err[1])
-        here, there = sk.geom.front_range(bottom), sk.geom.front_range(f["near_bottom"])
-        return {"delta": (prm.SERVO_GAIN.value * max(here - there, 0.0), 0.0)}
+        # Drive to just inside the line-up's reach (half its tolerance short): no overshoot past the
+        # reach point with a 7 mm range model, and one or two drives instead of halving steps.
+        return {"delta": (max(self.remaining(err, sk) - prm.REACH_TOL_M.value / 2, 0.0), 0.0)}
 
 
 def round_centre(box) -> np.ndarray:

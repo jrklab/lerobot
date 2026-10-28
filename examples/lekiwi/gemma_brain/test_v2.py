@@ -510,3 +510,17 @@ def test_locate_from_two_heights_recovers_a_cup_placed_in_a_simulated_view():
     (c1, w1, h1), (c2, w2, h2) = view(0.106), view(0.131)
     delta, height = locate_from_two_heights(g, c1, w1, h1, c2, w2, h2)
     assert abs(height - rim) < 1e-6 and np.allclose(delta, true, atol=1e-6)
+
+
+def test_front_approach_is_done_within_the_line_ups_reach_and_aims_just_short():
+    class S:
+        geom = geom(-0.11)
+
+    S.geom.front = {"u_per_deg": 0.0184, "u_target": 0.451, "near_bottom": 0.699, "range_k": 0.0583,
+                    "range_horizon_v": 0.335, "range_offset_m": 0.1}
+    g = goals.FrontApproachGoal()
+    far = g.error(Detection(box=[0.43, 0.40, 0.47, 0.45]), S())
+    rem = g.remaining(far, S())
+    assert not g.done(far, S()) and abs(g.step(far, S())["delta"][0] - (rem - prm.REACH_TOL_M.value / 2)) < 1e-9
+    near = g.error(Detection(box=[0.43, 0.56, 0.47, 0.653]), S())  # Oct 27 run, 2.3 cm to go
+    assert g.done(near, S())
