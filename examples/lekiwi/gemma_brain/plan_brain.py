@@ -36,6 +36,8 @@ from __future__ import annotations
 import argparse
 import datetime
 import logging
+import os
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -243,6 +245,7 @@ def main() -> int:
                     help="scan sweeps -DEG..+DEG in 30 deg steps instead of a full turn")
     ap.add_argument("--no-turn-scan", action="store_true", help="scan never turns the robot around")
     ap.add_argument("--no-base", action="store_true", help="lock the base: arm-only picks within reach")
+    ap.add_argument("--v2", action="store_true", help="run the steps on the v2 chains (v2/executor.py)")
     args = ap.parse_args()
     logging.basicConfig(level=logging.WARNING)
 
@@ -263,11 +266,22 @@ def main() -> int:
     ok, summary = False, ""
     with robot:
         arm = Arm(robot)
-        sk = Skills(robot, arm, LlamaCpp(args.vision_url), log,
-                    fast=None if args.no_fast else LlamaCpp(args.fast_url, "gemma4-e2b"))
-        sk.turn_scan = not args.no_turn_scan
-        sk.scan_sweep_deg = args.scan_sweep
-        pb = PlanBrain(sk, planner, log, robot, args.holding)
+        if args.v2:
+            from v2.executor import PlanBrainV2
+            from v2.geometry import Geometry
+            from v2.skills import Skills2
+
+            if sys.platform == "darwin":  # no idle sleep mid-task (Oct 27: the Pi stopped on lost heartbeats)
+                subprocess.Popen(["caffeinate", "-i", "-w", str(os.getpid())])
+            sk = Skills2(robot, arm, Geometry.load(), log, main=LlamaCpp(args.vision_url),
+                         fast=None if args.no_fast else LlamaCpp(args.fast_url, "gemma4-e2b"))
+            pb = PlanBrainV2(sk, planner, log, robot, args.holding)
+        else:
+            sk = Skills(robot, arm, LlamaCpp(args.vision_url), log,
+                        fast=None if args.no_fast else LlamaCpp(args.fast_url, "gemma4-e2b"))
+            sk.turn_scan = not args.no_turn_scan
+            sk.scan_sweep_deg = args.scan_sweep
+            pb = PlanBrain(sk, planner, log, robot, args.holding)
         try:
             ok, summary = pb.run(args.goal)
         except OperatorTookOver as e:

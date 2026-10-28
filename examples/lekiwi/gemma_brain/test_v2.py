@@ -564,3 +564,61 @@ def test_base_moves_ask_for_the_pis_stopping_tolerance_more():
     sk.move("base", delta=(0.006, 0.008))  # 1 cm asked: the Pi would end it at once
     sk.move("base", roll=-5.0)
     assert sent[0] == (0.012, 0.016, 0.0) and sent[1] == (0.0, 0.0, -7.0)
+
+
+# --- the v2 executor (plan verbs -> chains) ---
+
+
+def _executor(monkeypatch, plans, pick_results, holds):
+    """A PlanBrainV2 on fakes: chains.pick / place_in return queued results; held() follows
+    `holds` (a list consumed per call, last value repeats)."""
+    import test_plan_brain as tpb
+    from skills import Log
+    from v2 import chains
+    from v2.executor import PlanBrainV2
+    from v2.skills import Result
+
+    calls = []
+
+    def pick(sk, what, drive=True):
+        calls.append(f"pick {what}")
+        return pick_results.pop(0)
+
+    def place_in(sk, what, target, drive=True):
+        calls.append(f"place {what} in {target}")
+        return Result(True)
+
+    monkeypatch.setattr(chains, "pick", pick)
+    monkeypatch.setattr(chains, "place_in", place_in)
+    sk = Skills2.__new__(Skills2)
+    sk.roll, sk.seen, sk.arm = 0.0, {}, tpb.FakeArm()
+    sk.height = lambda: 0.2
+    hs = list(holds)
+    sk.held = lambda: hs.pop(0) if len(hs) > 1 else hs[0]
+    import tempfile
+
+    log = Log(Path(tempfile.mkdtemp()))
+    pb = PlanBrainV2(sk, tpb.FakePlanner(*plans), log, tpb.FakeRobot())
+    return pb, calls
+
+
+def test_v2_executor_runs_pick_then_place_and_tracks_what_is_held(monkeypatch):
+    from v2.skills import Result
+
+    pb, calls = _executor(monkeypatch, ['pick "red block"\nplace "red block" in "paper cup"'],
+                          [Result(True)], holds=[False])  # empty after the release
+    ok, summary = pb.run("put the red block in the paper cup")
+    assert ok, summary
+    assert calls == ["pick red block", "place red block in paper cup"]
+    assert pb.sk.holding is None
+
+
+def test_v2_executor_retries_a_failed_pick(monkeypatch):
+    from v2.skills import Result
+
+    pb, calls = _executor(monkeypatch, ['pick "red block"'],
+                          [Result(False, "approach: lost it"), Result(True)], holds=[False, False, True])
+    ok, summary = pb.run("pick up the red block")
+    assert ok, summary
+    assert calls == ["pick red block", "pick red block"]
+    assert pb.sk.holding == "red block"
