@@ -132,3 +132,14 @@ def release(sk: Skills2) -> Result:
         return r
     held = sk.held()
     return Result(not held, "still holding after opening" if held else "", {**r.data, "held": held})
+
+
+def put_down(sk: Skills2) -> Result:
+    """Set the held object back on the floor over the reach point: hover there, land, release,
+    back up to the hover height."""
+    for step in (lambda: hover_at(sk, prm.HOVER_HEIGHT_M), lambda: land(sk), lambda: release(sk),
+                 lambda: hover_at(sk, prm.HOVER_HEIGHT_M)):
+        r = step()
+        if not r.ok:
+            return r
+    return Result(True)

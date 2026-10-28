@@ -23,6 +23,8 @@
     .venv/bin/python run_v2.py pick --no-drive      the brick already near the reach point
     .venv/bin/python run_v2.py place-in "red block" --to "paper cup"     (holding the brick)
     .venv/bin/python run_v2.py next-to "red block" --to "green block"    (holding the brick)
+    .venv/bin/python run_v2.py trials --n 5 --back 0.40   driven picks in a row: after each the
+                         brick goes back on the floor, the arm folds and the base backs up
 
 Logs and frames under runs/<time>-v2-<what>/. The arm folds at the end, holding or not.
 """
@@ -30,6 +32,7 @@ Logs and frames under runs/<time>-v2-<what>/. The arm folds at the end, holding 
 import argparse
 import datetime
 import sys
+import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -46,7 +49,9 @@ from v2.skills import Skills2
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("what", choices=["land", "pick", "place-in", "next-to"])
+    ap.add_argument("what", choices=["land", "pick", "place-in", "next-to", "trials"])
+    ap.add_argument("--n", type=int, default=5, help="trials: how many picks")
+    ap.add_argument("--back", type=float, default=0.40, help="trials: base backs up this far (m) between picks")
     ap.add_argument("obj", nargs="?", default="red block")
     ap.add_argument("--to", default="paper cup", help="the container (place-in) or the reference object (next-to)")
     ap.add_argument("--no-drive", action="store_true")
@@ -60,7 +65,33 @@ def main() -> None:
         sk = Skills2(robot, arm, Geometry.load(), log, main=LlamaCpp(args.main_url),
                      fast=LlamaCpp(args.fast_url, "gemma4-e2b") if args.fast_url else None)
         try:
-            if args.what == "land":
+            if args.what == "trials":
+                results = []
+                if sk.held():  # left holding by an earlier run: put it down and back off first
+                    actions.put_down(sk)
+                    arm.reset()
+                    sk.roll = 0.0
+                    sk.move("base", delta=(-args.back, 0.0))
+                for k in range(args.n):
+                    t0 = time.time()
+                    r = chains.pick(sk, args.obj, drive=True)
+                    put = actions.put_down(sk) if sk.held() else None
+                    arm.reset()
+                    sk.roll = 0.0
+                    sk.seen.clear()  # the base moves: last frame's boxes don't track
+                    back = sk.move("base", delta=(-args.back, 0.0))
+                    row = {"trial": k + 1, "ok": r.ok, "failed": r.data.get("failed"), "reason": r.reason,
+                           "s": round(time.time() - t0), "put_down": None if put is None else put.ok, "backed": back.ok}
+                    results.append(row)
+                    log.ev("trial", **row)
+                    print(f"trial {k + 1}: {'OK' if r.ok else 'FAILED at ' + str(r.data.get('failed'))} "
+                          f"({row['s']} s) {r.reason}", flush=True)
+                    if not back.ok:
+                        break
+                ok = sum(x["ok"] for x in results)
+                r = chains.Result(ok == len(results), f"{ok} of {len(results)} picks", {"trials": results})
+                print(f"trials: {r.reason}")
+            elif args.what == "land":
                 r = chains.run([("hover", lambda: actions.hover(sk)), ("land", lambda: actions.land(sk))])
                 print(f"land: {r}; jaw tips {1000 * sk.height():.1f} mm above the predicted floor")
             elif args.what == "pick":
