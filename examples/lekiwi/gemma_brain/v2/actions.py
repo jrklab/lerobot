@@ -27,7 +27,14 @@ from v2.skills import Result, Skills2
 def land(sk: Skills2) -> Result:
     """Down to GRASP_LIFT_M above the predicted floor without pressing into it (v1's touch
     pushed into the floor and slid 8-10 mm, Oct 27); the contact stop stays as the safety. A
-    contact more than half a brick above the floor may be the brick's edge: refused."""
+    contact more than half a brick above the floor may be the brick's edge: refused. From higher
+    up it first goes freely to FINAL_LOOK_HEIGHT_M: the Pi's contact watch learns the arm's
+    droop at the start, and over a 10 cm descent the droop changes by more than its 1.5 mm
+    threshold (Oct 27: "held up" 83 mm above the floor, runs 20261027T181003 and later -v2-land)."""
+    if sk.height() > prm.FINAL_LOOK_HEIGHT_M.value:
+        r = sk.move("arm", height=prm.FINAL_LOOK_HEIGHT_M.value)
+        if not r.ok:
+            return r
     r = sk.move("arm", height=prm.GRASP_LIFT_M.value, until_contact=True)
     if not r.ok or not r.data.get("contact"):
         return r
