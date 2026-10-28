@@ -411,3 +411,13 @@ def test_above_goal_converges_on_a_container(monkeypatch):
 
     w = World()
     assert w.servo("paper cup", goal).ok
+
+
+def test_lift_right_after_landing_is_allowed():
+    # Oct 27 teach: the lift from the grasp height was refused by the free-move floor guard.
+    sim, sk = skills_over(real_floor_tcp_z=-0.12, predicted=-0.12)
+    assert actions.land(sk).ok
+    before = sk.tcp()[2]
+    r = sk.move("arm", delta=(0.0, 0.0, prm.LIFT_M.value))
+    assert r.ok, r
+    assert sk.tcp()[2] > before + prm.LIFT_M.value - 0.01

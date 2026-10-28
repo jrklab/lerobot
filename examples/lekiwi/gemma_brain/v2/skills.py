@@ -113,8 +113,9 @@ class Skills2:
             goal = np.array([x, y, self.geom.floor(x, y) + (p[2] - self.geom.floor(p[0], p[1]) if height is None else height)])
         floor = self.geom.floor(goal[0], goal[1])
         # The Pi's floor guard applies to the jaw tips, JAW_TIP_OFFSET_M below the TCP: a move whose
-        # tips end within the free-move clearance gets its own guard just under it.
-        low = goal[2] - floor < FLOOR_CLEARANCE_M + JAW_TIP_OFFSET_M
+        # tips start or end within the free-move clearance gets its own guard just under it (a lift
+        # from the floor was refused by the default one, which sits above its start: Oct 27 teach).
+        low = min(goal[2], p[2]) - floor < FLOOR_CLEARANCE_M + JAW_TIP_OFFSET_M
         speed = speed or (prm.NEAR_SPEED_MPS.value if low else prm.FREE_SPEED_MPS.value)
         search = prm.LAND_SEARCH_M.value if until_contact else 0.0
         # Low moves get a guard just under them; the Pi checks the TCP, so the jaw tips' offset too.

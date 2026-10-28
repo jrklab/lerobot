@@ -152,5 +152,23 @@
       -2.5
     ],
     "date": "2026-10-27"
+  },
+  "wrist_grasp_target": {
+    "value": [
+      0.5453,
+      0.7698
+    ],
+    "height_m": 0.0015,
+    "unit": "wrist image fraction (u right, v down) of the brick's box: its right edge and middle",
+    "meaning": "where the brick sits just before closing when held by its middle (owner's teach)",
+    "method": "teach_grasp.py: owner placed the red block between the open jaws at the grasp height",
+    "box": [
+      0.4109,
+      0.6125,
+      0.5453,
+      0.9271
+    ],
+    "date": "2026-10-27",
+    "log": "runs/20261027T181411-teach-grasp"
   }
 }

@@ -34,6 +34,7 @@ import argparse
 import datetime
 import json
 import sys
+import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -56,6 +57,8 @@ def main() -> None:
     ap.add_argument("--vision-url", default="http://127.0.0.1:8081")
     ap.add_argument("--write", action="store_true")
     ap.add_argument("--close", action="store_true", help="close and lift afterwards, to check it holds")
+    ap.add_argument("--go-file", type=Path, default=None,
+                    help="wait for this file to appear instead of Enter (when run without a terminal)")
     args = ap.parse_args()
     out = HERE / "runs" / (datetime.datetime.now().strftime("%Y%m%dT%H%M%S") + "-teach-grasp")
     log = Log(out)
@@ -69,8 +72,18 @@ def main() -> None:
                 if not r.ok:
                     print("stopped:", r.reason)
                     return
-            input(f"\nPut the {args.what} between the open jaws where it should be held (its middle on the jaws,\n"
-                  "its side close to the fixed jaw with a little room), then press Enter... ")
+            ask = (f"\nPut the {args.what} between the open jaws where it should be held (its middle on the jaws,\n"
+                   "its side close to the fixed jaw with a little room), then ")
+            if args.go_file is None:
+                input(ask + "press Enter... ")
+            else:
+                print(ask + f"create {args.go_file} ...", flush=True)
+                deadline = time.time() + 600
+                while not args.go_file.exists():
+                    if time.time() > deadline:
+                        print("no go after 10 minutes; nothing recorded")
+                        return
+                    time.sleep(0.5)
             det = sk.find(args.what, "wrist")
             h = sk.height()
             if det is None:
