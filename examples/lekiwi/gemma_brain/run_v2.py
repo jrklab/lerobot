@@ -31,6 +31,8 @@ Logs and frames under runs/<time>-v2-<what>/. The arm folds at the end, holding 
 
 import argparse
 import datetime
+import os
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -58,6 +60,10 @@ def main() -> None:
     ap.add_argument("--main-url", default="http://127.0.0.1:8081")
     ap.add_argument("--fast-url", default="http://127.0.0.1:8082")
     args = ap.parse_args()
+    if sys.platform == "darwin":
+        # Keep the Mac from idle-sleeping while this process runs: on Oct 27 it slept 282 s
+        # mid-pick (on battery), the heartbeats stopped and the Pi aborted the move.
+        subprocess.Popen(["caffeinate", "-i", "-w", str(os.getpid())])
     log = Log(HERE / "runs" / (datetime.datetime.now().strftime("%Y%m%dT%H%M%S") + f"-v2-{args.what}"))
     robot = Robot()
     with robot:
@@ -67,15 +73,28 @@ def main() -> None:
         try:
             if args.what == "trials":
                 results = []
+
+                def empty_hands() -> bool:
+                    """Put down anything held (a retry after folding if the first try fails);
+                    False if something is still held: the next pick's hover would drop it."""
+                    for _ in range(2):  # a try and a retry
+                        if not sk.held():
+                            return True
+                        actions.put_down(sk)
+                        arm.reset()
+                        sk.roll = 0.0
+                    return not sk.held()
+
                 if sk.held():  # left holding by an earlier run: put it down and back off first
-                    actions.put_down(sk)
-                    arm.reset()
-                    sk.roll = 0.0
+                    if not empty_hands():
+                        print("still holding after two put-downs: stopping")
+                        return
                     sk.move("base", delta=(-args.back, 0.0))
                 for k in range(args.n):
                     t0 = time.time()
                     r = chains.pick(sk, args.obj, drive=True)
-                    put = actions.put_down(sk) if sk.held() else None
+                    was_held = sk.held()
+                    put = empty_hands() if was_held else None
                     arm.reset()
                     sk.roll = 0.0
                     sk.seen.clear()  # the base moves: last frame's boxes don't track
@@ -87,6 +106,9 @@ def main() -> None:
                     print(f"trial {k + 1}: {'OK' if r.ok else 'FAILED at ' + str(r.data.get('failed'))} "
                           f"({row['s']} s) {r.reason}", flush=True)
                     if not back.ok:
+                        break
+                    if put is False:
+                        print("still holding after two put-downs: stopping the trials")
                         break
                 ok = sum(x["ok"] for x in results)
                 r = chains.Result(ok == len(results), f"{ok} of {len(results)} picks", {"trials": results})
