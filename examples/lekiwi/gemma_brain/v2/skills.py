@@ -205,7 +205,7 @@ class Skills2:
             self.log.frame(f"{cam}_{tag}", jpeg)
         return jpeg
 
-    def find(self, obj: str, cam: str = "wrist", angle: bool = False) -> Detection | None:
+    def find(self, obj: str, cam: str = "wrist", angle: bool = False, fast_ok: bool = True) -> Detection | None:
         """The object's box in a fresh `cam` frame, or None. Tracking an object already seen
         in this camera, the fast model answers first; its box must have the object's colour
         (E2B boxes something even when nothing is there), else the main model is asked. The
@@ -216,7 +216,7 @@ class Skills2:
         prompt = f"the {obj} on the floor"
         tracked = self.seen.get(f"{cam}:{obj}")
         a, by = None, ""
-        if tracked is not None and self.fast is not None:
+        if tracked is not None and self.fast is not None and fast_ok:
             a = self.fast.box(jpeg, prompt)
             by = "fast"
             if a.value is None or not has_colour(jpeg, a.value, obj):

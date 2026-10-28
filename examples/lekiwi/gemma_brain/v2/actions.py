@@ -126,19 +126,26 @@ def hover_at(sk: Skills2, height: Param) -> Result:
 def bring_into_view(sk: Skills2, container: str) -> Result:
     """Arm moves until the whole container is inside the wrist frame, aiming its visible box's
     centre at the spot under the gripper (where the taught brick's middle was). Coarse: the
-    floor's Jacobian and SERVO_GAIN; the two-height location after it is the precise part.
-    The approach parks a container by its near edge, so a cup 8 cm across sat ~4 cm past the
-    reach point and ran off the frame at the place hover (Oct 28)."""
+    floor's Jacobian and SERVO_GAIN; the two-height location after it is the precise part. The
+    main model only (Oct 28: with the cup out of view the fast one boxed the held brick as the
+    cup). Stops if a move leaves the box further out of the frame than before. The approach
+    parks a container by its near edge, so a cup 8 cm across sat ~4 cm past the reach point
+    and ran off the frame at the place hover (Oct 28)."""
+    worst = None
     for _ in range(int(prm.SERVO_MAX_LOOKS.value)):
-        det = sk.find(container, "wrist")
+        det = sk.find(container, "wrist", fast_ok=False)
         if det is None:
             return Result(False, f"no {container} in the wrist camera")
         x0, y0, x1, y1 = det.box
-        if x0 > 0 and y0 > 0 and x1 < 1:  # the near side is hidden under the gripper anyway
+        out = max(-x0, 0) + max(-y0, 0) + max(x1 - 1, 0) + (x0 <= 0) + (y0 <= 0) + (x1 >= 1)
+        if not out:  # the near side is hidden under the gripper anyway
             return Result(True)
-        under = grasp_spot(sk.geom)
+        if worst is not None and out > worst:
+            return Result(False, f"the {container} went further out of view", {"box": det.box})
+        worst = out
         j = sk.geom.jacobian(sk.height(), sk.roll)
-        d = prm.SERVO_GAIN.value * np.linalg.solve(j, np.array(det.center) - under)
+        # Moving the TCP by d moves a floor point's image by j @ d: bring the centre to the spot.
+        d = prm.SERVO_GAIN.value * np.linalg.solve(j, grasp_spot(sk.geom) - np.array(det.center))
         r = sk.move("arm", delta=(float(d[0]), float(d[1]), 0.0))
         if not r.ok:
             return r
@@ -159,7 +166,7 @@ def over_container(sk: Skills2, container: str) -> Result:
             r = sk.move("arm", delta=(0.0, 0.0, prm.PLACE_LOOK_RISE_M.value))
             if not r.ok:
                 return r
-        det = sk.find(container, "wrist")
+        det = sk.find(container, "wrist", fast_ok=False)
         if det is None:
             return Result(False, f"no {container} in the wrist camera", {"look": k})
         x0, y0, x1, y1 = det.box
@@ -169,6 +176,11 @@ def over_container(sk: Skills2, container: str) -> Result:
     (c1, w1, h1), (c2, w2, h2) = views
     delta, rim = locate_from_two_heights(sk.geom, c1, w1, h1, c2, w2, h2, sk.roll)
     sk.ev("located", obj=container, delta=[round(float(v), 4) for v in delta], rim_height=round(rim, 4))
+    if not 0.0 <= rim < h1 or np.linalg.norm(delta) > prm.PLACE_MAX_OFFSET_M.value:
+        # Not a container under the gripper: the boxes weren't of it (Oct 28: the held brick
+        # boxed as the cup gave a rim 0.44 m below the floor and a 27 cm offset).
+        return Result(False, f"the {container}'s measurement makes no sense (rim {rim:.3f} m, offset "
+                             f"{np.linalg.norm(delta):.3f} m)", {"rim_height": rim, "delta": delta.tolist()})
     r = sk.move("arm", delta=(float(delta[0]), float(delta[1]), -prm.PLACE_LOOK_RISE_M.value))
     return Result(r.ok, r.reason, {**r.data, "rim_height": rim, "moved": delta.tolist()})
 

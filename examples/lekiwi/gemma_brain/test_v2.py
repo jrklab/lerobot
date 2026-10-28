@@ -662,3 +662,32 @@ def test_look_around_turns_left_and_right_until_it_finds_the_object():
     assert actions.look_around(w, "red block").ok and w.backs == 1
     steps = look_offsets((1 - prm_.LOOK_OVERLAP.value) / 0.0184)
     assert steps[:2] == [steps[0], -steps[0]] and steps[-1] == 180.0
+
+
+def test_bring_into_view_moves_towards_the_container_and_stops_if_it_drifts_away():
+    from v2.skills import Result
+
+    class World:
+        geom, roll = jaw_geom(), 0.0
+
+        def __init__(self, centre, sign=1.0):
+            self.geom.grasp_box = [0.411, 0.613, 0.545, 0.927]
+            self.c, self.sign, self.moves = np.array(centre, float), sign, 0
+
+        def height(self):
+            return 0.106
+
+        def find(self, obj, cam, angle=False, fast_ok=True):
+            u, v = self.c
+            return Detection(box=[u - 0.3, v - 0.33, u + 0.3, v + 0.33])
+
+        def move(self, part, delta=None, **kw):
+            self.moves += 1
+            self.c = self.c + self.sign * (self.geom.jacobian(0.106) @ np.asarray(delta[:2]))
+            return Result(True)
+
+    w = World([0.15, 0.55])  # off the left edge, as on Oct 28
+    assert actions.bring_into_view(w, "paper cup").ok and w.c[0] - 0.3 > 0
+    w = World([0.15, 0.55], sign=-1.0)  # a world where moves push it further out
+    r = actions.bring_into_view(w, "paper cup")
+    assert not r.ok and "further out" in r.reason and w.moves == 1
