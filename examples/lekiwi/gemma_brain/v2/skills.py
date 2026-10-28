@@ -42,7 +42,7 @@ from v2 import params as prm
 from v2.geometry import Geometry
 from v2.goals import Detection
 
-VERTICAL = 90.0  # the arm model's pitch for a gripper pointing straight down
+VERTICAL = 90.0  # convention: the arm model's pitch for a gripper pointing straight down
 
 
 @dataclass
@@ -156,9 +156,9 @@ class Skills2:
                 return deg(wps[-1][joint])
 
             j0 = joint_at(0.0)
-            slope = (joint_at(-90.0) - j0) / -90.0
+            slope = (joint_at(-90.0) - j0) / -90.0  # convention: two rolls 90 deg apart give the joint-per-roll slope
             rest = deg(NAMED_POSES["rest"][joint])
-            lo, hi = sorted((deg(-100.0), deg(100.0)))
+            lo, hi = sorted((deg(-100.0), deg(100.0)))  # convention: the ends of the -100..100 joint units
             span = prm.ROLL_FROM_REST_DEG.value
             jmin, jmax = max(rest - span, lo), min(rest + span, hi)
             self._roll_range = tuple(sorted(((jmin - j0) / slope, (jmax - j0) / slope)))

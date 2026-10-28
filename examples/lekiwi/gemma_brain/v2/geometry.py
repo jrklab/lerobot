@@ -32,7 +32,7 @@ from pathlib import Path
 import numpy as np
 
 HERE = Path(__file__).resolve().parent.parent
-IMAGE_PX = np.array([640.0, 480.0])
+IMAGE_PX = np.array([640.0, 480.0])  # convention: the cameras' 640x480 frames
 MAKERS = {
     "floor_tcp_z_m": "calibrate_floor.py",
     "wrist_image_jacobian": "wrist_calib.py",
@@ -102,7 +102,7 @@ class Geometry:
         """Distance of an object on the floor whose box bottom is at image row bottom_v in the
         front camera (calibrate_front.py's model: k / (bottom - horizon) - offset), metres."""
         f = self.front
-        return f["range_k"] / max(bottom_v - f["range_horizon_v"], 1e-3) - f["range_offset_m"]
+        return f["range_k"] / max(bottom_v - f["range_horizon_v"], 1e-3) - f["range_offset_m"]  # convention: keeps the division finite at the horizon
 
     def tips_to_top(self, point, height: float, object_height: float) -> np.ndarray:
         """Where a point at the jaw tips' depth appears on the top face of an object
@@ -127,7 +127,7 @@ def fit_floor(points: list[dict], fallback_z: float) -> np.ndarray:
     """Plane z = a + b x + c y through the floor touches (least squares). Fewer than 3 points:
     flat at their mean, or at the calibrated value with none. With the gripper vertical the
     floor came out flat to 3.3 mm over 12 cm (Oct 27), so no sag term."""
-    if len(points) >= 3:
+    if len(points) >= 3:  # convention: a plane needs 3 points
         a = np.array([[1.0, p["x"], p["y"]] for p in points])
         coef, *_ = np.linalg.lstsq(a, np.array([p["z"] for p in points]), rcond=None)
         return coef

@@ -124,17 +124,47 @@ def test_base_moves_are_one_kind_at_a_time():
     assert not sk.move("base", delta=(0.05, 0.0), roll=10.0).ok
 
 
-def test_actions_and_chains_hold_no_numbers():
-    # Layer 3 composes primitives; every value must come from params.py or geometry.py.
+def _stray_numbers(path):
+    """Numeric literals in a v2 module that aren't plain 0/1/2, an index, a rounding digit
+    count, or on a line marked "# convention: <why>" (pitch 90 = straight down, the +/-100
+    joint-unit ends, the brick's 180 deg symmetry, the image size, ...)."""
     import ast
 
-    for name in ("actions.py", "chains.py"):
+    src = path.read_text()
+    lines = src.splitlines()
+    tree = ast.parse(src)
+    allowed = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Subscript):  # indices and slices
+            allowed.update(id(n) for n in ast.walk(node.slice))
+        if isinstance(node, ast.Call):  # round(x, 4), arr.round(4)
+            fn = node.func.attr if isinstance(node.func, ast.Attribute) else getattr(node.func, "id", "")
+            if fn == "round":
+                allowed.update(id(a) for a in node.args[1 if isinstance(node.func, ast.Name) else 0:])
+    stray = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)) and not isinstance(node.value, bool):
+            if node.value in (0, 1, 2) or id(node) in allowed or "# convention" in lines[node.lineno - 1]:
+                continue
+            stray.append(f"{path.name}:{node.lineno}: {node.value!r}")
+    return stray
+
+
+def test_v2_code_holds_no_stray_numbers():
+    # Layers 1-3: every value comes from params.py (with its source) or geometry.py (CALIB);
+    # actions and chains may not even mark conventions.
+    for name in ("skills.py", "goals.py", "geometry.py", "actions.py", "chains.py"):
         path = HERE / "v2" / name
-        if not path.exists():
-            continue
-        for node in ast.walk(ast.parse(path.read_text())):
-            if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)) and not isinstance(node.value, bool):
-                assert node.value in (0, 1, 2, 1000), f"{name}:{node.lineno}: number {node.value} (put it in params.py with its source)"
+        stray = _stray_numbers(path)
+        assert not stray, f"numbers outside params.py: {stray} (move them there with their source, or mark a convention)"
+    for name in ("actions.py", "chains.py"):
+        assert "# convention" not in (HERE / "v2" / name).read_text()
+
+
+def test_the_stray_number_check_catches_one(tmp_path):
+    p = tmp_path / "x.py"
+    p.write_text("A = 0.002\nB = round(0.5, 4)\nC = s[9]\nD = 90.0  # convention: straight down\n")
+    assert _stray_numbers(p) == ["x.py:1: 0.002", "x.py:2: 0.5"]
 
 
 # --- find / servo / goals ---

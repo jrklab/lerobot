@@ -119,7 +119,7 @@ class AngleGoal:
         # roll inside the wrist's range (rest +/-90 deg), else its nearest end.
         lo, hi = sk.roll_range
         want = sk.roll + float(err[0])
-        options = [want, want - 180.0, want + 180.0]
+        options = [want, want - 180.0, want + 180.0]  # convention: a brick looks the same every 180 deg
         fits = [r for r in options if lo <= r <= hi]
         roll = min(fits, key=lambda r: abs(r - sk.roll)) if fits else float(np.clip(min(options, key=lambda r: min(abs(r - lo), abs(r - hi))), lo, hi))
         return {"roll": roll}

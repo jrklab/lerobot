@@ -32,7 +32,7 @@ def land(sk: Skills2) -> Result:
         return r
     above = r.data["contact_z"] - r.data["floor"]
     if above > prm.BRICK_HEIGHT_M.value / 2:
-        return Result(False, f"met something {1000 * above:.0f} mm above the floor", r.data)
+        return Result(False, f"met something {above:.3f} m above the floor", r.data)
     # The floor, a little higher than predicted: back up to the grasp lift above it.
     return sk.move("arm", delta=(0.0, 0.0, r.data["contact_z"] + prm.GRASP_LIFT_M.value - sk.tcp()[2]))
 
