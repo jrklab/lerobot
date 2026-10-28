@@ -147,6 +147,14 @@ def locate_from_two_heights(geom: Geometry, c1, w1: float, h1: float, c2, w2: fl
     return np.mean(offsets, axis=0), float(height)
 
 
+def grasp_spot(geom: Geometry) -> np.ndarray:
+    """The wrist-image spot under the gripper: the taught brick's box centre (it was held there)."""
+    if geom.grasp_box is None:
+        raise MissingCalibrationError("calib.json 'wrist_grasp_target' has no box: run teach_grasp.py --write")
+    x0, y0, x1, y1 = geom.grasp_box
+    return np.array([(x0 + x1) / 2, (y0 + y1) / 2])
+
+
 def look_offsets(step_deg: float) -> list[float]:
     """Headings (deg from the start, left positive) for a look around: alternately left and
     right in widening steps, ending turned right round."""

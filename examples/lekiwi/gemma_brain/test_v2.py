@@ -590,8 +590,12 @@ def _executor(monkeypatch, plans, pick_results, holds):
 
     monkeypatch.setattr(chains, "pick", pick)
     monkeypatch.setattr(chains, "place_in", place_in)
+    from v2 import actions as acts
+
+    monkeypatch.setattr(acts, "hover_at", lambda sk, h: (calls.append("fold"), Result(True))[1])
     sk = Skills2.__new__(Skills2)
     sk.roll, sk.seen, sk.arm = 0.0, {}, tpb.FakeArm()
+    sk.arm.reset = lambda *a, **k: None
     sk.height = lambda: 0.2
     hs = list(holds)
     sk.held = lambda: hs.pop(0) if len(hs) > 1 else hs[0]
@@ -620,7 +624,7 @@ def test_v2_executor_retries_a_failed_pick(monkeypatch):
                           [Result(False, "approach: lost it"), Result(True)], holds=[False, False, True])
     ok, summary = pb.run("pick up the red block")
     assert ok, summary
-    assert calls == ["pick red block", "pick red block"]
+    assert calls == ["pick red block", "fold", "pick red block"]
     assert pb.sk.holding == "red block"
 
 

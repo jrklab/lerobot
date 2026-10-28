@@ -18,8 +18,10 @@ params.py or geometry.py one, so a new action adds a name, not a parameter to ca
 
 from __future__ import annotations
 
+import numpy as np
+
 from v2 import params as prm
-from v2.geometry import locate_from_two_heights, look_offsets
+from v2.geometry import grasp_spot, locate_from_two_heights, look_offsets
 from v2.goals import AngleGoal, BesideGoal, FrontApproachGoal, ReachGoal, round_centre
 from v2.params import Param
 from v2.skills import Result, Skills2
@@ -121,11 +123,36 @@ def hover_at(sk: Skills2, height: Param) -> Result:
     return sk.move("arm", xy=(prm.REACH_POINT_X_M.value, 0.0), height=height.value, roll=0.0)
 
 
+def bring_into_view(sk: Skills2, container: str) -> Result:
+    """Arm moves until the whole container is inside the wrist frame, aiming its visible box's
+    centre at the spot under the gripper (where the taught brick's middle was). Coarse: the
+    floor's Jacobian and SERVO_GAIN; the two-height location after it is the precise part.
+    The approach parks a container by its near edge, so a cup 8 cm across sat ~4 cm past the
+    reach point and ran off the frame at the place hover (Oct 28)."""
+    for _ in range(int(prm.SERVO_MAX_LOOKS.value)):
+        det = sk.find(container, "wrist")
+        if det is None:
+            return Result(False, f"no {container} in the wrist camera")
+        x0, y0, x1, y1 = det.box
+        if x0 > 0 and y0 > 0 and x1 < 1:  # the near side is hidden under the gripper anyway
+            return Result(True)
+        under = grasp_spot(sk.geom)
+        j = sk.geom.jacobian(sk.height(), sk.roll)
+        d = prm.SERVO_GAIN.value * np.linalg.solve(j, np.array(det.center) - under)
+        r = sk.move("arm", delta=(float(d[0]), float(d[1]), 0.0))
+        if not r.ok:
+            return r
+    return Result(False, f"the {container} stays partly out of the wrist frame")
+
+
 def over_container(sk: Skills2, container: str) -> Result:
     """Put the gripper over a stationary container (owner, Oct 27: it won't move): look from the
     place hover and from PLACE_LOOK_RISE_M higher, locate its opening centre and rim height
     from the two views (geometry.locate_from_two_heights), move over it once, without looking
     again. Looking while moving over it failed: from above, the cup overflows the frame."""
+    r = bring_into_view(sk, container)
+    if not r.ok:
+        return r
     views = []
     for k in range(len(("low", "high"))):
         if k:
@@ -137,7 +164,7 @@ def over_container(sk: Skills2, container: str) -> Result:
             return Result(False, f"no {container} in the wrist camera", {"look": k})
         x0, y0, x1, y1 = det.box
         if y0 <= 0 or x0 <= 0 or x1 >= 1:
-            return Result(False, f"the {container} runs off the frame: move it under the reach point", {"box": det.box})
+            return Result(False, f"the {container} runs off the frame", {"box": det.box})
         views.append((round_centre(det.box), x1 - x0, sk.height()))
     (c1, w1, h1), (c2, w2, h2) = views
     delta, rim = locate_from_two_heights(sk.geom, c1, w1, h1, c2, w2, h2, sk.roll)

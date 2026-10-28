@@ -27,10 +27,12 @@ detections are dropped: the base may have moved.
 
 from __future__ import annotations
 
+from arm import PlanError
 from brain import PICK_TRIES
 from plan_brain import PlanBrain
+from robot import OperatorTookOver, RobotError
 
-from v2 import chains
+from v2 import actions, chains, params as prm
 from v2.skills import Result, Skills2
 
 
@@ -72,6 +74,20 @@ class PlanBrainV2(PlanBrain):
         return r
 
     def fold(self) -> str:
-        why = super().fold()
+        """Over the reach point at the hover height first, then fold. v1's fold lifts straight
+        up to RESET_SAFE_Z_M (0.10 m in the arm frame, ~21 cm over the floor), which the
+        vertical gripper can't reach at 25 cm out, so it stayed put after a failed place (Oct
+        28). At the hover a held brick clears a cup's rim (5.2 cm measured)."""
+        try:
+            r = actions.hover_at(self.sk, prm.HOVER_HEIGHT_M)
+            if r.ok:
+                self.sk.arm.reset()
+                why = ""
+            else:
+                why = super().fold()
+        except (RobotError, PlanError) as e:
+            if isinstance(e, OperatorTookOver):
+                raise
+            why = str(e)
         self._settle()
         return why
