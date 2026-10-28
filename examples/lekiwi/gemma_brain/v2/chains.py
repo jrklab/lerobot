@@ -18,12 +18,16 @@ which, so the executor can retry or replan.
 
     pick "x":  approach -> hover -> line_up -> align -> servo(JawGoal) at the hover height ->
                down to the final look height -> servo(JawGoal) -> land -> grip(close) -> lift
+    place "x" in "y":       approach y -> hover at the demo's place height -> over y (base,
+               then arm) -> lower to the demo's release height -> release -> back up
+    place "x" next_to "y":  approach y -> hover -> beside y (base, then arm) -> down to the
+               final look height -> beside y again -> land -> release -> back up
 """
 
 from __future__ import annotations
 
 from v2 import actions, params as prm
-from v2.goals import JawGoal
+from v2.goals import BesideGoal, JawGoal
 from v2.skills import Result, Skills2
 
 
@@ -52,5 +56,37 @@ def pick(sk: Skills2, obj: str, drive: bool = True) -> Result:
         ("land", lambda: actions.land(sk)),
         ("close", lambda: sk.grip("close")),
         ("lift", lambda: actions.lift(sk)),
+    ]
+    return run(steps)
+
+
+def place_in(sk: Skills2, obj: str, container: str, drive: bool = True) -> Result:
+    """Put the held `obj` into `container` the way the owner's demo did: from above it, lowered
+    to the demo's release height, then opened."""
+    steps = [("holding", lambda: Result(sk.held(), "" if sk.held() else f"not holding the {obj}"))]
+    steps += [("approach", lambda: actions.approach(sk, container))] if drive else []
+    steps += [
+        ("hover", lambda: actions.hover_at(sk, prm.PLACE_HOVER_M)),
+        ("over", lambda: actions.over_container(sk, container)),
+        ("lower", lambda: actions.lower_to_release(sk)),
+        ("release", lambda: actions.release(sk)),
+        ("up", lambda: actions.hover_at(sk, prm.PLACE_HOVER_M)),
+    ]
+    return run(steps)
+
+
+def place_next_to(sk: Skills2, obj: str, ref: str, drive: bool = True) -> Result:
+    """Set the held `obj` down on the floor beside `ref`: lined up from the hover height, checked
+    again low, landed like a grasp, then opened."""
+    steps = [("holding", lambda: Result(sk.held(), "" if sk.held() else f"not holding the {obj}"))]
+    steps += [("approach", lambda: actions.approach(sk, ref))] if drive else []
+    steps += [
+        ("hover", lambda: actions.hover_at(sk, prm.HOVER_HEIGHT_M)),
+        ("beside_high", lambda: actions.beside(sk, ref)),
+        ("down", lambda: sk.move("arm", height=prm.FINAL_LOOK_HEIGHT_M.value)),
+        ("beside_low", lambda: sk.servo(ref, BesideGoal())),
+        ("land", lambda: actions.land(sk)),
+        ("release", lambda: actions.release(sk)),
+        ("up", lambda: actions.hover_at(sk, prm.HOVER_HEIGHT_M)),
     ]
     return run(steps)

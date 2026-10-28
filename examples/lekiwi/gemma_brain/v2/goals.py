@@ -22,6 +22,8 @@ params.py values; nothing per object.
     ReachGoal        wrist: the same point, within the arm's reach (for the base's line-up)
     AngleGoal        wrist: the object's long side across the jaws (for the wrist roll)
     FrontApproachGoal front: the object at the reach point, straight ahead (for the base)
+    AboveGoal        wrist: a container where the owner's demo had it before lowering in
+    BesideGoal       wrist: a reference object just beside where the held object will land
 """
 
 from __future__ import annotations
@@ -31,7 +33,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from v2 import params as prm
-from v2.geometry import IMAGE_PX, require_grasp_target
+from v2.geometry import IMAGE_PX, MissingCalibrationError, require_grasp_target
 
 
 @dataclass
@@ -62,12 +64,19 @@ class _WristPointGoal:
     tol_m = prm.SERVO_TOL_M
     part = "arm"
 
+    def __init__(self, tol_m=None):
+        if tol_m is not None:  # a looser tolerance, e.g. REACH_TOL_M for the base's line-up
+            self.tol_m = tol_m
+
     def target(self, sk, height: float) -> np.ndarray:
+        return self._carry(sk, require_grasp_target(sk.geom), height)  # the taught (right edge, middle)
+
+    def _carry(self, sk, point, height: float) -> np.ndarray:
+        """A top-face image point seen at the taught height, as it appears at `height`."""
         g, h_obj = sk.geom, prm.BRICK_HEIGHT_M.value
-        taught = require_grasp_target(g)  # the box's (right edge, middle) at the taught height
         h_taught = g.grasp_target_height if g.grasp_target_height is not None else prm.GRASP_LIFT_M.value
         s = (g.cam_above_tips + h_taught - h_obj) / (g.cam_above_tips + height - h_obj)
-        return g.descent_p0 + (taught - g.descent_p0) * s
+        return g.descent_p0 + (np.asarray(point, float) - g.descent_p0) * s
 
     def _jac(self, sk, height: float) -> np.ndarray:
         # Image motion of a point on the top face (nearer the camera than the floor).
@@ -151,3 +160,47 @@ class FrontApproachGoal:
         bottom = f["near_bottom"] - float(err[1])
         here, there = sk.geom.front_range(bottom), sk.geom.front_range(f["near_bottom"])
         return {"delta": (prm.SERVO_GAIN.value * max(here - there, 0.0), 0.0)}
+
+
+class AboveGoal:
+    """A container's box centre on the spot the owner's demo had it at the pause above it,
+    seen from the same height (PLACE_HOVER_M): image-to-image, no depth model needed."""
+
+    cam = "wrist"
+    part = "arm"
+    tol_m = prm.PLACE_TOL_M
+
+    def __init__(self, tol_m=None):
+        if tol_m is not None:
+            self.tol_m = tol_m
+        view = prm.demo_place_view()
+        if view is None:
+            raise MissingCalibrationError("no container view in the demo extract: run demo_extract.py --place-target")
+        self.centre = np.array(view[0])
+
+    def error(self, det: Detection, sk) -> np.ndarray:
+        return self.centre - det.center
+
+    def done(self, err: np.ndarray, sk) -> bool:
+        tol = np.abs(np.linalg.norm(sk.geom.jacobian(sk.height(), sk.roll), axis=1)) * self.tol_m.value
+        return bool(np.all(np.abs(err) <= tol))
+
+    def step(self, err: np.ndarray, sk) -> dict:
+        j = sk.geom.jacobian(sk.height(), sk.roll)
+        d = prm.SERVO_GAIN.value * np.linalg.solve(j, err)
+        d = _cap(d, (j @ d) * IMAGE_PX / IMAGE_PX[0], prm.STEP_IN_VIEW_FRACTION.value)
+        return {"delta": (float(d[0]), float(d[1]))}
+
+
+class BesideGoal(_WristPointGoal):
+    """The reference object's right edge a gap left of where the held object lands (the taught
+    grasp box), their middles level: the held object comes down beside it. The gap is
+    NEXT_GAP_FRACTION of the taught box's width."""
+
+    def target(self, sk, height: float) -> np.ndarray:
+        g = sk.geom
+        if g.grasp_box is None:
+            raise MissingCalibrationError("calib.json 'wrist_grasp_target' has no box: run teach_grasp.py --write")
+        x0, y0, x1, y1 = g.grasp_box
+        spot = np.array([x0 - prm.NEXT_GAP_FRACTION.value * (x1 - x0), (y0 + y1) / 2])
+        return self._carry(sk, spot, height)

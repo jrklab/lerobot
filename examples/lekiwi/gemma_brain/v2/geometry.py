@@ -60,6 +60,7 @@ class Geometry:
     front: dict = None  # calibrate_front.py: u_per_deg, u_target, near_bottom, ...
     grasp_target: np.ndarray | None = None  # taught (u of the box's right edge, v of its middle)
     grasp_target_height: float | None = None  # jaw tips above the floor when it was taught
+    grasp_box: list | None = None  # the whole taught box (x0, y0, x1, y1)
 
     @classmethod
     def load(cls, calib_path: Path = HERE / "calib.json", touches_path: Path = HERE / "floor_touches.json") -> Geometry:
@@ -83,6 +84,7 @@ class Geometry:
             front=dict(calib["front_camera"]["value"]),
             grasp_target=np.array(calib["wrist_grasp_target"]["value"]) if "wrist_grasp_target" in calib else None,
             grasp_target_height=calib["wrist_grasp_target"]["height_m"] if "wrist_grasp_target" in calib else None,
+            grasp_box=calib["wrist_grasp_target"].get("box") if "wrist_grasp_target" in calib else None,
         )
 
     def floor(self, x: float, y: float) -> float:

@@ -19,7 +19,8 @@ params.py or geometry.py one, so a new action adds a name, not a parameter to ca
 from __future__ import annotations
 
 from v2 import params as prm
-from v2.goals import AngleGoal, FrontApproachGoal, ReachGoal
+from v2.goals import AboveGoal, AngleGoal, BesideGoal, FrontApproachGoal, ReachGoal
+from v2.params import Param
 from v2.skills import Result, Skills2
 
 
@@ -65,3 +66,35 @@ def line_up(sk: Skills2, obj: str) -> Result:
 def align(sk: Skills2, obj: str) -> Result:
     """Wrist roll: the object's long side across the jaws."""
     return sk.servo(obj, AngleGoal())
+
+
+def hover_at(sk: Skills2, height: Param) -> Result:
+    """The vertical gripper over the reach point at `height`, roll 0 (jaws as they are)."""
+    return sk.move("arm", xy=(prm.REACH_POINT_X_M.value, 0.0), height=height.value, roll=0.0)
+
+
+def over_container(sk: Skills2, container: str) -> Result:
+    """Base, then arm: the container where the owner's demo had it before lowering in."""
+    r = sk.servo(container, AboveGoal(tol_m=prm.REACH_TOL_M), part="base")
+    return sk.servo(container, AboveGoal()) if r.ok else r
+
+
+def beside(sk: Skills2, ref: str) -> Result:
+    """Base, then arm: the reference object just beside where the held one will land."""
+    r = sk.servo(ref, BesideGoal(tol_m=prm.REACH_TOL_M), part="base")
+    return sk.servo(ref, BesideGoal()) if r.ok else r
+
+
+def lower_to_release(sk: Skills2) -> Result:
+    """Straight down to the demo's release height; stops early if the held object meets
+    something (the container's bottom)."""
+    return sk.move("arm", height=prm.RELEASE_ABOVE_FLOOR_M.value, until_contact=True)
+
+
+def release(sk: Skills2) -> Result:
+    """Open the jaws and check they hold nothing any more."""
+    r = sk.grip("open")
+    if not r.ok:
+        return r
+    held = sk.held()
+    return Result(not held, "still holding after opening" if held else "", {**r.data, "held": held})

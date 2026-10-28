@@ -324,3 +324,90 @@ def test_pick_chain_runs_its_steps_in_order_and_stops_at_the_first_failure(monke
     r = chains.pick(sk, "red block", drive=False)
     assert not r.ok and r.data["failed"] == "close" and "close:" in r.reason
     assert calls[0] == "hover"
+
+
+def _chain_sk(calls, held=True):
+    from v2.skills import Result
+
+    sk = Skills2.__new__(Skills2)
+    sk.servo = lambda obj, goal, part=None: (calls.append(f"{type(goal).__name__}:{part or goal.part}"), Result(True))[1]
+    sk.move = lambda part, **k: (calls.append("move"), Result(True))[1]
+    sk.grip = lambda how, **k: (calls.append(how), Result(True))[1]
+    sk.held = lambda: held
+    return sk
+
+
+def test_place_in_runs_over_lower_release(monkeypatch):
+    from v2 import chains
+
+    monkeypatch.setattr(prm, "demo_place_view", lambda: ([0.45, 0.40], 0.106))
+    monkeypatch.setattr(chains.actions, "approach", lambda sk, o: chains.Result(True))
+    calls = []
+    sk = _chain_sk(calls)
+    seq = iter([True, True, False])  # held before, ... , empty after the release
+    sk.held = lambda: next(seq)
+    r = chains.place_in(sk, "red block", "paper cup")
+    assert r.ok, r
+    assert calls == ["move", "AboveGoal:base", "AboveGoal:arm", "move", "open", "move"]
+
+
+def test_place_needs_something_held():
+    from v2 import chains
+
+    r = chains.place_in(_chain_sk([], held=False), "red block", "paper cup", drive=False)
+    assert not r.ok and r.data["failed"] == "holding"
+
+
+def test_place_next_to_lines_up_twice_and_lands(monkeypatch):
+    from v2 import chains
+
+    calls = []
+    sk = _chain_sk(calls)
+    seq = iter([True, True, False])
+    sk.held = lambda: next(seq)
+    monkeypatch.setattr(chains.actions, "land", lambda sk: (calls.append("land"), chains.Result(True))[1])
+    r = chains.place_next_to(sk, "red block", "green block", drive=False)
+    assert r.ok, r
+    assert calls == ["move", "BesideGoal:base", "BesideGoal:arm", "move", "BesideGoal:arm", "land", "open", "move"]
+
+
+def test_beside_goal_aims_left_of_the_taught_spot():
+    g = jaw_geom()
+    g.grasp_box, g.grasp_target_height = [0.47, 0.70, 0.55, 0.90], prm.GRASP_LIFT_M.value
+
+    class S:
+        geom, roll = g, 0.0
+
+    t = goals.BesideGoal().target(S(), prm.GRASP_LIFT_M.value)
+    assert np.isclose(t[0], 0.47 - prm.NEXT_GAP_FRACTION.value * 0.08) and np.isclose(t[1], 0.80)
+
+
+def test_above_goal_converges_on_a_container(monkeypatch):
+    monkeypatch.setattr(prm, "demo_place_view", lambda: ([0.45, 0.40], 0.106))
+    goal = goals.AboveGoal()
+
+    class World:
+        geom, roll, h = jaw_geom(), 0.0, 0.106
+        centre = np.array([0.62, 0.55])
+
+        def height(self):
+            return self.h
+
+        def find(self, obj, cam, angle=False):
+            u, v = self.centre
+            return Detection(box=[u - 0.3, v - 0.35, u + 0.3, v + 0.35])
+
+        def move(self, part, delta=None, roll=None, **kw):
+            # the container's rim is nearer the camera than the floor: it moves 1.5x more
+            self.centre = self.centre + 1.5 * (self.geom.jacobian(self.h) @ np.asarray(delta[:2]))
+            from v2.skills import Result
+
+            return Result(True)
+
+        def ev(self, *a, **k):
+            pass
+
+        servo = Skills2.servo
+
+    w = World()
+    assert w.servo("paper cup", goal).ok

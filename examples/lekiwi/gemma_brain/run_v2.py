@@ -21,6 +21,8 @@
     .venv/bin/python run_v2.py land                 hover at the reach point, land, back up, fold
     .venv/bin/python run_v2.py pick ["red block"]   the pick chain (approach first)
     .venv/bin/python run_v2.py pick --no-drive      the brick already near the reach point
+    .venv/bin/python run_v2.py place-in "red block" --to "paper cup"     (holding the brick)
+    .venv/bin/python run_v2.py next-to "red block" --to "green block"    (holding the brick)
 
 Logs and frames under runs/<time>-v2-<what>/. The arm folds at the end, holding or not.
 """
@@ -44,8 +46,9 @@ from v2.skills import Skills2
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("what", choices=["land", "pick"])
+    ap.add_argument("what", choices=["land", "pick", "place-in", "next-to"])
     ap.add_argument("obj", nargs="?", default="red block")
+    ap.add_argument("--to", default="paper cup", help="the container (place-in) or the reference object (next-to)")
     ap.add_argument("--no-drive", action="store_true")
     ap.add_argument("--main-url", default="http://127.0.0.1:8081")
     ap.add_argument("--fast-url", default="http://127.0.0.1:8082")
@@ -60,9 +63,13 @@ def main() -> None:
             if args.what == "land":
                 r = chains.run([("hover", lambda: actions.hover(sk)), ("land", lambda: actions.land(sk))])
                 print(f"land: {r}; jaw tips {1000 * sk.height():.1f} mm above the predicted floor")
-            else:
+            elif args.what == "pick":
                 r = chains.pick(sk, args.obj, drive=not args.no_drive)
                 print(f"pick: {r}")
+            else:
+                place = chains.place_in if args.what == "place-in" else chains.place_next_to
+                r = place(sk, args.obj, args.to, drive=not args.no_drive)
+                print(f"{args.what}: {r}")
             log.ev("result", ok=r.ok, reason=r.reason, data=r.data)
         finally:
             arm.reset()

@@ -44,11 +44,23 @@ def _demo(key: str, fallback: float) -> float:
         return fallback
 
 
+def demo_place_view() -> tuple[list[float], float] | None:
+    """The container's box centre in the wrist image at the demo's pause above it, and that
+    height (jaw tips above the floor): where the owner held the brick before lowering it in."""
+    try:
+        d = json.loads(DEMO_EXTRACT.read_text())
+        return list(d["pre_release"]["centre"]), float(d["above_target_z_above_floor_m"])
+    except (OSError, KeyError, ValueError, TypeError):
+        return None
+
+
 # --- DEMO (the owner's Oct 27 pick_cup demo; re-extract after the joint-zero fix for heights) ---
 OPEN_WIDTH = Param(_demo("open_width", 25.0), "DEMO", "gripper opening before a grasp (demo opened to 24.6)")
 LIFT_M = Param(_demo("lift_m", 0.09), "DEMO", "lift after the grasp (demo: 9.5 cm)")
 RELEASE_ABOVE_FLOOR_M = Param(_demo("release_z_above_floor_m", 0.06), "DEMO",
                               "TCP height above the floor at release inside a cup (demo: 5.9 cm)")
+PLACE_HOVER_M = Param(_demo("above_target_z_above_floor_m", 0.10), "DEMO",
+                      "height above a container before lowering into it (demo: 10.6 cm; its view there is the place target)")
 # The grasp target in the wrist image (where the brick's box sits just before closing for a
 # middle grip) comes from the owner's midpoint teach: geometry.grasp_target(); not here yet.
 
@@ -63,6 +75,8 @@ STEP_IN_VIEW_FRACTION = Param(0.25, "RULE", "one move may shift the target by at
 REACH_POINT_X_M = Param(0.25, "RULE", "where the base parks the object (arm x): vertical reach at 10 cm is 0.14-0.28 m; owner: 0.22 sat too close to the base")
 HOVER_HEIGHT_M = Param(0.10, "RULE", "line-up and first servo height: where the image Jacobian was measured (9.4 cm) and the object fills a small part of the view")
 FINAL_LOOK_HEIGHT_M = Param(0.03, "RULE", "last servo height: jaws clear of the brick's top (11.4 mm) by more than the floor fit's error")
+PLACE_TOL_M = Param(0.01, "RULE", "how centred over a container before lowering: a cup's opening leaves ~1 cm round a held 2x4 brick")
+NEXT_GAP_FRACTION = Param(0.5, "RULE", "gap left beside the reference object, as a share of the held brick's width in the image")
 LAND_SEARCH_M = Param(0.008, "RULE", "how far past its goal a contact-stop move may go: the old floor fit's worst error (8.4 mm)")
 SERVO_TOL_M = Param(0.002, "RULE", "servo position tolerance at the object: under the last descent's landing scatter (2.5 mm), so the servo isn't what limits a grasp")
 REACH_TOL_M = Param(0.03, "RULE", "line-up: close enough for the arm to take the rest (vertical reach goes 3 cm past the reach point)")
