@@ -76,7 +76,13 @@ class Skills2:
             self.log.ev(name, **kw)
 
     def tcp(self) -> np.ndarray:
+        """The measured TCP (forward kinematics of the measured joints)."""
         return self.arm.tcp()[:3, 3]
+
+    def cmd_tcp(self) -> np.ndarray:
+        """The commanded TCP: where moves start from. The measured one hangs ~1 cm off it at
+        reach (Oct 27: a land planned from it moved 9 mm sideways and tripped the contact stop)."""
+        return self.arm.calib.fk(self.arm.targets())[:3, 3]
 
     def height(self) -> float:
         """Jaw tips above the floor under the gripper (vertical gripper: TCP above floor TCP)."""
@@ -98,7 +104,7 @@ class Skills2:
         """
         if part == "base":
             return self._move_base(delta, roll)
-        p = self.tcp()
+        p = self.cmd_tcp()
         roll = self.roll if roll is None else roll
         if delta is not None:
             goal = p + np.asarray(delta, float)
