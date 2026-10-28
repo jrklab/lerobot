@@ -1,10 +1,11 @@
 {
   "floor_z_m": {
-    "value": -0.1,
+    "value": -0.126,
     "unit": "m",
     "frame": "arm base (so101_kinematics)",
-    "method": "owner's tape measure: LeKiwi base top 100 mm above the floor",
-    "date": "2026-10-23"
+    "method": "floor probes with the vertical gripper (calibrate_floor.py, TCP -0.1112 at contact) minus the jaw-tip offset 0.015; homing-tick joint zero",
+    "date": "2026-10-27",
+    "previous": "-0.100: owner's tape measure, base top 100 mm above the floor (Oct 23), in the old model"
   },
   "floor_tcp_z_m": {
     "value": -0.1112,
@@ -136,20 +137,20 @@
   },
   "wrist_descent": {
     "value": {
-      "depth_m": 0.1075,
+      "depth_m": 0.1102,
       "p0": [
-        0.5044,
-        0.1456
+        0.4921,
+        0.1125
       ]
     },
     "unit": "depth: metres from the camera to the jaw tips along the descent; p0: wrist image fraction (u right, v down)",
     "meaning": "a floor point's image offset from p0 scales as 1 / (depth_m + h), h = jaw tips above the floor, TCP pointing down",
-    "method": "calibrate_descent.py over 31 logged straight descents: depth from box width ratios, p0 least squares on box edges",
-    "edge_residual_median_px": 13.4,
+    "method": "calibrate_descent.py over 49 logged straight descents: depth from box width ratios, p0 least squares on box edges",
+    "edge_residual_median_px": 7.4,
     "last_descent_right_edge_mm": [
-      4.2,
-      1.6,
-      -2.5
+      4.0,
+      1.5,
+      -2.9
     ],
     "date": "2026-10-27"
   },

@@ -82,10 +82,10 @@ PLAN_JOINT_SPEED = 0.9 * MAX_JOINT_SPEED
 AT_POSE_UNITS = 3.0
 # Height the TCP is lifted to before reset() swings the arm home.
 RESET_SAFE_Z_M = 0.10
-# Floor height in the arm base frame. The owner measured the base top 100 mm above the floor
-# (2026-10-23), and the first floor probe's contact point agrees (calib.json, when written,
-# overrides this).
-DEFAULT_FLOOR_Z_M = -0.100
+# Floor height (jaw tips at contact) in the arm base frame. Measured again with the homing-tick joint zero (Oct 27): the vertical floor probes put the
+# TCP at -0.1112 at contact, the jaw tips JAW_TIP_OFFSET_M lower; -0.100 (the base-top tape
+# measure, matched by the old model's first probe) sat 2.6 cm above the floor.
+DEFAULT_FLOOR_Z_M = -0.126
 # Every point of the arm (joint frames, TCP, jaw tips) stays this far above the floor on a
 # free move; only grasp descents (which pass their own z_min) go closer.
 FLOOR_CLEARANCE_M = 0.02

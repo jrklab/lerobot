@@ -71,16 +71,40 @@ def descents(log: Path) -> list[dict]:
     return out
 
 
+def descents_v2(log: Path) -> list[dict]:
+    """The same pairs from a v2 run (run_v2.py): heights from the arm moves' goals over the
+    predicted floor, wrist boxes from find events; a pair is two wrist looks with only a
+    vertical arm move between them (same x, y and roll, no base move). v2 has no frame at
+    the grasp height, so no "last" pairs."""
+    out, look, xy, h, moved_sideways = [], None, None, None, False
+    for line in log.open():
+        e = json.loads(line)
+        ev = e.get("ev")
+        if ev == "move" and e.get("part") == "arm":
+            gx, gy, gz = e["goal"]
+            if xy is not None and (abs(gx - xy[0]) > 0.001 or abs(gy - xy[1]) > 0.001):
+                moved_sideways = True
+            xy, h = (gx, gy), gz - e["floor"]
+        elif ev == "move" and e.get("part") == "base":
+            moved_sideways = True
+        elif ev == "find" and e.get("cam") == "wrist" and e.get("found") and h is not None:
+            if look is not None and not moved_sideways and abs(look[0] - h) >= 0.01:
+                out.append({"a": look, "b": (h, e["box"]), "last": False})
+            look, moved_sideways = (h, e["box"]), False
+    return out
+
+
 def inside(v: float) -> bool:
     return 0.01 < v < 0.99
 
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--runs", default="runs/2026*")
+    ap.add_argument("--runs", nargs="+", default=["runs/2026*"], help="glob(s) of run folders")
     ap.add_argument("--write", action="store_true")
     args = ap.parse_args()
-    pairs = [d for log in sorted(glob.glob(f"{args.runs}/log.jsonl")) for d in descents(Path(log))]
+    logs = sorted({p for pattern in args.runs for p in glob.glob(f"{pattern}/log.jsonl")})
+    pairs = [d for log in logs for d in (descents_v2(Path(log)) if "-v2-" in log else descents(Path(log)))]
     if len(pairs) < 20:
         raise SystemExit(f"only {len(pairs)} logged descents; need 20")
 
@@ -120,6 +144,8 @@ def main() -> None:
             pred = p0[0] + (ba[2] - p0[0]) * (depth + ha) / (depth + hb)
             u_per_m = u_per_m_at_j * (0.099 + depth) / (max(hb, 0.0) + depth)
             last_mm.append(1000 * (bb[2] - pred) / u_per_m)
+    if not last_mm:  # v2 runs have no frame at the grasp height: keep the earlier landings
+        last_mm = json.loads(CALIB.read_text())["wrist_descent"].get("last_descent_right_edge_mm", [])
 
     value = {"depth_m": round(depth, 4), "p0": [round(float(v), 4) for v in p0]}
     print(f"{len(pairs)} descents: {value}; depth from {len(ds)} width ratios "

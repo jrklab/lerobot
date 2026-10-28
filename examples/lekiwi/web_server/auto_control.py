@@ -73,9 +73,10 @@ CLEARANCE_SAMPLE_UNITS = 5.0
 # The jaw tips extend this far past the TCP along its approach axis (gemma_brain/arm.py's
 # JAW_TIP_OFFSET_M, from the floor probe).
 JAW_TIP_OFFSET_M = 0.015
-# Floor guard for the TCP z in the arm base frame when a command doesn't send its own
-# z_min. Conservative until the floor height is calibrated.
-DEFAULT_Z_MIN_M = -0.05
+# Floor guard for the jaw tips' z in the arm base frame when a command doesn't send its own
+# z_min: the measured floor (-0.126 m at the jaw tips with the homing-tick joint zero, Oct 27)
+# plus 2 cm. Was -0.05 ("conservative until calibrated"), which refused a safe 7.4 cm lowering.
+DEFAULT_Z_MIN_M = -0.106
 MAX_GRIPPER_SPEED = 80.0
 DEFAULT_GRIPPER_SPEED = 50.0
 
