@@ -421,3 +421,20 @@ def test_lift_right_after_landing_is_allowed():
     r = sk.move("arm", delta=(0.0, 0.0, prm.LIFT_M.value))
     assert r.ok, r
     assert sk.tcp()[2] > before + prm.LIFT_M.value - 0.01
+
+
+def test_lift_halves_where_the_full_lift_is_out_of_reach():
+    from v2.skills import Result
+
+    tried = []
+
+    class S:
+        def move(self, part, delta=None, **k):
+            tried.append(round(delta[2], 4))
+            return Result(delta[2] < 0.1, "" if delta[2] < 0.1 else "can't move there")
+
+        def held(self):
+            return True
+
+    r = actions.lift(S())
+    assert r.ok and tried == [round(prm.LIFT_M.value, 4), round(prm.LIFT_M.value / 2, 4)]

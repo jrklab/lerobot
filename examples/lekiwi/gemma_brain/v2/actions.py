@@ -46,8 +46,15 @@ def land(sk: Skills2) -> Result:
 
 
 def lift(sk: Skills2) -> Result:
-    """Straight up by the demo's lift, then whether the object is still held."""
-    r = sk.move("arm", delta=(0.0, 0.0, prm.LIFT_M.value))
+    """Straight up by the demo's lift, or, where the vertical gripper can't reach that high (at
+    27 cm out it goes ~11 cm up; Oct 27 v2 pick), by half as much again until it can, but not
+    less than the final look height; then whether the object is still held. The planner refuses
+    before anything moves, so a try costs nothing."""
+    up = prm.LIFT_M.value
+    r = sk.move("arm", delta=(0.0, 0.0, up))
+    while not r.ok and up / 2 >= prm.FINAL_LOOK_HEIGHT_M.value:
+        up /= 2
+        r = sk.move("arm", delta=(0.0, 0.0, up))
     if not r.ok:
         return r
     held = sk.held()
