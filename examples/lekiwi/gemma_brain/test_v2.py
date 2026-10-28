@@ -546,3 +546,18 @@ def test_a_failed_frame_request_resyncs_the_clock_and_retries(monkeypatch):
     sk = finder(b"", None, None)
     sk.robot = R()
     assert sk.frame("front") == b"jpeg" and sk.robot.calls == 2
+
+
+def test_base_moves_ask_for_the_pis_stopping_tolerance_more():
+    sent = []
+
+    class R:
+        def base(self, dx=0.0, dy=0.0, dtheta_deg=0.0):
+            sent.append((round(dx, 4), round(dy, 4), round(dtheta_deg, 2)))
+            return {"result": {"moved": [dx, dy, dtheta_deg]}}
+
+    sk = Skills2.__new__(Skills2)
+    sk.robot, sk.log = R(), None
+    sk.move("base", delta=(0.006, 0.008))  # 1 cm asked: the Pi would end it at once
+    sk.move("base", roll=-5.0)
+    assert sent[0] == (0.012, 0.016, 0.0) and sent[1] == (0.0, 0.0, -7.0)

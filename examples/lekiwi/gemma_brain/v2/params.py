@@ -66,6 +66,8 @@ PLACE_HOVER_M = Param(_demo("above_target_z_above_floor_m", 0.10), "DEMO",
 
 # --- SPEC ---
 BRICK_HEIGHT_M = Param(0.0114, "SPEC", "2x4 brick body height")
+BASE_STOP_SHORT_M = Param(0.01, "SPEC", "the Pi ends a base drive within this of its goal (auto_control.BASE_POS_TOL_M): drives under it didn't move, longer ones stopped ~1 cm short (Oct 27 trials)")
+BASE_TURN_STOP_SHORT_DEG = Param(2.0, "SPEC", "the Pi ends a base turn within this of its goal (auto_control.BASE_THETA_TOL_DEG): turns stopped ~2 deg short")
 GRIPPER_EMPTY_MAX = Param(3.5, "SPEC", "closed on nothing reads 1.3-2.1; on the brick's 16 mm side 6.7-7.0")
 
 # --- RULE ---

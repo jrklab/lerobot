@@ -145,10 +145,16 @@ class Skills2:
     def _move_base(self, delta, turn) -> Result:
         if (delta is None) == (turn is None):
             return Result(False, "base: give a drive (dx, dy) or a turn, one at a time")
+        # The Pi ends a base move once within its tolerance of the goal, so a move asks for that
+        # much more, in the same direction, to end where it was meant to.
         if turn is not None:
-            res = self.robot.base(dtheta_deg=float(turn))
+            turn = float(turn)
+            res = self.robot.base(dtheta_deg=turn + math.copysign(prm.BASE_TURN_STOP_SHORT_DEG.value, turn))
         else:
-            res = self.robot.base(dx=float(delta[0]), dy=float(delta[1]))
+            d = np.asarray(delta, float)
+            n = float(np.linalg.norm(d))
+            d = d * (n + prm.BASE_STOP_SHORT_M.value) / n if n > 0 else d
+            res = self.robot.base(dx=float(d[0]), dy=float(d[1]))
         moved = res.get("result", {}).get("moved")
         self.ev("move", part="base", delta=None if delta is None else list(delta), turn=turn, moved=moved)
         return Result(True, data={"moved": moved})
