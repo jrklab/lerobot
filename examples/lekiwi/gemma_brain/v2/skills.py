@@ -254,14 +254,17 @@ class Skills2:
 
     def _settle(self) -> None:
         """Wait before a frame until the arm has stopped, at most LOOK_SETTLE_S: stopped when the
-        measured TCP moved less than one encoder tick's worth between two reads. After a base
-        move the full wait: nothing measures the body's coasting."""
+        measured TCP moved less than one encoder tick's worth between two reads a control tick
+        apart (reads closer together returned the same sample and called a moving arm still:
+        Oct 28, every wait 0.03 s). After a base move the full wait: nothing measures the
+        body's coasting."""
         end = time.monotonic() + prm.LOOK_SETTLE_S.value
         t0, waited = time.monotonic(), "full"
         if self._last_moved == "arm":
             tick = 2 * math.pi / self.arm.calib.resolution  # one encoder step, rad
             prev = self.tcp()
             while time.monotonic() < end:
+                time.sleep(prm.CONTROL_PERIOD_S.value)
                 cur = self.tcp()
                 if np.linalg.norm(cur - prev) <= tick * np.linalg.norm(cur):  # the tick's TCP motion at this reach
                     waited = "still"

@@ -273,12 +273,15 @@ def test_the_look_settle_ends_once_the_arm_is_still_and_waits_after_the_base():
 
     sk = Skills2.__new__(Skills2)
     sk.log, sk.arm = None, type("A", (), {"calib": Cal()})()
-    path = iter([0.25 + 0.004 * k for k in range(3)] + [0.262] * 50)  # still from the 4th read
-    sk.tcp = lambda: np.array([next(path), 0.0, -0.08])
+    path = iter([0.25, 0.254] + [0.258] * 50)  # still from the 3rd read
+    reads = []
+    sk.tcp = lambda: (reads.append(_time.monotonic()), np.array([next(path), 0.0, -0.08]))[1]
     sk._last_moved = "arm"
     t = _time.monotonic()
     sk._settle()
-    assert _time.monotonic() - t < prm.LOOK_SETTLE_S.value / 2
+    assert _time.monotonic() - t < prm.LOOK_SETTLE_S.value - 0.05 and len(reads) == 4
+    # a control tick apart: closer reads returned the same sample (Oct 28)
+    assert min(np.diff(reads)) >= prm.CONTROL_PERIOD_S.value * 0.95
     sk._last_moved = "base"
     t = _time.monotonic()
     sk._settle()
