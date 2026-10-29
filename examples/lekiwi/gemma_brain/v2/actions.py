@@ -174,7 +174,7 @@ def bring_into_view(sk: Skills2, container: str) -> Result:
         x0, y0, x1, y1 = det.box
         out = max(-x0, 0) + max(-y0, 0) + max(x1 - 1, 0) + (x0 <= 0) + (y0 <= 0) + (x1 >= 1)
         if not out:  # the near side is hidden under the gripper anyway
-            return Result(True)
+            return Result(True, data={"det": det})
         if worst is not None and out > worst:
             return Result(False, f"the {container} went further out of view", {"box": det.box})
         worst = out
@@ -204,9 +204,9 @@ def over_container(sk: Skills2, container: str) -> Result:
         r = bring_into_view(sk, container)
         if not r.ok:
             return r
-        det = sk.find(container, "wrist", fast_ok=False)
-        if det is None:
-            return Result(False, f"no {container} in the wrist camera")
+        # Its look, not another: a second look a second later got no box for a cup filling the
+        # view, twice in one task (Oct 28, run 20261028T234620).
+        det = r.data["det"]
         h = sk.height()
         delta = locate_from_one_view(sk.geom, round_centre(det.box), h, rim, sk.roll)
         sk.ev("located", obj=container, delta=[round(float(v), 4) for v in delta], rim_height=round(rim, 4))

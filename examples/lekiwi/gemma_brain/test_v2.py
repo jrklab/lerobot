@@ -194,7 +194,6 @@ def red_frame(box):
 
 def test_place_checks_count_the_objects_colour_and_measure_the_gap():
     from v2.goals import opening_box, placed_beside
-    from v2.skills import Result  # noqa: F401
     from vision import colour_pixels
 
     # Over the cup the blue jaws share the opening with the red brick (Oct 28 wrist frame):
@@ -858,6 +857,35 @@ def test_a_base_turn_over_the_pis_limit_goes_in_two():
     assert sk.move("base", roll=-180.0).ok
     stop = prm.BASE_TURN_STOP_SHORT_DEG.value
     assert sent == [-90.0 - stop, -90.0 - stop] and all(abs(t) <= prm.BASE_TURN_MAX_DEG.value for t in sent)
+
+
+def test_over_container_uses_the_look_that_brought_it_into_view(monkeypatch):
+    # Oct 28: the look right after bring_into_view's got no box for a cup filling the view.
+    from v2.skills import Result
+
+    looks, moves = [Detection(box=[0.17, 0.14, 0.84, 0.97])], []
+
+    class World:
+        geom, roll, heights = jaw_geom(), 0.0, {"paper cup": 0.044}
+
+        def height(self):
+            return 0.106
+
+        def find(self, obj, cam, angle=False, fast_ok=True):
+            return looks.pop(0) if looks else None  # one box, then nothing
+
+        def move(self, part, delta=None, **kw):
+            moves.append((part, delta))
+            return Result(True)
+
+        def ev(self, *a, **k):
+            pass
+
+    monkeypatch.setattr(actions, "locate_from_one_view", lambda *a, **k: np.array([0.004, -0.003]))
+    monkeypatch.setattr(actions, "view_half_width", lambda *a, **k: 0.1)
+    r = actions.over_container(World(), "paper cup")
+    assert r.ok, r.reason
+    assert moves == [("arm", (0.004, -0.003, 0.0))], moves
 
 
 def test_bring_into_view_moves_towards_the_container_and_stops_if_it_drifts_away():
