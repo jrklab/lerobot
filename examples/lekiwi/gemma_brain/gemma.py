@@ -20,8 +20,8 @@ decision can be logged next to the frame it was made on.
 Perception questions are short and direct, asked with the image first, thinking off and
 greedy decoding: the model answers what it sees, and code does the geometry.
 
-Gemma talks to Ollama (brain.py); LlamaCpp asks the same questions of a llama.cpp server,
-with grammar-constrained answers (plan_brain.py).
+Gemma talks to Ollama (wrist_calib.py's default); LlamaCpp asks the same questions of a
+llama.cpp server, with grammar-constrained answers (the planner and the v2 skills).
 """
 
 from __future__ import annotations

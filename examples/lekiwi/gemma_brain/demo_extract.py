@@ -39,7 +39,6 @@ from pathlib import Path
 import cv2
 import numpy as np
 import pandas as pd
-
 from arm import Calibration
 
 JOINTS = ["arm_shoulder_pan", "arm_shoulder_lift", "arm_elbow_flex", "arm_wrist_flex", "arm_wrist_roll", "arm_gripper"]
@@ -51,7 +50,7 @@ PAUSE_FRAMES = 6  # stillness at least this long (0.2 s) splits motions
 # human descent or lift has many 0.2-0.6 s still moments (Oct 27 demo).
 KEY_PAUSE_FRAMES = 24
 CLOSE_DROP = 8.0  # the gripper falls at least this much in one close
-GRIPPER_EMPTY = 3.5  # skills.GRIPPER_EMPTY_MAX: closing below this held nothing
+GRIPPER_EMPTY = 3.5  # v2 params.GRIPPER_EMPTY_MAX: closing below this held nothing
 OPEN_RISE = 3.0  # the gripper opening this far above its closed width is a release
 LIFT_MIN_M = 0.02  # the lift keyframe: the first pause at least this far above the close
 
@@ -178,12 +177,12 @@ def main() -> None:
     c = json.loads(args.calibration.read_text())
     calib = Calibration(c["joints"], c.get("motor_resolution", 4096))
     joints = df[[f"{j}.pos" for j in JOINTS]].values
-    tcp = np.stack([calib.fk(dict(zip(JOINTS, row))) for row in joints])
+    tcp = np.stack([calib.fk(dict(zip(JOINTS, row, strict=True))) for row in joints])
     z = tcp[:, 2, 3]
     kf = find_keyframes(joints, z)
 
-    import skills as S  # noqa: E402 (v1's constants, for the comparison)
     from gemma import LlamaCpp
+    from v2 import params as prm  # the values the v2 skills use now, for the comparison
     from vision import brick_angle, snap_box
 
     out: dict = {"episode": args.episode, "frames": len(df), "keyframes": kf.__dict__}
@@ -191,7 +190,7 @@ def main() -> None:
     out["open_width"] = float(np.median(g[max(kf.close_start - PAUSE_FRAMES, 0) : kf.close_start + 1]))
     out["closed_width"] = float(g[kf.close_end])
     out["close_z_m"] = float(z[kf.close_end])
-    out["floor_z_m_est"] = float(z[kf.close_end] - S.GRASP_LIFT_M)  # the demo closes near the floor
+    out["floor_z_m_est"] = float(z[kf.close_end] - prm.GRASP_LIFT_M.value)  # the demo closes near the floor
     out["descend_m"] = float(z[kf.hover] - z[kf.close_end]) if kf.hover is not None else None
     out["lift_m"] = float(z[kf.lift] - z[kf.close_end]) if kf.lift is not None else None
     out["roll_deg_at_close"] = math.degrees(calib.to_rad("arm_wrist_roll", joints[kf.close_end, 4]))
@@ -210,10 +209,7 @@ def main() -> None:
             box, how = snap_box(jpeg, a.value, what=args.target)
             ang = brick_angle(jpeg, box)
             out["pre_close"] = {"video_frame": k, "box": [round(v, 4) for v in box], "snap": how,
-                                "centre": [round((box[0] + box[2]) / 2, 4), round((box[1] + box[3]) / 2, 4)],
-                                # skills.center_along_length's measure: share of the brick's
-                                # length beyond the fixed jaw's tip row
-                                "outside": round(float(np.clip((S.FIXED_JAW_TIP_V - box[1]) / S.BRICK_LEN_V, 0, 1)), 3)}
+                                "centre": [round((box[0] + box[2]) / 2, 4), round((box[1] + box[3]) / 2, 4)]}
     if kf.hover is not None:
         got = wrist_frame(args.dataset, df, args.episode, kf.hover)
         if got:
@@ -228,7 +224,7 @@ def main() -> None:
                                      "brick_angle_deg": None if ang is None else round(ang["angle_deg"], 1), "aspect": None if ang is None else round(ang["aspect"], 2), "roll_deg": round(roll, 1)}
                 if ang:
                     # The wrist turns between the hover and the close by this much, on top of
-                    # aligning to the brick: skills.align_roll aims for the brick's long side vertical.
+                    # aligning to the brick.
                     out["roll_change_hover_to_close_deg"] = round(out["roll_deg_at_close"] - roll, 1)
     if kf.pre_release is not None and args.place_target:
         # Right before the release the cup fills the wrist view (the model finds no "cup"):
@@ -248,22 +244,17 @@ def main() -> None:
                 out["pre_release"] = {"video_frame": k, "box": [round(v, 4) for v in b],
                                       "centre": [round((b[0] + b[2]) / 2, 4), round((b[1] + b[3]) / 2, 4)]}
 
-    h = z[kf.pre_close] - out["floor_z_m_est"]
     rows = [
-        ("brick share outside the jaw tips at pre-close", str(out.get("pre_close", {}).get("outside")),
-         f"OUTSIDE_AIM {S.OUTSIDE_AIM} ({S.OUTSIDE_MIN}-{S.OUTSIDE_MAX})"),
-        ("open width before the close", f"{out['open_width']:.1f}", f"OPEN {S.OPEN}"),
-        ("jaw width at the close", f"{out['closed_width']:.1f}", f"empty below {S.GRIPPER_EMPTY_MAX}; 2x4 seen 4.7-7.0"),
-        ("hover -> close descend", _m(out["descend_m"]), f"servo stages {S.SERVO_HEIGHTS} m above the floor"),
-        ("lift after the close", _m(out["lift_m"]), f"LIFT_M {S.LIFT_M}"),
-        ("release height above floor", _m(out.get("release_z_above_floor_m")), f"place_in tips at {S.DROP_TIP_HEIGHT_M}"),
+        ("open width before the close", f"{out['open_width']:.1f}", f"OPEN_WIDTH {prm.OPEN_WIDTH.value:.1f}"),
+        ("jaw width at the close", f"{out['closed_width']:.1f}", f"empty below {prm.GRIPPER_EMPTY_MAX.value}; 2x4 seen 6.7-7.0"),
+        ("hover -> close descend", _m(out["descend_m"]),
+         f"hover {prm.HOVER_HEIGHT_M.value} m, last look {prm.FINAL_LOOK_HEIGHT_M.value} m above the floor"),
+        ("lift after the close", _m(out["lift_m"]), f"LIFT_M {prm.LIFT_M.value:.3f}"),
+        ("release height above floor", _m(out.get("release_z_above_floor_m")),
+         f"RELEASE_ABOVE_FLOOR_M {prm.RELEASE_ABOVE_FLOOR_M.value:.3f}"),
     ]
-    if "pre_close" in out:
-        gp = S.grasp_pixel(max(h, 0.0))
-        rows.append(("brick centre in the wrist image at pre-close", str(out["pre_close"]["centre"]),
-                     f"grasp_pixel({h:.3f}) = [{gp[0]:.3f}, {gp[1]:.3f}]"))
     print(f"\nepisode {args.episode}: {len(df)} frames, keyframes {kf}")
-    print(f"{'quantity':45s} {'demo':>16s}   v1")
+    print(f"{'quantity':45s} {'demo':>16s}   v2 now")
     for name, demo, v1 in rows:
         print(f"{name:45s} {demo:>16s}   {v1}")
     path = args.dataset / f"extract-ep{args.episode}.json"

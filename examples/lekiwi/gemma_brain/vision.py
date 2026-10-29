@@ -83,67 +83,6 @@ def brick_angle(jpeg: bytes, box, pad: float = 0.25, what: str = "") -> dict | N
     }
 
 
-def plausible_brick(jpeg: bytes, box, target: str = "", allow_border: bool = False) -> tuple[bool, str]:
-    """Is Gemma's box really a brick on the floor in a wrist frame? Gemma's own yes/no is
-    unreliable here both ways (2026-10-23: false negatives on a plainly visible brick, and a
-    box invented on the blue gripper jaw when nothing was there), so check geometry instead:
-    the box must not touch the image border and must be mostly free of the jaws' saturated
-    blue. (A brick-shaped-blob test was tried too and rejected: the whiteness segmentation
-    spills onto the light floor in about half of the real-brick frames.)
-    allow_border: a box at the border is fine for a coarse first look (Oct 27: a whole brick at
-    the top edge of the view from the hover point, 0.02 from it, rejected six times)."""
-    x0, y0, x1, y1 = box
-    if not allow_border and (min(x0, y0) < 0.01 or max(x1, y1) > 0.99):
-        return False, "box touches the image border"
-    img = cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_COLOR)
-    h, w = img.shape[:2]
-    roi = img[int(y0 * h) : int(y1 * h), int(x0 * w) : int(x1 * w)]
-    hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
-    blue = (hsv[..., 0] > 95) & (hsv[..., 0] < 135) & (hsv[..., 1] > 120) & (hsv[..., 2] > 50)
-    # The jaws only show at the bottom of the wrist image (tips at ~0.77 of its height), and a
-    # blue target is blue like them (Oct 24: a blue brick in mid-image was rejected as "56%
-    # gripper blue"), so the test only applies low in the frame and for non-blue targets.
-    low = (y0 + y1) / 2 > 0.65
-    if low and "blue" not in target.lower() and blue.mean() > 0.15:
-        return False, f"box is {100 * blue.mean():.0f}% gripper blue"
-    return True, "ok"
-
-
-def crop_around(jpeg: bytes, box, pad: float = 0.6, min_px: int = 160) -> bytes:
-    """JPEG of the box with `pad` x its size of context on each side, upscaled so its short
-    side is at least min_px (far objects are only ~20 px across in the front camera)."""
-    img = cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_COLOR)
-    h, w = img.shape[:2]
-    x0, y0, x1, y1 = box
-    bw, bh = max(x1 - x0, 0.05), max(y1 - y0, 0.05)
-    cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
-    X0, Y0 = int(max(0, (cx - (0.5 + pad) * bw) * w)), int(max(0, (cy - (0.5 + pad) * bh) * h))
-    X1, Y1 = int(min(w, (cx + (0.5 + pad) * bw) * w)), int(min(h, (cy + (0.5 + pad) * bh) * h))
-    c = img[Y0:Y1, X0:X1]
-    scale = max(1.0, min_px / max(1, min(c.shape[:2])))
-    c = cv2.resize(c, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
-    return cv2.imencode(".jpg", c)[1].tobytes()
-
-
-def jaw_tip_row(jpeg: bytes) -> float | None:
-    """Image row (fraction, 0 = top) of the gripper's jaw tips in a wrist frame: the highest
-    point of the two largest saturated-blue blobs in the lower half (the jaws are blue and
-    enter from the bottom of the image). The average of both tips, or the one found."""
-    img = cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_COLOR)
-    if img is None:
-        return None
-    h, w = img.shape[:2]
-    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-    blue = ((hsv[..., 0] > 95) & (hsv[..., 0] < 135) & (hsv[..., 1] > 120) & (hsv[..., 2] > 50)).astype(np.uint8)
-    blue[: h // 2] = 0
-    blue = cv2.morphologyEx(blue, cv2.MORPH_OPEN, np.ones((5, 5), np.uint8))
-    n, labels, stats, _ = cv2.connectedComponentsWithStats(blue)
-    blobs = sorted((stats[i] for i in range(1, n) if stats[i][cv2.CC_STAT_AREA] > 0.004 * h * w), key=lambda s: -s[cv2.CC_STAT_AREA])[:2]
-    if not blobs:
-        return None
-    return float(np.mean([b[cv2.CC_STAT_TOP] for b in blobs])) / h
-
-
 def jaw_geometry(jpeg: bytes, fixed: dict | None = None, band: float = 0.06) -> dict | None:
     """Where the gripper's jaws are in a wrist frame, as image fractions: for the fixed jaw
     (rigid with the camera, on the right) and the moving one (left), the tip row (top of its
@@ -187,15 +126,6 @@ def jaw_geometry(jpeg: bytes, fixed: dict | None = None, band: float = 0.06) -> 
         moving_tip, moving_inner = jaw(max(left, key=lambda i: stats[i][cv2.CC_STAT_AREA]), inner_is_left=False)
         out.update(moving_tip_v=moving_tip, moving_inner_u=moving_inner, opening_u=fixed_inner - moving_inner)
     return out
-
-
-def outside_fraction(box, tip_row: float) -> float:
-    """Share of the brick's box (along the image vertical: its length, with the wrist rolled
-    to put the long side vertical) that lies beyond the jaw tips, i.e. outside the gripper."""
-    y0, y1 = box[1], box[3]
-    if y1 <= y0:
-        return 0.0
-    return float(np.clip((tip_row - y0) / (y1 - y0), 0.0, 1.0))
 
 
 def snap_box(jpeg: bytes, box, min_chroma: float = 25.0, what: str = "") -> tuple[list[float], str]:

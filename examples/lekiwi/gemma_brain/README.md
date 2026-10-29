@@ -1,162 +1,131 @@
 # gemma_brain: Gemma 4 drives LeKiwi
 
-Gemma 4 (via Ollama on this Mac) turns a goal in plain words into calls to robot skills; the
-skills do the perception and motion, closing every loop on a sensor; the LeKiwi web service
-on the Pi plays the motions back with its own safety checks.
+Say a task in plain words; Gemma 4 26B (llama.cpp on this Mac) plans it once from the two
+cameras; code runs each step on a small set of measured skills that close every loop on a
+sensor; the LeKiwi web service on the Pi plays the motions back with its own safety checks.
 
 ```
-goal ──> brain.py (Gemma E4B, tool calls) ──> skills.py ──> arm.py (IK) / robot.py (HTTP)
-                                                │                          │
-                                       Gemma boxes + OpenCV       Pi: web_server/auto_control.py
-                                       (front + wrist cameras)    (30 Hz playback, watchdog, stops)
+task ──> plan_brain.py ──> v2/executor.py (task loop) ──> v2/chains.py ──> v2/actions.py ──> v2/skills.py
+          26B: one plan      check, run, retry,           pick, place in,    approach, land,     find, servo,
+          from 2 frames      fold, replan                 place next to      carry, release...   move, grip
+                                                                                                    │
+                                    arm.py (IK) / robot.py (HTTP) ──> Pi: web_server/auto_control.py
+                                                                      (30 Hz playback, watchdog, stops)
 ```
 
-## Pick and place, start to finish
+The skills have three layers (design doc "v2 skills: three layers"): primitives
+(`v2/skills.py`: find, servo, move, grip), goals (`v2/goals.py`: what "done" looks like in an
+image), and actions and chains (`v2/actions.py`, `v2/chains.py`), which hold no numbers of their
+own. Every number is in `v2/params.py` with its source (CALIB, DEMO, SPEC or RULE) or measured
+into `calib.json` (`v2/geometry.py`). v1 (one tool call per skill, `brain.py`, `skills.py`) was
+retired on 2026-10-28; it is at the git tag `lekiwi-v1-final`.
+
+## A task, start to finish
 
 **1. Power on LeKiwi** and wait ~2 minutes. The Pi starts the `lekiwi-web` service by itself at
-boot (systemd, enabled, restarts on failure); its USB cameras can take up to ~90 s after that to
-deliver frames.
+boot (systemd, restarts on failure); its USB cameras can take up to ~90 s after that to deliver
+frames.
 
 **2. Connect the Mac to the robot**, one of:
 
 - **Ethernet cable** between the Pi and the Mac's USB LAN adapter (`en7`): fixed addresses (Mac
   `10.55.0.1`, Pi `10.55.0.102`), nothing to set up. The fastest and steadiest link (~17 ms).
 - **The robot's own Wi-Fi hotspot `LeKiwi-RoboNet`**: join it from the Mac's Wi-Fi; the Pi is at
-  `10.42.0.1`. A direct link, but the Mac has no internet while on it (Ollama runs locally, so
-  the brain doesn't need any). Its password is in the Pi's network profile:
+  `10.42.0.1`. The Mac has no internet while on it (the models run locally). Its password:
   `ssh lekiwi 'sudo nmcli -s -g 802-11-wireless-security.psk con show LeKiwi-RoboNet'`.
 
-The scripts find the robot on whichever link is up (they try `10.55.0.102`, `10.42.0.1`, then
-`raspberrypi.local`). A shared office/home Wi-Fi is not recommended for driving: on LatentSpace
-(Oct 24) replies took 0.2-1.5 s, and the Pi stops any motion that goes 0.6 s without the Mac's
-heartbeat. Check the link:
+The scripts find the robot on whichever link is up (`10.55.0.102`, `10.42.0.1`, then
+`raspberrypi.local`). A shared office/home Wi-Fi is not recommended: replies took 0.2-1.5 s
+(Oct 24), and the Pi stops any motion that goes too long without the Mac's heartbeat. Check the
+link: `curl -s -m 3 http://10.55.0.102:8000/auto/status | head -c 120; echo` should print
+`{"mode":"gamepad",...`; if not, `ssh lekiwi 'systemctl status lekiwi-web'`.
+
+**3. Start the two model servers** (llama.cpp, `brew install llama.cpp`; GGUFs in
+`~/models/gguf`), each in its own terminal; together they need ~22 GB, so close big apps:
 
 ```bash
-curl -s -m 3 http://10.42.0.1:8000/auto/status | head -c 120; echo    # or 10.55.0.102 on the cable
+llama-server -m ~/models/gguf/gemma-4-26B_gemma-4-26B-A4B-it-UD-Q4_K_M.gguf \
+  --mmproj ~/models/gguf/gemma-4-26B_mmproj-F16.gguf --alias gemma4-26b --port 8081 \
+  -ngl 99 --jinja -np 1 -c 4096 --swa-full --cache-ram 0 --image-min-tokens 70 --image-max-tokens 70
+llama-server -m ~/models/gguf/gemma-4-E2B_gemma-4-E2B-it-Q4_K_M.gguf \
+  --mmproj ~/models/gguf/gemma-4-E2B_mmproj-F16.gguf --alias gemma4-e2b --port 8082 \
+  -ngl 99 --jinja -np 1 -c 4096 --swa-full --cache-ram 0 --image-min-tokens 70 --image-max-tokens 70
 ```
 
-It should print `{"mode":"gamepad",...`. If not: `ssh lekiwi 'systemctl status lekiwi-web'`.
+26B plans and boxes objects it hasn't seen yet; E2B answers the repeat looks at an object
+already found (its box must have the object's colour, else 26B is asked).
 
-**3. Start Ollama** on the Mac, in its own terminal window (leave it running):
+**4. Set the scene.** The robot on the floor with room to turn and drive; the brick on the floor;
+for a place, the cup or the other brick nearby. Keep the gamepad at hand: any stick input or the
+RB e-stop takes control away at once.
 
-```bash
-ollama serve
-```
-
-(Or run `brew services start ollama` once, and it starts at every login from then on.)
-
-**4. Check the model is there and load it** (the first load takes a few seconds; the brain
-would also load it on its first call):
-
-```bash
-ollama list | grep gemma4:e4b          # if missing: ollama pull gemma4:e4b
-ollama run --think=false gemma4:e4b "Reply with OK"   # loads it into memory, prints OK
-```
-
-**5. Set the scene.** The robot on the floor with ~1 m of room to turn and drive; the red brick on
-the floor somewhere it can drive to; the short cup on the floor (here: to its right). Keep the
-gamepad at hand: any stick input or the RB e-stop takes control away from the brain at once.
-
-**6. Run it:**
+**5. Run it:**
 
 ```bash
 cd ~/Work/lerobot/examples/lekiwi/gemma_brain
-.venv/bin/python brain.py "Pick up the red block and drop it into the short cup on your right"
+.venv/bin/python plan_brain.py "put the red block in the paper cup"
+.venv/bin/python plan_brain.py "put the red block next to the green block"
+.venv/bin/python plan_brain.py --plan-only "..."      # plan and check it; nothing moves
 ```
 
-It prints each skill Gemma calls (`>>> pick(object='red block')`) and its result (`<<< OK: ...`),
-and ends with `SUCCESS` or `NOT DONE` and the log folder. The web page's mode bar shows **Auto**
-while it drives.
+It prints the plan, each step (`>>> pick "red block"`) and its result (`<<< OK: done`), and ends
+with `SUCCESS` or `NOT DONE` and the log folder (`runs/<time>-plan/`: every event, frame and
+number). Options: `--holding "green block"` (already in the gripper), `--no-base` (wheels
+locked), `--no-fast` (no E2B), `--robot http://<pi>:8000`.
 
-**7. Stop early:** Ctrl-C in that terminal, any gamepad input, or the gamepad's RB e-stop. The
-robot also stops by itself within 0.6 s if the program dies. After a stop the arm holds where it
-is; the gamepad's B button folds it back to rest.
+**6. Stop early:** Ctrl-C, any gamepad input, or the RB e-stop. After a stop the arm holds where
+it is; the gamepad's B button folds it back to rest.
 
-Options: `--model gemma4:26b` (any Ollama model with vision and tools), `--no-think` (faster
-planning, worse recovery from a failed step), `--robot http://<pi>:8000`. Every turn, frame and
-number is logged under `runs/<timestamp>-brain/`.
+## What a task can say
 
-First-time setup of this folder's venv (already done on this Mac):
-`python3 -m venv .venv && .venv/bin/pip install numpy opencv-python-headless`.
+The planner writes `pick "x"` and `place "x" in|next_to "y"`; the plan is checked before
+anything moves.
 
-## Run
-
-```bash
-cd examples/lekiwi/gemma_brain
-.venv/bin/python brain.py "Pick up the red block and drop it into the short cup on your right"
-```
-
-Options: `--model gemma4:26b` (any Ollama vision+tools model), `--no-think` (faster planning,
-worse recovery), `--robot http://<pi>:8000` (default: found automatically), `--no-turn-scan`
-(scan never turns the robot: overhead camera if attached, else one look straight ahead; if that
-finds none of the objects, the run reports it and stops), `--scan-sweep 60` (scan turns from -60° to
-+60° in 30° stops instead of a full circle), `--no-base` (wheels locked; arm-only
-pick and place within reach), `--holding "green block"` (already in the gripper at start). Every turn, frame and number is logged under
-`runs/<timestamp>-brain/`.
-
-**Stopping:** Ctrl-C here, any gamepad input, or the gamepad's e-stop (RB). The robot also stops
-by itself within 0.6 s if this program stops talking to it.
-
-First-time setup of the Mac venv: `python3 -m venv .venv && .venv/bin/pip install numpy opencv-python-headless`.
-
-## Skills Gemma can call
-
-| Skill | What it does |
+| Step | Chain |
 |---|---|
-| `scan(objects)` | find every listed object: from the **overhead camera** if one is attached and sees the whole robot, else by turning a full circle in 30° stops; candidates checked by a multiple-choice crop question to E4B |
-| `approach(object)` | face the best scan candidate, drive until it's in arm reach (front camera), confirm it with the wrist camera; on a wrong candidate, try the next |
-| `pick(object)` | approach, line the base up (wrist camera), roll the wrist (within ±90°) so the jaws close on the brick's long faces, centre at 10/(6)/3/1.5 cm, find the floor by touch (one descent the Pi stops itself on contact, so no stored floor height is needed), check about half the brick sticks out past the jaw tips, close, lift and check it's held |
-| `place_in(container)` | gripper 3 cm above the rim, line up over the opening (arm, then base), open gently, check the object landed inside |
-| `place_next_to(object)` | set the held object down on the floor 5 cm beside another object (line up over it with the wrist camera, shift sideways, lower until the held object meets the floor, open), then check the other object didn't move |
-| `reset_arm()` | fold to rest: one joint move when that sweep clears the floor and the robot body, else lift and go via "ready" |
-| `finish(success, summary)` | stop |
+| `pick "x"` | look around until the front camera finds it, drive it to the reach point, hover, line the base up, roll the wrist to the brick's long side, centre at 10 cm then 3 cm, land on the floor, close, lift (3 tries) |
+| `place "x" in "y"` | carry at the hover height, approach the container, measure its height side-on, centre over it from one wrist look, lower to the demo's release height, open |
+| `place "x" next_to "y"` | carry, approach, line up beside it at 10 cm and 3 cm, land, open |
 
-## Overhead camera (optional)
+A failed step folds the arm and the planner replans from what's done and why it failed.
 
-A USB camera on the Mac looking roughly straight down at the floor makes `scan` faster
-and more reliable than turning the robot around. It needs no calibration: each scan finds the
-robot, backs it up 10 cm on its odometry, and finds it again; that move gives the robot's
-heading and the scale (m per pixel) in the image. Moving or re-aiming the camera between scans
-is fine. Requirements: the camera roughly straight down, the robot fully in its view with
-~10 cm free behind it, and camera access granted to the terminal app (System Settings ->
-Privacy & Security -> Camera). Without the camera, or if it can't see the whole robot, `scan`
-falls back to the 360° turn by itself.
-
-## Arm-only pick (base locked)
-
-When the robot must not drive (e.g. tethered to power), `pick_here.py` picks a brick within the
-arm's reach in front of it, with every wheel command refused in the client:
+## Robot runs without the planner
 
 ```bash
-.venv/bin/python pick_here.py "green Lego brick"     # the brick ~15-25 cm in front of the arm
+.venv/bin/python run_v2.py pick                 # the pick chain on the red block (approach first)
+.venv/bin/python run_v2.py place-in "red block" --to "paper cup"     # holding the brick
+.venv/bin/python run_v2.py trials --n 5         # 5 driven picks: pick, put back, back up 40 cm, repeat
+.venv/bin/python run_v2.py land                 # hover at the reach point, land, back up
 ```
 
-It prints the time of each phase. On Oct 24: 50.6 s and 53.0 s (was ~165 s for the same steps),
-about two thirds of it Gemma looking (~2.2 s per box) and ~14 s arm motion.
+## Calibrations (calib.json, this robot)
 
-## After moving the front camera
+| What | Script | When |
+|---|---|---|
+| floor height | `calibrate_floor.py` | new floor or arm calibration |
+| wrist image Jacobian | `wrist_calib.py` | wrist camera moved |
+| descent (camera above the jaw tips) | `calibrate_descent.py` (from pick logs) | wrist camera moved |
+| jaw geometry | `calibrate_jaws.py` | gripper or wrist camera changed |
+| front camera (turn, range, reach row) | `calibrate_front.py`: one brick 0.6-1 m ahead, clear floor | front camera moved |
+| grasp target | `teach_grasp.py` (the owner's midpoint teach) | gripper or wrist camera changed |
+| demo values (open width, lift, release, place view) | `demo_extract.py` on a teleop demo | new demo |
 
-`scan` and `approach` depend on where the front camera sits (which image row is the floor,
-when a brick is in reach, how far a turn moves it). After moving it, put one brick 0.6-1 m
-straight ahead with clear floor up to it and run `.venv/bin/python calibrate_front.py "red
-Lego brick"`: it turns a little, drives at the brick, lines it up under the arm with the
-wrist camera, fits the geometry and saves it in `calib.json` (`front_camera`), only if the
-fit is good. The scan also checks a box's colour against the colour word in the request.
+The arm's joint angles are (ticks - 2047) x 2pi/4096 from the homing tick (fixed Oct 27).
 
-## Other scripts
+## Tests
 
-`fetch_test.py` (one scripted drive-and-pick), `grasp_test.py` (pick from in front),
-`calibrate_floor.py`, `wrist_calib.py` (the robot's calibrations in `calib.json`), `overhead.py` (overhead camera),
-`test_arm.py` and `../web_server/test_auto_control.py` (offline tests).
+```bash
+uv run pytest test_*.py          # offline: geometry, servo sims, chains, the task loop, vision
+```
 
-## Known limits (2026-10-24)
+Scripts that move the robot are never named `*_test.py` (pytest would run them);
+`runs/` and `demos/` are not collected.
 
-- Few trials so far: drive-and-pick and pick-and-place work, several picks in a row on red
-  and green bricks; arm-only picks 2/2. Small samples, not a success rate.
-- Gemma's yes/no answers about these objects are unreliable; presence and success are
-  checked geometrically instead (box position, the gripper's stall, image motion).
-- The grasp is brick-specific (taught target pixel, 2x4 dimensions, long-face grip); the wrist
-  camera calibration (`calib.json`) is for this robot. The floor height no longer needs
-  calibrating for a new floor: the pick finds it by touch.
-- The Pi's power supply sags under load (under-voltage, CPU throttled to 600 MHz): slower, and
-  USB devices can drop. Give the Pi a solid 5.1 V / 3 A supply.
+## Known limits (2026-10-28)
+
+- Driven picks 5/5 in the last four batches (63-69 s each); the cup and next-to tasks work end
+  to end (cup: 67.5 s). Small samples, not success rates.
+- Place relations other than "in" and "next to" are run as "next to".
+- The fast model's box at 3 cm sometimes changes height between looks and the servo chases it.
+- The arm has 2-3 mm of play in its reach; servo steps correct it from the encoders.
+- The Pi's power supply sags under load; give it a solid 5.1 V / 3 A supply.
