@@ -188,6 +188,10 @@ def snap_box(jpeg: bytes, box, min_chroma: float = 25.0, what: str = "") -> tupl
 
 
 # OpenCV hue (0-180) ranges of the colour words a goal can use for an object.
+# A pixel is strongly coloured above this saturation (not the floor's grey-brown); a colour
+# needs this many such pixels to tell.
+STRONG_SAT = 80
+MIN_COLOUR_PIXELS = 15
 HUES = {"red": [(0, 10), (165, 180)], "pink": [(150, 175)], "orange": [(10, 20)], "yellow": [(18, 30)],
         "green": [(30, 90)], "blue": [(95, 130)], "purple": [(130, 150)]}
 
@@ -207,11 +211,27 @@ def colour_matches(jpeg: bytes, box, what: str) -> tuple[bool, str]:
     return _hue_matches(cv2.cvtColor(roi, cv2.COLOR_BGR2HSV).reshape(-1, 3), words)
 
 
+def colour_pixels(jpeg: bytes, box, what: str) -> int | None:
+    """How many strongly coloured pixels in the box have the colour `what` names; None with no
+    colour word. Counted, not a median: over a cup the gripper's blue jaws share the box with
+    a red brick inside (Oct 28 wrist frames) and would outvote it."""
+    words = [w for w in HUES if w in what.lower()]
+    if not words:
+        return None
+    img = cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_COLOR)
+    h, w = img.shape[:2]
+    x0, y0, x1, y1 = box
+    roi = img[int(y0 * h) : max(int(y0 * h) + 1, int(y1 * h)), int(x0 * w) : max(int(x0 * w) + 1, int(x1 * w))]
+    hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV).reshape(-1, 3)
+    hue = hsv[:, 0][hsv[:, 1] > STRONG_SAT]
+    return int(sum(((lo <= hue) & (hue <= hi)).sum() for word in words for lo, hi in HUES[word]))
+
+
 def _hue_matches(hsv: np.ndarray, words: list[str]) -> tuple[bool, str]:
     """Is the median hue of these HSV pixels' strongly coloured ones (N x 3) one of `words`'
     colours? Too few coloured pixels to tell passes."""
-    sat = hsv[:, 1] > 80
-    if sat.sum() < 15:
+    sat = hsv[:, 1] > STRONG_SAT
+    if sat.sum() < MIN_COLOUR_PIXELS:
         return True, "too few coloured pixels to tell"
     hue = float(np.median(hsv[:, 0][sat]))
     # Red wraps around 0/180: take the median on the circle near 0 when most pixels are red.

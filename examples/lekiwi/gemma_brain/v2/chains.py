@@ -19,9 +19,9 @@ which, so the executor can retry or replan.
     pick "x":  approach -> hover -> line_up -> align -> servo(JawGoal) at the hover height ->
                down to the final look height -> servo(JawGoal) -> land -> grip(close) -> lift
     place "x" in "y":       carry (held at the hover height) -> approach y -> hover at the demo's place height -> over y (base,
-               then arm) -> lower to the demo's release height -> release -> back up
+               then arm) -> lower to the demo's release height -> release -> back up -> check it's inside
     place "x" next_to "y":  approach y -> hover -> beside y (base, then arm) -> down to the
-               final look height -> beside y again -> land -> release -> back up
+               final look height -> beside y again -> land -> release -> back up -> check it's beside
 """
 
 from __future__ import annotations
@@ -77,6 +77,7 @@ def place_in(sk: Skills2, obj: str, container: str, drive: bool = True) -> Resul
         ("lower", lambda: actions.lower_to_release(sk)),
         ("release", lambda: actions.release(sk)),
         ("up", lambda: actions.hover_at(sk, prm.PLACE_HOVER_M)),
+        ("check", lambda: actions.check_in(sk, obj, container)),
     ]
     return run(steps)
 
@@ -94,5 +95,6 @@ def place_next_to(sk: Skills2, obj: str, ref: str, drive: bool = True) -> Result
         ("land", lambda: actions.land(sk)),
         ("release", lambda: actions.release(sk)),
         ("up", lambda: actions.hover_at(sk, prm.HOVER_HEIGHT_M)),
+        ("check", lambda: actions.check_beside(sk, obj, ref)),
     ]
     return run(steps)

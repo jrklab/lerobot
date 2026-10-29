@@ -194,6 +194,24 @@ def round_centre(box) -> np.ndarray:
     return np.array([(x0 + x1) / 2, y0 + (x1 - x0) * IMAGE_PX[0] / IMAGE_PX[1] / 2])
 
 
+def opening_box(box) -> list:
+    """The square around a round container's opening: the box's width, from its far edge (box
+    top) down by the same width (see round_centre), inside the frame."""
+    x0, y0, x1, _ = box
+    return [x0, y0, x1, min(y0 + (x1 - x0) * IMAGE_PX[0] / IMAGE_PX[1], 1.0)]  # convention: the frame's bottom
+
+
+def placed_beside(held, ref) -> bool:
+    """A released object beside the reference the way BesideGoal set it down: the reference's
+    right edge left of the object by the intended gap (NEXT_GAP_FRACTION of the object's width),
+    give or take that much again, and their middles level within half the object's height."""
+    w = held[2] - held[0]
+    gap = held[0] - ref[2]
+    intended = prm.NEXT_GAP_FRACTION.value * w
+    level = abs((held[1] + held[3]) - (ref[1] + ref[3])) / 2 <= (held[3] - held[1]) / 2  # convention: half its height
+    return abs(gap - intended) <= intended and level
+
+
 class AboveGoal:
     """A container's opening centre (round_centre) on the spot the owner's demo had it at the
     pause above it, seen from the same height (PLACE_HOVER_M): image to image, no depth model."""

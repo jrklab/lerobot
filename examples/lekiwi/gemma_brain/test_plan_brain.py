@@ -281,6 +281,20 @@ def test_released_then_failed_counts_as_placed(world):
     assert planner.replans == [] and world.calls.count("pick red block") == 1, world.calls
 
 
+def test_a_place_the_check_finds_wrong_is_replanned_not_counted(world, monkeypatch):
+    # Released, then the look found it outside the cup: a failed step, not "placed, unverified".
+    def missed(sk, what, target, drive=True):
+        world.calls.append(f"place {what} in {target}")
+        sk.gripped = False
+        return Result(False, f"check: the {what} is not inside the {target}", {"failed": "check"})
+
+    monkeypatch.setattr(chains, "place_in", missed)
+    planner = FakePlanner('pick "red block"\nplace "red block" in "cup"', 'pick "red block"\ndone')
+    ok, why = brain(planner, FakeSkills()).run("red in cup")
+    assert planner.replans and planner.replans[0][3] is None, planner.replans  # replanned, not holding
+    assert "unverified" not in why
+
+
 def test_fold_goes_via_the_hover(world):
     sk = FakeSkills()
     assert brain(FakePlanner('pick "a"'), sk).fold() == ""

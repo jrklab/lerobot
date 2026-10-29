@@ -192,6 +192,30 @@ def red_frame(box):
     return cv2.imencode(".jpg", img)[1].tobytes()
 
 
+def test_place_checks_count_the_objects_colour_and_measure_the_gap():
+    from v2.goals import opening_box, placed_beside
+    from v2.skills import Result  # noqa: F401
+    from vision import colour_pixels
+
+    # Over the cup the blue jaws share the opening with the red brick (Oct 28 wrist frame):
+    # the brick is counted, not outvoted.
+    img = np.full((480, 640, 3), 230, np.uint8)
+    cv2.rectangle(img, (150, 380), (490, 480), (200, 40, 30), -1)  # the blue jaws, big
+    cv2.rectangle(img, (290, 300), (350, 360), (30, 30, 220), -1)  # the red brick, small
+    with_brick = cv2.imencode(".jpg", img)[1].tobytes()
+    img[300:361, 290:351] = 230
+    empty = cv2.imencode(".jpg", img)[1].tobytes()
+    ob = opening_box([0.2, 0.12, 0.84, 0.9])
+    assert colour_pixels(with_brick, ob, "red block") > 1000 and colour_pixels(empty, ob, "red block") < 15
+    assert colour_pixels(empty, ob, "block") is None  # no colour word: can't tell
+    # Beside: the reference's right edge left of the object by about half its width.
+    held = [0.45, 0.5, 0.55, 0.7]
+    assert placed_beside(held, [0.30, 0.52, 0.40, 0.72])  # gap 0.05 = intended
+    assert not placed_beside(held, [0.40, 0.52, 0.50, 0.72])  # overlapping
+    assert not placed_beside(held, [0.10, 0.52, 0.20, 0.72])  # far off
+    assert not placed_beside(held, [0.30, 0.80, 0.40, 1.0])  # not level
+
+
 class FrameRobot:
     def __init__(self, jpeg):
         self.jpeg = jpeg
@@ -503,6 +527,7 @@ def _chain_sk(calls, held=True):
     sk.move = lambda part, **k: (calls.append("move"), Result(True))[1]
     sk.grip = lambda how, **k: (calls.append(how), Result(True))[1]
     sk.held = lambda: held
+    sk.log, sk.find = None, lambda *a, **k: None  # the place check sees nothing: passes, unchecked
     return sk
 
 

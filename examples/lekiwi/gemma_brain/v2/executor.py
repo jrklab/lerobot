@@ -199,7 +199,8 @@ class PlanBrain:
             self.near_target = s.verb == "place"
             self.log.ev("step_result", step=str(s), ok=r.ok, reason=r.reason, holding=self.holding)
             print(f"<<< {'OK' if r.ok else 'FAILED'}: {r.reason or 'done'}")
-            if not r.ok and s.verb == "place" and held_before == s.obj and self.holding is None:
+            checked_wrong = r.data.get("failed") == "check"  # released, and a look found it misplaced
+            if not r.ok and s.verb == "place" and held_before == s.obj and self.holding is None and not checked_wrong:
                 # The gripper opened over the target, then something after it failed (Oct 26:
                 # the retreat from the cup). Placed, not verified: replanning would pick it again.
                 self.log.ev("place_unverified", step=str(s), reason=r.reason)

@@ -19,6 +19,7 @@ params.py or geometry.py one, so a new action adds a name, not a parameter to ca
 from __future__ import annotations
 
 import numpy as np
+from vision import MIN_COLOUR_PIXELS, colour_pixels
 
 from v2 import params as prm
 from v2.geometry import (
@@ -29,7 +30,15 @@ from v2.geometry import (
     view_half_width,
     wrap_deg,
 )
-from v2.goals import AngleGoal, BesideGoal, FrontApproachGoal, ReachGoal, round_centre
+from v2.goals import (
+    AngleGoal,
+    BesideGoal,
+    FrontApproachGoal,
+    ReachGoal,
+    opening_box,
+    placed_beside,
+    round_centre,
+)
 from v2.params import Param
 from v2.skills import Result, Skills2
 
@@ -234,6 +243,34 @@ def release(sk: Skills2) -> Result:
         return r
     held = sk.held()
     return Result(not held, "still holding after opening" if held else "", {**r.data, "held": held})
+
+
+def check_in(sk: Skills2, obj: str, container: str) -> Result:
+    """After the release, from the place height: does the container's opening hold enough of
+    the object's colour (vision.colour_pixels: counted, so the gripper's blue jaws in the same
+    region can't outvote it)? Its inside has no strong colour of its own (a paper cup); no
+    model has to box an object half hidden by the rim. Can't see the container, or no colour
+    word in the object's name: passes, unchecked."""
+    det = sk.find(container, "wrist", fast_ok=False)
+    n = None if det is None else colour_pixels(det.jpeg, opening_box(det.box), obj)
+    if n is None:
+        sk.ev("place_check", obj=obj, target=container, checked=False)
+        return Result(True, f"couldn't check the {obj} is in the {container}", {"checked": False})
+    inside = n >= MIN_COLOUR_PIXELS
+    sk.ev("place_check", obj=obj, target=container, checked=True, ok=inside, pixels=n, box=det.box)
+    return Result(inside, "" if inside else f"the {obj} is not inside the {container}", {"checked": True})
+
+
+def check_beside(sk: Skills2, obj: str, ref: str) -> Result:
+    """After the release, from the hover: the object beside the reference with about the
+    intended gap (goals.placed_beside). Can't see both: passes, unchecked."""
+    a, b = sk.find(obj, "wrist", fast_ok=False), sk.find(ref, "wrist", fast_ok=False)
+    if a is None or b is None:
+        sk.ev("place_check", obj=obj, target=ref, checked=False)
+        return Result(True, f"couldn't see both the {obj} and the {ref} to check", {"checked": False})
+    ok = placed_beside(a.box, b.box)
+    sk.ev("place_check", obj=obj, target=ref, checked=True, ok=ok, box=a.box, ref_box=b.box)
+    return Result(ok, "" if ok else f"the {obj} is not beside the {ref}", {"checked": True})
 
 
 def put_down(sk: Skills2) -> Result:
