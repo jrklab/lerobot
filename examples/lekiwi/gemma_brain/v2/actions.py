@@ -249,16 +249,27 @@ def check_in(sk: Skills2, obj: str, container: str) -> Result:
     """After the release, from the place height: does the container's opening hold enough of
     the object's colour (vision.colour_pixels: counted, so the gripper's blue jaws in the same
     region can't outvote it)? Its inside has no strong colour of its own (a paper cup); no
-    model has to box an object half hidden by the rim. Can't see the container, no colour word
-    in the object's name, or a container mostly the object's colour in its side view from the
-    approach (a red cup for a red brick): passes, unchecked."""
+    model has to box an object half hidden by the rim. No container in view but the object on
+    the floor: missed. Can't see either, no colour word in the object's name, or a container
+    mostly the object's colour in its side view from the approach (a red cup for a red brick):
+    passes, unchecked."""
     side = sk.seen.get(f"front:{container}")  # its side view from the approach: nothing in front of it
     if side is not None and mostly_colour(side.jpeg, side.box, obj):
         # Its inside would show the object's colour with or without the object in it.
         sk.ev("place_check", obj=obj, target=container, checked=False, why="same colour")
         return Result(True, f"can't tell: the {container} is the same colour as the {obj}", {"checked": False})
     det = sk.find(container, "wrist", fast_ok=False, rim=True)
-    n = None if det is None else colour_pixels(det.jpeg, opening_box(det.box), obj)
+    if det is None:
+        # The container gone from under the gripper and the object on the floor in view: missed
+        # (Oct 28 miss test: the cup slid out of view, the brick lay plain on the floor, and
+        # "can't see the cup" had passed it).
+        on_floor = sk.find(obj, "wrist", fast_ok=False)
+        sk.ev("place_check", obj=obj, target=container, checked=on_floor is not None, ok=False if on_floor else None,
+              box=None if on_floor is None else on_floor.box)
+        if on_floor is not None:
+            return Result(False, f"the {obj} is on the floor, no {container} under it", {"checked": True})
+        return Result(True, f"couldn't see the {container} or the {obj} to check", {"checked": False})
+    n = colour_pixels(det.jpeg, opening_box(det.box), obj)
     if n is None:
         sk.ev("place_check", obj=obj, target=container, checked=False)
         return Result(True, f"couldn't check the {obj} is in the {container}", {"checked": False})

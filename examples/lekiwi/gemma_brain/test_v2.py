@@ -243,6 +243,26 @@ def test_a_container_the_objects_colour_leaves_the_place_unchecked(monkeypatch):
     assert r.ok and not r.data["checked"] and "same colour" in r.reason and not S.looked
 
 
+def test_no_container_under_the_gripper_but_the_object_on_the_floor_is_a_miss():
+    # Oct 28 miss test: the cup slid out of view; "couldn't see the cup" had passed the place.
+    class S:
+        seen = {}
+
+        def __init__(self, brick_seen):
+            self.brick_seen = brick_seen
+
+        def find(self, obj, cam, fast_ok=True, rim=False, **k):
+            return Detection(box=[0.38, 0.35, 0.52, 0.56]) if (obj == "red block" and self.brick_seen) else None
+
+        def ev(self, *a, **k):
+            pass
+
+    r = actions.check_in(S(True), "red block", "paper cup")
+    assert not r.ok and r.data["checked"] and "on the floor" in r.reason
+    r = actions.check_in(S(False), "red block", "paper cup")
+    assert r.ok and not r.data["checked"]
+
+
 class FrameRobot:
     def __init__(self, jpeg):
         self.jpeg = jpeg
