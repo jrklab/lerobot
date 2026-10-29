@@ -174,6 +174,11 @@ def look_offsets(step_deg: float) -> list[float]:
     return offsets + [180.0]  # convention: facing backwards
 
 
+def wrap_deg(a: float) -> float:
+    """An angle in degrees as the short way round, -180..180."""
+    return (a + 180.0) % 360.0 - 180.0  # convention: a full turn
+
+
 def require_grasp_target(geom: Geometry) -> np.ndarray:
     if geom.grasp_target is None:
         raise MissingCalibrationError("calib.json has no 'wrist_grasp_target': run teach_grasp.py (the owner's midpoint teach)")

@@ -812,6 +812,27 @@ def test_look_around_turns_left_and_right_until_it_finds_the_object():
     assert actions.look_around(w, "red block").ok and w.backs == 1
     steps = look_offsets((1 - prm_.LOOK_OVERLAP.value) / 0.0184)
     assert steps[:2] == [steps[0], -steps[0]] and steps[-1] == 180.0
+    # Nothing there (Oct 28: no brick placed): all the way round, each turn the short way, and
+    # back to the start; the last one asked 343 deg and was refused.
+    w = World(bearing=0.0, near=True)
+    w.find = lambda obj, cam: None
+    assert not actions.look_around(w, "red block").ok
+    assert max(abs(t) for t in w.turns) <= 180.0 and abs((w.heading + 180) % 360 - 180) < 1e-6, w.turns
+
+
+def test_a_base_turn_over_the_pis_limit_goes_in_two():
+    sent = []
+
+    class R:
+        def base(self, dx=0.0, dy=0.0, dtheta_deg=0.0):
+            sent.append(round(dtheta_deg, 2))
+            return {"result": {"moved": [dx, dy, dtheta_deg]}}
+
+    sk = Skills2.__new__(Skills2)
+    sk.robot, sk.log = R(), None
+    assert sk.move("base", roll=-180.0).ok
+    stop = prm.BASE_TURN_STOP_SHORT_DEG.value
+    assert sent == [-90.0 - stop, -90.0 - stop] and all(abs(t) <= prm.BASE_TURN_MAX_DEG.value for t in sent)
 
 
 def test_bring_into_view_moves_towards_the_container_and_stops_if_it_drifts_away():

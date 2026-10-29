@@ -186,7 +186,13 @@ class Skills2:
         # much more, in the same direction, to end where it was meant to.
         if turn is not None:
             turn = float(turn)
-            res = self.robot.base(dtheta_deg=turn + math.copysign(prm.BASE_TURN_STOP_SHORT_DEG.value, turn))
+            short = prm.BASE_TURN_STOP_SHORT_DEG.value
+            if abs(turn) + short > prm.BASE_TURN_MAX_DEG.value:
+                # Over the Pi's one-command limit with the stop-short added: two halves (Oct 28:
+                # a look-around's turn back from facing backwards was refused).
+                first = self._move_base(None, turn / 2)
+                return self._move_base(None, turn / 2) if first.ok else first
+            res = self.robot.base(dtheta_deg=turn + math.copysign(short, turn))
         else:
             d = np.asarray(delta, float)
             n = float(np.linalg.norm(d))

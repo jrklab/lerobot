@@ -21,7 +21,14 @@ from __future__ import annotations
 import numpy as np
 
 from v2 import params as prm
-from v2.geometry import front_object_height, grasp_spot, locate_from_one_view, look_offsets, view_half_width
+from v2.geometry import (
+    front_object_height,
+    grasp_spot,
+    locate_from_one_view,
+    look_offsets,
+    view_half_width,
+    wrap_deg,
+)
 from v2.goals import AngleGoal, BesideGoal, FrontApproachGoal, ReachGoal, round_centre
 from v2.params import Param
 from v2.skills import Result, Skills2
@@ -83,7 +90,9 @@ def look_around(sk: Skills2, obj: str) -> Result:
                 return Result(True, data={"turned": 0.0, "backed": True})
         at = 0.0
         for off in look_offsets(step):
-            r = sk.move("base", roll=off - at)
+            # The short way round: from 163 deg right to facing backwards is 17 deg, not 343
+            # (Oct 28: asked for 343 and refused).
+            r = sk.move("base", roll=wrap_deg(off - at))
             if not r.ok:
                 return r
             at = off
