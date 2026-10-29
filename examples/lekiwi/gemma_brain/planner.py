@@ -31,7 +31,8 @@ STEPS_HELP = """Steps:
 pick <obj>
 place <obj> <rel> <obj>      rel: in on next_to left_of right_of front_of behind
 push <obj> toward <obj>
-<obj> is a short quoted noun phrase naming one thing, with its colour when the task gives one."""
+<obj> is a short quoted noun phrase naming one thing with its colour: the task's colour when it
+gives one, else the colour you see in the images (the robot finds objects by these names)."""
 
 PLAN_SYSTEM = f"""You control a mobile robot arm. Image 1: front camera. Image 2: wrist camera.
 Turn the task into steps, one per line, then done. Start from what the gripper holds now:
@@ -39,6 +40,10 @@ an object already held needs no pick. {STEPS_HELP}
 Example. Task: put the yellow block on top of the blue block
 pick "yellow block"
 place "yellow block" on "blue block"
+done
+Example. Task: put the yellow block in the bowl (the images show an orange bowl)
+pick "yellow block"
+place "yellow block" in "orange bowl"
 done"""
 
 REPLAN_SYSTEM = f"""You control a mobile robot arm. Image 1: front camera. Image 2: wrist camera.

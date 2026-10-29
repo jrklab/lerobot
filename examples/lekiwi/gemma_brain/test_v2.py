@@ -182,6 +182,7 @@ class FakeModel:
         from gemma import Answer
 
         self.calls += 1
+        self.asked = what
         return Answer(text="", value=self.boxes.pop(0) if self.boxes else None)
 
 
@@ -213,6 +214,33 @@ def test_place_checks_count_the_objects_colour_and_measure_the_gap():
     assert not placed_beside(held, [0.40, 0.52, 0.50, 0.72])  # overlapping
     assert not placed_beside(held, [0.10, 0.52, 0.20, 0.72])  # far off
     assert not placed_beside(held, [0.30, 0.80, 0.40, 1.0])  # not level
+
+
+def test_a_container_the_objects_colour_leaves_the_place_unchecked(monkeypatch):
+    # A white cup with red print is not "red" (Oct 28: up to 9% red); a red cup is, and its
+    # inside would show red with or without the brick.
+    from vision import mostly_colour
+
+    img = np.full((480, 640, 3), 235, np.uint8)
+    cv2.rectangle(img, (300, 200), (330, 215), (30, 30, 220), -1)  # a little red print
+    white_cup = cv2.imencode(".jpg", img)[1].tobytes()
+    cv2.rectangle(img, (260, 160), (460, 300), (30, 30, 220), -1)
+    red_cup = cv2.imencode(".jpg", img)[1].tobytes()
+    box = [0.4, 0.33, 0.72, 0.63]
+    assert not mostly_colour(white_cup, box, "red block") and mostly_colour(red_cup, box, "red block")
+
+    class S:
+        seen = {"front:paper cup": Detection(box=box, jpeg=red_cup)}
+        looked = False
+
+        def find(self, *a, **k):
+            S.looked = True
+
+        def ev(self, *a, **k):
+            pass
+
+    r = actions.check_in(S(), "red block", "paper cup")
+    assert r.ok and not r.data["checked"] and "same colour" in r.reason and not S.looked
 
 
 class FrameRobot:
@@ -344,6 +372,21 @@ def test_carry_holds_at_the_hover_without_folding():
             return Result(True)
 
     assert actions.carry(S()).ok and calls == [("arm", prm.HOVER_HEIGHT_M.value)]
+
+
+def test_container_looks_ask_for_its_rim(monkeypatch):
+    # Oct 28 replay: "the rim of the paper cup" boxed it in 55 of 55 wrist frames, "the paper cup
+    # on the floor" missed all 6 with the cup's middle under the held brick.
+    import v2.skills as skills_v2
+
+    monkeypatch.setattr(skills_v2.time, "sleep", lambda s: None)
+    box = [0.2, 0.3, 0.8, 0.95]
+    main = FakeModel([box, box])
+    sk = finder(red_frame(box), main, None)
+    sk.find("paper cup", "wrist", fast_ok=False, rim=True)
+    assert main.asked == "the rim of the paper cup"
+    sk.find("red block", "wrist")
+    assert main.asked == "the red block on the floor"
 
 
 class SimServo:
@@ -526,7 +569,7 @@ def _chain_sk(calls, held=True):
     sk.move = lambda part, **k: (calls.append("move"), Result(True))[1]
     sk.grip = lambda how, **k: (calls.append(how), Result(True))[1]
     sk.held = lambda: held
-    sk.log, sk.find = None, lambda *a, **k: None  # the place check sees nothing: passes, unchecked
+    sk.log, sk.find, sk.seen = None, lambda *a, **k: None, {}  # the place check sees nothing: passes, unchecked
     return sk
 
 
@@ -871,7 +914,7 @@ def test_over_container_uses_the_look_that_brought_it_into_view(monkeypatch):
         def height(self):
             return 0.106
 
-        def find(self, obj, cam, angle=False, fast_ok=True):
+        def find(self, obj, cam, angle=False, fast_ok=True, **kw):
             return looks.pop(0) if looks else None  # one box, then nothing
 
         def move(self, part, delta=None, **kw):
@@ -901,7 +944,7 @@ def test_bring_into_view_moves_towards_the_container_and_stops_if_it_drifts_away
         def height(self):
             return 0.106
 
-        def find(self, obj, cam, angle=False, fast_ok=True):
+        def find(self, obj, cam, angle=False, fast_ok=True, **kw):
             u, v = self.c
             return Detection(box=[u - 0.3, v - 0.33, u + 0.3, v + 0.33])
 

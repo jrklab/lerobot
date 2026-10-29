@@ -19,7 +19,7 @@ params.py or geometry.py one, so a new action adds a name, not a parameter to ca
 from __future__ import annotations
 
 import numpy as np
-from vision import MIN_COLOUR_PIXELS, colour_pixels
+from vision import MIN_COLOUR_PIXELS, colour_pixels, mostly_colour
 
 from v2 import params as prm
 from v2.geometry import (
@@ -168,7 +168,7 @@ def bring_into_view(sk: Skills2, container: str) -> Result:
     for _ in range(int(prm.SERVO_MAX_LOOKS.value)):
         # One more look before giving up: the main model sometimes returns no box for a cup
         # close up that is plainly there (Oct 28, first full task: failed the step).
-        det = sk.find(container, "wrist", fast_ok=False) or sk.find(container, "wrist", fast_ok=False)
+        det = sk.find(container, "wrist", fast_ok=False, rim=True) or sk.find(container, "wrist", fast_ok=False, rim=True)
         if det is None:
             return Result(False, f"no {container} in the wrist camera")
         x0, y0, x1, y1 = det.box
@@ -249,9 +249,15 @@ def check_in(sk: Skills2, obj: str, container: str) -> Result:
     """After the release, from the place height: does the container's opening hold enough of
     the object's colour (vision.colour_pixels: counted, so the gripper's blue jaws in the same
     region can't outvote it)? Its inside has no strong colour of its own (a paper cup); no
-    model has to box an object half hidden by the rim. Can't see the container, or no colour
-    word in the object's name: passes, unchecked."""
-    det = sk.find(container, "wrist", fast_ok=False)
+    model has to box an object half hidden by the rim. Can't see the container, no colour word
+    in the object's name, or a container mostly the object's colour in its side view from the
+    approach (a red cup for a red brick): passes, unchecked."""
+    side = sk.seen.get(f"front:{container}")  # its side view from the approach: nothing in front of it
+    if side is not None and mostly_colour(side.jpeg, side.box, obj):
+        # Its inside would show the object's colour with or without the object in it.
+        sk.ev("place_check", obj=obj, target=container, checked=False, why="same colour")
+        return Result(True, f"can't tell: the {container} is the same colour as the {obj}", {"checked": False})
+    det = sk.find(container, "wrist", fast_ok=False, rim=True)
     n = None if det is None else colour_pixels(det.jpeg, opening_box(det.box), obj)
     if n is None:
         sk.ev("place_check", obj=obj, target=container, checked=False)

@@ -319,7 +319,8 @@ class Skills2:
             self.log.frame(f"{cam}_{tag}", jpeg)
         return jpeg
 
-    def find(self, obj: str, cam: str = "wrist", angle: bool = False, fast_ok: bool = True) -> Detection | None:
+    def find(self, obj: str, cam: str = "wrist", angle: bool = False, fast_ok: bool = True,
+             rim: bool = False) -> Detection | None:
         """The object's box in a fresh `cam` frame, or None. Tracking an object already seen
         in this camera, the fast model answers first; its box must have the object's colour
         (E2B boxes something even when nothing is there), else the main model is asked. The
@@ -327,7 +328,11 @@ class Skills2:
         jpeg = self.frame(cam)
         if jpeg is None:
             return None
-        prompt = f"the {obj} on the floor"
+        # rim: a container seen from above, close: "the rim of the paper cup" found it in 55 of 55
+        # saved wrist frames, "the paper cup on the floor" in 49, none of the 6 where its middle was
+        # under the held brick and the jaws (Oct 28 replay); the boxes differ only below the rim,
+        # which nothing uses (round_centre, opening_box and the in-view test use its top and sides).
+        prompt = f"the rim of the {obj}" if rim else f"the {obj} on the floor"
         tracked = self.seen.get(f"{cam}:{obj}")
         a, by = None, ""
         if tracked is not None and self.fast is not None and fast_ok:
