@@ -326,7 +326,10 @@ class Skills2:
                 return Result(False, f"the {obj}'s angle couldn't be measured", {"looks": k + 1, "box": det.box})
             err = goal.error(det, self)
             done = goal.done(err, self)
-            self.ev("servo", obj=obj, goal=goal.__class__.__name__, k=k, err=[round(float(e), 4) for e in err], done=done)
+            # Commanded and measured TCP at the look: at 3 cm the first move overshot ~3 mm and the
+            # reversal after it barely moved (Oct 28), hysteresis the encoders may or may not see.
+            self.ev("servo", obj=obj, goal=goal.__class__.__name__, k=k, err=[round(float(e), 4) for e in err], done=done,
+                    tcp_cmd=[round(float(v), 4) for v in self.cmd_tcp()], tcp_meas=[round(float(v), 4) for v in self.tcp()])
             if done:
                 return Result(True, data={"looks": k + 1, "err": err.tolist()})
             step = goal.step(err, self)

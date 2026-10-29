@@ -282,6 +282,11 @@ class SimServo:
     def height(self):
         return self.h
 
+    def tcp(self):  # servo() logs the TCP at each look
+        return np.zeros(3)
+
+    cmd_tcp = tcp
+
     def find(self, obj, cam, angle=False):
         u, v = self.point
         return Detection(box=[u - 0.08, v - 0.1, u, v + 0.1])
@@ -484,6 +489,11 @@ def test_above_goal_converges_on_a_container(monkeypatch):
 
         def height(self):
             return self.h
+
+        def tcp(self):  # servo() logs the TCP at each look
+            return np.zeros(3)
+
+        cmd_tcp = tcp
 
         def find(self, obj, cam, angle=False):
             u, v = self.centre
