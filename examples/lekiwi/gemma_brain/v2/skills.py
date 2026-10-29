@@ -117,7 +117,20 @@ class Skills2:
         # The Pi's floor guard applies to the jaw tips, JAW_TIP_OFFSET_M below the TCP: a move whose
         # tips start or end within the free-move clearance gets its own guard just under it (a lift
         # from the floor was refused by the default one, which sits above its start: Oct 27 teach).
-        low = min(goal[2], p[2]) - floor < FLOOR_CLEARANCE_M + JAW_TIP_OFFSET_M
+        clear = FLOOR_CLEARANCE_M + JAW_TIP_OFFSET_M
+        h_from, h_to = p[2] - self.geom.floor(p[0], p[1]), goal[2] - floor
+        low = min(h_from, h_to) < clear
+        if low and not until_contact and speed is None and max(h_from, h_to) > clear:
+            # Only the part below the clearance at the near speed: a 13 cm lift from the floor
+            # took 13 s, a 10 -> 3 cm descent 7 s, all at 1 cm/s (Oct 28 trials).
+            mid = p + (goal - p) * (clear - h_from) / (h_to - h_from)
+            down = h_to < h_from
+            r = self.move("arm", delta=tuple(mid - p), roll=roll,
+                          speed=prm.FREE_SPEED_MPS.value if down else prm.NEAR_SPEED_MPS.value)
+            if not r.ok:
+                return r
+            return self.move("arm", delta=tuple(goal - self.cmd_tcp()), roll=roll,
+                             speed=prm.NEAR_SPEED_MPS.value if down else prm.FREE_SPEED_MPS.value)
         speed = speed or (prm.NEAR_SPEED_MPS.value if low else prm.FREE_SPEED_MPS.value)
         search = prm.LAND_SEARCH_M.value if until_contact else 0.0
         # Low and contact-stop moves get a guard just under them; the Pi checks the jaw tips, so

@@ -446,6 +446,34 @@ def test_lift_right_after_landing_is_allowed():
     assert sk.tcp()[2] > before + prm.LIFT_M.value - 0.01
 
 
+def test_a_move_crossing_the_clearance_goes_at_the_near_speed_only_below_it():
+    # Oct 28 trials: a 13 cm lift from the floor took 13 s at the near speed all the way.
+    from arm import FLOOR_CLEARANCE_M, JAW_TIP_OFFSET_M
+
+    sim, sk = skills_over(real_floor_tcp_z=-0.12, predicted=-0.12)
+    assert actions.land(sk).ok
+    sent = []
+    orig = sk.arm.robot.trajectory
+
+    def spy(wps, durs, z_min=None, contact_stop=False):
+        sent.append((sk.height(), sum(durs)))
+        return orig(wps, durs, z_min, contact_stop)
+
+    sk.arm.robot.trajectory = spy
+    assert sk.move("arm", delta=(0.0, 0.0, prm.LIFT_M.value)).ok
+    clear = FLOOR_CLEARANCE_M + JAW_TIP_OFFSET_M
+    assert len(sent) == 2 and sent[0][0] < clear  # the near part first, from the floor
+    near_s = (clear - prm.GRASP_LIFT_M.value) / prm.NEAR_SPEED_MPS.value
+    free_s = (prm.GRASP_LIFT_M.value + prm.LIFT_M.value - clear) / prm.FREE_SPEED_MPS.value
+    assert abs(sent[0][1] - near_s) < 0.5 and abs(sent[1][1] - free_s) < 0.5
+    assert abs(sk.height() - (prm.GRASP_LIFT_M.value + prm.LIFT_M.value)) < 0.005
+    sent.clear()
+    h0 = sk.height()
+    assert sk.move("arm", height=prm.FINAL_LOOK_HEIGHT_M.value).ok  # down: free first, then near
+    assert abs(sent[0][1] - (h0 - clear) / prm.FREE_SPEED_MPS.value) < 0.5
+    assert abs(sk.height() - prm.FINAL_LOOK_HEIGHT_M.value) < 0.002
+
+
 def test_lift_halves_where_the_full_lift_is_out_of_reach():
     from v2.skills import Result
 
