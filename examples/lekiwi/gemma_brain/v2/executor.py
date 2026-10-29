@@ -83,13 +83,23 @@ class PlanBrain:
         self.sk.roll = 0.0
         self.sk.seen.clear()
 
+    def _park(self) -> None:
+        """The arm at the hover over the reach point, detections forgotten: the base may move.
+        Folds instead where the hover is refused."""
+        if actions.hover_at(self.sk, prm.HOVER_HEIGHT_M).ok:
+            self._forget()
+        else:
+            self.fold()
+
     def pick(self, what: str) -> Result:
         """The pick chain, retried PICK_TRIES times where a retry can help. A refused move
         (the planner or the Pi turned it down) is refused again from the same pose: no retry,
         the planner hears why (Oct 28: a wrist roll past its limit failed six tries in two
         plans, ~140 s). A failure after the hover resumes at the hover where the base already
         is (the line-up finds the object again) instead of folding and driving again; a second
-        one, or a failed approach, starts over from the approach."""
+        one, or a failed approach, starts over from the approach with the arm kept at the hover
+        (it folded and unfolded again, ~9 s: Oct 28 push test; at the hover it is out of the
+        front camera's floor view, as when carrying)."""
         reasons = []
         tries = int(prm.PICK_TRIES.value)
         start = None
@@ -111,7 +121,7 @@ class PlanBrain:
             self.log.ev("pick_retry", attempt=attempt, reason=r.reason, resume=start or "approach")
             print(f"    pick attempt {attempt} failed: {r.reason}")
             if start is None:
-                self.fold()
+                self._park()
         return Result(False, f"failed {tries} times ({'; '.join(reasons)})")
 
     def place(self, rel: str, target: str) -> Result:

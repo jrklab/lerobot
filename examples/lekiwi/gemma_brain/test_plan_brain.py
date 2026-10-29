@@ -189,12 +189,19 @@ def test_a_place_relation_without_a_chain_runs_nothing(world):
     assert not r.ok and "no chain" in r.reason and world.calls == [], world.calls
 
 
-def test_pick_retries_with_a_fold_between_then_succeeds(world):
+def test_pick_retries_from_the_hover_without_folding_then_succeeds(world):
     world.fail = {"pick red block": 2}
     sk = FakeSkills()
     ok, _ = brain(FakePlanner('pick "red block"\ndone'), sk).run("pick red")
     assert ok and world.calls == ["pick red block", "hover"] * 2 + ["pick red block"], world.calls
-    assert sk.holding == "red block"
+    assert sk.holding == "red block" and ("reset",) not in sk.arm.moves, sk.arm.moves  # no fold
+
+
+def test_a_start_over_folds_where_the_hover_is_refused(world):
+    world.fail, world.hover_ok = {"pick red block": 1}, False
+    sk = FakeSkills()
+    ok, _ = brain(FakePlanner('pick "red block"\ndone'), sk).run("pick red")
+    assert ok and ("reset",) in sk.arm.moves, sk.arm.moves
 
 
 def test_a_refused_pick_is_not_retried(world):
@@ -217,11 +224,13 @@ def test_a_pick_failing_after_the_hover_resumes_there_without_folding(world):
 def test_a_second_failure_after_resuming_starts_over_from_the_approach(world):
     world.fail = {"pick red block": 2}
     world.fail_data = {"failed": "land"}
-    ok, _ = brain(FakePlanner('pick "red block"\ndone'), FakeSkills()).run("pick red")
+    sk = FakeSkills()
+    ok, _ = brain(FakePlanner('pick "red block"\ndone'), sk).run("pick red")
     assert ok and world.calls == ["pick red block", "pick red block from hover", "hover", "pick red block"], world.calls
+    assert ("reset",) not in sk.arm.moves, sk.arm.moves  # parked at the hover, not folded
 
 
-def test_a_failed_approach_starts_over_after_a_fold(world):
+def test_a_failed_approach_starts_over_from_the_hover(world):
     world.fail = {"pick red block": 1}
     world.fail_data = {"failed": "approach"}
     ok, _ = brain(FakePlanner('pick "red block"\ndone'), FakeSkills()).run("pick red")
