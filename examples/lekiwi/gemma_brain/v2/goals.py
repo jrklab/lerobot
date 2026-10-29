@@ -145,6 +145,7 @@ class FrontApproachGoal:
     def __init__(self, tol_m=None):
         if tol_m is not None:  # looser for a container: PLACE_APPROACH_TOL_M
             self.tol_m = tol_m
+        self._turned_from = None  # the column error before the last move, if it was a turn
 
     def error(self, det: Detection, sk) -> np.ndarray:
         f = sk.geom.front
@@ -159,16 +160,26 @@ class FrontApproachGoal:
     def done(self, err: np.ndarray, sk) -> bool:
         # Within the wrist line-up's reach: it takes the rest (Oct 27: waiting for the exact row
         # spent 8 looks on drives the base barely made, 1.2 cm commanded -> 0.2 cm moved).
-        f = sk.geom.front
-        u_tol = f["u_per_deg"] * prm.MIN_BASE_TURN_DEG.value  # about what the smallest turn fixes
-        return abs(float(err[0])) <= u_tol and self.remaining(err, sk) <= self.tol_m.value
+        return self._column_ok(err, sk) and self.remaining(err, sk) <= self.tol_m.value
+
+    def _column_ok(self, err: np.ndarray, sk) -> bool:
+        """Within about what the smallest turn fixes, or a turn just carried the object across
+        the column: turning can't do better from here, the line-up's sideways move takes the
+        rest. Close to the base a 3 deg turn moved the brick 0.11 across the image, twice the
+        tolerance, and the base turned left and right until it ran out of looks (Oct 28 trial 4)."""
+        u = float(err[0])
+        if abs(u) <= sk.geom.front["u_per_deg"] * prm.MIN_BASE_TURN_DEG.value:
+            return True
+        return self._turned_from is not None and np.sign(u) != np.sign(self._turned_from)
 
     def step(self, err: np.ndarray, sk) -> dict:
         f = sk.geom.front
-        if abs(float(err[0])) > f["u_per_deg"] * prm.MIN_BASE_TURN_DEG.value:
+        if not self._column_ok(err, sk):
             # A left turn moves the object right in the image.
+            self._turned_from = float(err[0])
             turn = float(err[0]) / f["u_per_deg"]
             return {"roll": float(np.sign(turn) * max(abs(turn), prm.MIN_BASE_TURN_DEG.value))}
+        self._turned_from = None
         # Drive to just inside the line-up's reach (half its tolerance short): no overshoot past the
         # reach point with a 7 mm range model, and one or two drives instead of halving steps.
         return {"delta": (max(self.remaining(err, sk) - self.tol_m.value / 2, 0.0), 0.0)}

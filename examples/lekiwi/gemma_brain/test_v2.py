@@ -304,6 +304,24 @@ def test_front_approach_turns_before_it_drives():
     assert "delta" in drive and drive["delta"][0] > 0
 
 
+def test_front_approach_stops_turning_once_a_turn_carries_the_object_across_the_column():
+    class S:
+        geom = geom(-0.11)
+
+    S.geom.front = {"u_per_deg": 0.0184, "u_target": 0.451, "near_bottom": 0.699, "range_k": 0.0583,
+                    "range_horizon_v": 0.335, "range_offset_m": 0.1}
+    g = goals.FrontApproachGoal()
+    # Oct 28 trial 4: the brick ~3 cm past the reach point, each 3 deg turn moved it 0.11 across.
+    first = np.array([0.0875, -0.115])
+    assert not g.done(first, S()) and "roll" in g.step(first, S())
+    crossed = np.array([-0.072, -0.105])
+    assert g.done(crossed, S())  # close enough in range; the line-up takes the column's rest
+    # Not yet in range: drive instead of turning back.
+    g2 = goals.FrontApproachGoal()
+    g2.step(np.array([0.0875, 0.2]), S())
+    assert "delta" in g2.step(np.array([-0.072, 0.2]), S())
+
+
 def test_pick_chain_runs_its_steps_in_order_and_stops_at_the_first_failure(monkeypatch):
     from v2 import chains
     from v2.skills import Result
