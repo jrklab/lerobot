@@ -61,6 +61,8 @@ def has_colour(jpeg: bytes, box, obj: str) -> bool:
 
 
 class Skills2:
+    _last_moved: str | None = None  # "arm" or "base": what moved last, for the settle before a frame
+
     def __init__(self, robot, arm: Arm, geom: Geometry, log=None, main=None, fast=None):
         self.robot, self.arm, self.geom, self.log = robot, arm, geom, log
         self.main, self.fast = main, fast  # box models: the main one (26B) and the fast one (E2B)
@@ -152,6 +154,7 @@ class Skills2:
         except RobotError as e:  # refused or stopped on the Pi: a failed step, not a crash
             return Result(False, f"the robot refused or stopped the move: {e}", {"goal": goal.round(4).tolist()})
         self.roll = roll
+        self._last_moved = "arm"
         data = {"goal": goal.round(4).tolist(), "floor": round(floor, 4), "contact": False}
         if res.get("contact"):
             data.update(contact=True, contact_z=float(res["z_meas"]), detector=res.get("how"))
@@ -171,6 +174,7 @@ class Skills2:
             n = float(np.linalg.norm(d))
             d = d * (n + prm.BASE_STOP_SHORT_M.value) / n if n > 0 else d
             res = self.robot.base(dx=float(d[0]), dy=float(d[1]))
+        self._last_moved = "base"
         moved = res.get("result", {}).get("moved")
         self.ev("move", part="base", delta=None if delta is None else list(delta), turn=turn, moved=moved)
         return Result(True, data={"moved": moved})
@@ -200,13 +204,32 @@ class Skills2:
             self._roll_range = tuple(sorted(((jmin - j0) / slope, (jmax - j0) / slope)))
         return self._roll_range
 
+    def _settle(self) -> None:
+        """Wait before a frame until the arm has stopped, at most LOOK_SETTLE_S: stopped when the
+        measured TCP moved less than one encoder tick's worth between two reads. After a base
+        move the full wait: nothing measures the body's coasting."""
+        end = time.monotonic() + prm.LOOK_SETTLE_S.value
+        t0, waited = time.monotonic(), "full"
+        if self._last_moved == "arm":
+            tick = 2 * math.pi / self.arm.calib.resolution  # one encoder step, rad
+            prev = self.tcp()
+            while time.monotonic() < end:
+                cur = self.tcp()
+                if np.linalg.norm(cur - prev) <= tick * np.linalg.norm(cur):  # the tick's TCP motion at this reach
+                    waited = "still"
+                    break
+                prev = cur
+        if waited == "full":
+            time.sleep(max(end - time.monotonic(), 0.0))
+        self.ev("settle", after=self._last_moved, how=waited, s=round(time.monotonic() - t0, 3))
+
     # --- find ---
 
     def frame(self, cam: str, tag: str = "look") -> bytes | None:
         """A frame captured after this call, or None. A failed request re-measures the Mac-Pi
         clock offset and tries once more: the Pi has no time source and its clock jumped ~36 s
         mid-run (Oct 27 trials), so "a frame after now" asked for one from its future (HTTP 504)."""
-        time.sleep(prm.LOOK_SETTLE_S.value)
+        self._settle()
         try:
             jpeg, _ = self.robot.frame(cam, after=time.time())
         except RobotError as e:
@@ -244,6 +267,11 @@ class Skills2:
             a, by = self.main.box(jpeg, prompt), "main"
         if a.value is None or not has_colour(jpeg, a.value, obj):
             self.ev("find", obj=obj, cam=cam, found=False, box=a.value, by=by)
+            return None
+        if cam == "front" and a.value[3] < self.geom.front["range_horizon_v"]:
+            # Nothing on the floor ends above the horizon: the held object's tips show there
+            # when carried at the hover (Oct 28 check).
+            self.ev("find", obj=obj, cam=cam, found=False, box=a.value, by=by, why="above the horizon")
             return None
         box = snap_box(jpeg, a.value, what=obj)[0] if cam == "wrist" else list(a.value)
         det = Detection(box=[round(float(v), 4) for v in box], jpeg=jpeg, by=by)

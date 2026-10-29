@@ -220,6 +220,54 @@ def test_find_uses_the_fast_model_only_when_tracking_and_checks_its_colour(monke
     assert d is not None and d.by == "fast"
 
 
+def test_a_front_box_ending_above_the_horizon_is_not_on_the_floor(monkeypatch):
+    # Oct 28: carried at the hover, the jaw tips show at the front frame's top.
+    import v2.skills as skills_v2
+
+    monkeypatch.setattr(skills_v2.time, "sleep", lambda s: None)
+    high, low = [0.50, 0.00, 0.60, 0.20], [0.40, 0.40, 0.50, 0.55]
+    for box, found in ((high, False), (low, True)):
+        sk = finder(red_frame(box), FakeModel([box]), None)
+        sk.geom = geom(-0.11)
+        sk.geom.front = {"range_horizon_v": 0.335}
+        assert (sk.find("red block", "front") is not None) == found
+
+
+def test_the_look_settle_ends_once_the_arm_is_still_and_waits_after_the_base():
+    import time as _time
+
+    class Cal:
+        resolution = 4096
+
+    sk = Skills2.__new__(Skills2)
+    sk.log, sk.arm = None, type("A", (), {"calib": Cal()})()
+    path = iter([0.25 + 0.004 * k for k in range(3)] + [0.262] * 50)  # still from the 4th read
+    sk.tcp = lambda: np.array([next(path), 0.0, -0.08])
+    sk._last_moved = "arm"
+    t = _time.monotonic()
+    sk._settle()
+    assert _time.monotonic() - t < prm.LOOK_SETTLE_S.value / 2
+    sk._last_moved = "base"
+    t = _time.monotonic()
+    sk._settle()
+    assert _time.monotonic() - t >= prm.LOOK_SETTLE_S.value - 0.01
+
+
+def test_carry_holds_at_the_hover_without_folding():
+    from v2.skills import Result
+
+    calls = []
+
+    class S:
+        arm = type("A", (), {"reset": lambda self: calls.append("fold")})()
+
+        def move(self, part, **k):
+            calls.append((part, k.get("height")))
+            return Result(True)
+
+    assert actions.carry(S()).ok and calls == [("arm", prm.HOVER_HEIGHT_M.value)]
+
+
 class SimServo:
     """A world for servo(): the object's image point responds to arm moves through a TRUE
     Jacobian, which may differ from the calibrated one the goal uses."""

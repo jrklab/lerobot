@@ -18,7 +18,7 @@ which, so the executor can retry or replan.
 
     pick "x":  approach -> hover -> line_up -> align -> servo(JawGoal) at the hover height ->
                down to the final look height -> servo(JawGoal) -> land -> grip(close) -> lift
-    place "x" in "y":       carry (arm folded, holding) -> approach y -> hover at the demo's place height -> over y (base,
+    place "x" in "y":       carry (held at the hover height) -> approach y -> hover at the demo's place height -> over y (base,
                then arm) -> lower to the demo's release height -> release -> back up
     place "x" next_to "y":  approach y -> hover -> beside y (base, then arm) -> down to the
                final look height -> beside y again -> land -> release -> back up

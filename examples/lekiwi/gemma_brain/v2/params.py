@@ -91,7 +91,7 @@ SERVO_MAX_LOOKS = Param(8, "RULE", "looks per servo before giving up")
 MIN_BASE_TURN_DEG = Param(3.0, "RULE", "smallest base turn that moves: the Pi finishes turns under 2 deg without moving")
 LOW_MOVE_GUARD_M = Param(0.002, "RULE", "below a low move's lowest point the Pi's z_min sits this much lower: room for servo jitter, not for the jaws")
 CLOSE_SPEED = Param(30.0, "RULE", "gripper closing speed (units/s): slow enough for the Pi's stall detection to stop on the brick")
-LOOK_SETTLE_S = Param(0.3, "RULE", "wait after a move before a frame (servo settling)")
+LOOK_SETTLE_S = Param(0.3, "RULE", "longest wait after a move before a frame (servo settling); after an arm move it ends once the measured TCP stops (skills._settle)")
 FREE_SPEED_MPS = Param(0.04, "RULE", "straight-line speed in free air")
 NEAR_SPEED_MPS = Param(0.01, "RULE", "speed for the last centimetres to the floor")
 

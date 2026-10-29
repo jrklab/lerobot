@@ -125,12 +125,12 @@ def align(sk: Skills2, obj: str) -> Result:
 
 
 def carry(sk: Skills2) -> Result:
-    """Fold the arm to rest, holding on, before the base drives: held low after the pick's lift
-    (~6 cm at 27 cm out) the brick caught a cup's rim and pushed the cup ahead of the robot
-    (owner, Oct 28)."""
-    sk.arm.reset()
-    sk.roll = 0.0
-    return Result(True)
+    """Hold the object over the reach point at the hover height before the base drives: held low
+    after the pick's lift (~6 cm at 27 cm out) the brick caught a cup's rim and pushed the cup
+    ahead of the robot (owner, Oct 28). Folding instead cost ~10 s a task (fold, then unfold for
+    the place); at the hover the arm is out of the front camera's floor view, its jaw tips just
+    in the frame's top above the horizon (Oct 28 check), where find() takes no box."""
+    return hover_at(sk, prm.HOVER_HEIGHT_M)
 
 
 def hover_at(sk: Skills2, height: Param) -> Result:
