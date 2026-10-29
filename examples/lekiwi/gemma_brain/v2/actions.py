@@ -148,7 +148,9 @@ def bring_into_view(sk: Skills2, container: str) -> Result:
     and ran off the frame at the place hover (Oct 28)."""
     worst = None
     for _ in range(int(prm.SERVO_MAX_LOOKS.value)):
-        det = sk.find(container, "wrist", fast_ok=False)
+        # One more look before giving up: the main model sometimes returns no box for a cup
+        # close up that is plainly there (Oct 28, first full task: failed the step).
+        det = sk.find(container, "wrist", fast_ok=False) or sk.find(container, "wrist", fast_ok=False)
         if det is None:
             return Result(False, f"no {container} in the wrist camera")
         x0, y0, x1, y1 = det.box
