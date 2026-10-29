@@ -14,25 +14,25 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Offline checks for planner.py and plan_brain.py: plan parsing and checking, and the
-executor's expansion, retries and replans against fake skills. No robot, no model.
+"""Offline checks for planner.py and the task loop (v2/executor.py): plan parsing and checking,
+and the loop's steps, retries, replans and fold against fake chains. No robot, no model.
 
-    .venv/bin/python test_plan_brain.py
+    uv run pytest test_plan_brain.py
 """
 
-import sys
 import tempfile
 from pathlib import Path
 
 import numpy as np
-
-import plan_brain
-from arm import PlanError
+import pytest
+from arm import RESET_SAFE_Z_M, PlanError
 from gemma import Answer
-from plan_brain import SUPPORTED, PlanBrain
 from planner import Step, check_plan, objects_in, parse_plan
 from robot import OperatorTookOver, RobotError
-from skills import Log, Result
+from runlog import Log
+from v2 import actions, chains, params as prm
+from v2.executor import SUPPORTED, PlanBrain
+from v2.skills import Result
 
 
 class FakeModel:
@@ -78,58 +78,18 @@ class FakeArm:
         self.moves.append(("reset",))
 
 
-class FakePlanArm(FakeArm):
-    """Can't move straight up (wrist limit), like the arm just after a pick."""
-
-    def __init__(self, z):
-        super().__init__(z=z, stuck=True)
-
-
 class FakeSkills:
-    """Records the skill calls; `fail` maps a call like 'fetch:red block' to how many times it fails."""
+    """What the task loop reads off Skills2: what's held, the arm, the height."""
 
-    def __init__(self, fail=None, arm=None, release_then_fail=False):
-        self.calls, self.fail = [], dict(fail or {})
-        self.holding, self.base_ok, self.arm = None, True, arm or FakeArm()
-        self.release_then_fail = release_then_fail
+    def __init__(self, arm=None):
+        self.holding, self.arm, self.roll, self.seen = None, arm or FakeArm(), 0.0, {}
+        self.gripped = False
 
     def height(self):
         return self.arm.z + 0.13  # the floor at TCP z -0.13
 
-    def _do(self, call: str) -> Result:
-        self.calls.append(call)
-        if self.fail.get(call, 0) > 0:
-            self.fail[call] -= 1
-            return Result(False, f"{call} failed")
-        return Result(True)
-
-    def scan(self, objects):
-        return self._do("scan:" + ",".join(objects))
-
-    def fetch(self, what):
-        r = self._do("fetch:" + what)
-        if r.ok:
-            self.holding = what
-        return r
-
-    def go_to(self, what):
-        return self._do("go_to:" + what)
-
-    def place_in(self, what):
-        r = self._do("place_in:" + what)
-        if r.ok:
-            self.holding = None
-        if self.release_then_fail:  # opened over the target, then the retreat was refused
-            self.holding = None
-            self.arm.z = 0.015
-            return Result(False, "robot error: arm_wrist_flex would hit its limit")
-        return r
-
-    def place_next_to(self, what):
-        r = self._do("place_next_to:" + what)
-        if r.ok:
-            self.holding = None
-        return r
+    def held(self):
+        return self.gripped
 
 
 class FakeRobot:
@@ -137,9 +97,51 @@ class FakeRobot:
         return b"\xff\xd8jpeg", after
 
 
+@pytest.fixture
+def world(monkeypatch):
+    """Fake chains recording their calls; `fail` maps a call like 'pick red block' to how many
+    times it fails; release_then_fail: a place opens the jaws, then fails (Oct 26); the hover
+    before a fold is refused when hover_ok is False."""
+
+    class W:
+        calls, fail, release_then_fail, hover_ok = [], {}, False, True
+
+    w = W()
+    w.calls, w.fail = [], {}
+
+    def do(call, sk):
+        w.calls.append(call)
+        if w.fail.get(call, 0) > 0:
+            w.fail[call] -= 1
+            return Result(False, f"{call} failed")
+        return Result(True)
+
+    def pick(sk, what, drive=True):
+        r = do(f"pick {what}", sk)
+        sk.gripped = r.ok
+        return r
+
+    def place(rel):
+        def run(sk, what, target, drive=True):
+            r = do(f"place {what} {rel} {target}", sk)
+            if r.ok:
+                sk.gripped = False
+            if w.release_then_fail:  # opened over the target, then the retreat was refused
+                sk.gripped, sk.arm.z = False, 0.015
+                return Result(False, "robot error: arm_wrist_flex would hit its limit")
+            return r
+
+        return run
+
+    monkeypatch.setattr(chains, "pick", pick)
+    monkeypatch.setattr(chains, "place_in", place("in"))
+    monkeypatch.setattr(chains, "place_next_to", place("next_to"))
+    monkeypatch.setattr(actions, "hover_at", lambda sk, h: (w.calls.append("hover"), Result(w.hover_ok))[1])
+    return w
+
+
 def brain(planner, sk, holding=None):
-    log = Log(Path(tempfile.mkdtemp()))
-    return PlanBrain(sk, planner, log, FakeRobot(), holding)
+    return PlanBrain(sk, planner, Log(Path(tempfile.mkdtemp())), FakeRobot(), holding)
 
 
 def test_parse_plan():
@@ -147,11 +149,8 @@ def test_parse_plan():
     assert steps == [Step("pick", "red block"), Step("place", "red block", "in", "cup")]
     assert str(steps[1]) == 'place "red block" in "cup"'
     for bad in ('pick "a" in "b"', 'place "a" under "b"', 'push "a" in "b"', "hello", "done"):
-        try:
+        with pytest.raises(ValueError):
             parse_plan(bad)
-        except ValueError:
-            continue
-        raise AssertionError(f"accepted {bad!r}")
 
 
 def test_check_plan():
@@ -167,113 +166,113 @@ def test_check_plan():
     assert any("push" in p for p in check_plan(parse_plan('push "a" toward "b"'), SUPPORTED, None))
 
 
-def test_expansion():
+def test_runs_the_steps_on_the_chains_and_tracks_what_is_held(world):
     sk = FakeSkills()
     ok, _ = brain(FakePlanner('pick "red block"\nplace "red block" in "cup"\ndone'), sk).run("red in cup")
-    assert ok, sk.calls
-    assert sk.calls == ["scan:red block,cup", "fetch:red block", "go_to:cup", "place_in:cup"], sk.calls
+    assert ok and world.calls == ["pick red block", "place red block in cup"], world.calls
+    assert sk.holding is None
 
 
-def test_unsupported_plan_moves_nothing():
-    sk = FakeSkills()
-    ok, why = brain(FakePlanner('pick "red block"\nplace "red block" on "blue block"\ndone'), sk).run("stack")
+def test_unsupported_plan_moves_nothing(world):
+    ok, why = brain(FakePlanner('pick "red block"\nplace "red block" on "blue block"\ndone'), FakeSkills()).run("stack")
     assert not ok and "can't do 'place on'" in why, why
-    assert sk.calls == [], sk.calls
+    assert world.calls == [], world.calls
 
 
-def test_pick_retries_then_succeeds():
-    sk = FakeSkills(fail={"fetch:red block": 2})
+def test_pick_retries_with_a_fold_between_then_succeeds(world):
+    world.fail = {"pick red block": 2}
+    sk = FakeSkills()
     ok, _ = brain(FakePlanner('pick "red block"\ndone'), sk).run("pick red")
-    assert ok and sk.calls.count("fetch:red block") == 3, sk.calls
+    assert ok and world.calls == ["pick red block", "hover"] * 2 + ["pick red block"], world.calls
+    assert sk.holding == "red block"
 
 
-def test_replan_after_failure():
-    # The place fails once (going to the cup); the replan continues from "holding the red block".
-    sk = FakeSkills(fail={"go_to:cup": 1})
+def test_a_pick_that_gripped_before_a_later_step_failed_keeps_it(world, monkeypatch):
+    sk = FakeSkills()
+    monkeypatch.setattr(chains, "pick", lambda sk, what, drive=True: (setattr(sk, "gripped", True), Result(False, "lift: refused"))[1])
+    ok, why = brain(FakePlanner('pick "red block"\ndone'), sk).run("pick red")
+    assert ok and sk.holding == "red block", why
+
+
+def test_replan_after_failure(world):
+    # The place fails once; the replan continues from "holding the red block".
+    world.fail = {"place red block in cup": 1}
     planner = FakePlanner('pick "red block"\nplace "red block" in "cup"\ndone', 'place "red block" in "cup"\ndone')
-    ok, _ = brain(planner, sk).run("red in cup")
-    assert ok, sk.calls
+    ok, _ = brain(planner, FakeSkills()).run("red in cup")
+    assert ok, world.calls
     done, failed, _, holding = planner.replans[0]
     assert done == [Step("pick", "red block")] and failed == Step("place", "red block", "in", "cup")
     assert holding == "red block"
-    assert sk.calls.count("scan:red block,cup") == 1, sk.calls  # no rescan of known objects
 
 
-def test_gives_up_after_max_replans():
-    sk = FakeSkills(fail={"go_to:cup": 99, "go_to:paper cup": 99})
+def test_gives_up_after_max_replans(world):
+    world.fail = {"place red block in cup": 99, "place red block in paper cup": 99}
     plans = ['pick "red block"\nplace "red block" in "cup"', 'place "red block" in "paper cup"',
              'place "red block" in "cup"']
-    ok, why = brain(FakePlanner(*plans), sk).run("red in cup")
-    assert not ok and "replans" in why, why
+    ok, why = brain(FakePlanner(*plans), FakeSkills()).run("red in cup")
+    assert not ok and f"after {int(prm.MAX_REPLANS.value)} replans" in why, why
 
 
-def test_identical_replan_runs_once_more_only():
-    sk = FakeSkills(fail={"go_to:cup": 99})
+def test_identical_replan_runs_once_more_only(world):
+    world.fail = {"place red block in cup": 99}
     plans = ['pick "red block"\nplace "red block" in "cup"'] + ['place "red block" in "cup"'] * 2
-    ok, why = brain(FakePlanner(*plans), sk).run("red in cup")
+    ok, why = brain(FakePlanner(*plans), FakeSkills()).run("red in cup")
     assert not ok and "didn't change" in why, why
-    assert sk.calls.count("go_to:cup") == 2, sk.calls
+    assert world.calls.count("place red block in cup") == 2, world.calls
 
 
-def test_released_then_failed_counts_as_placed():
+def test_released_then_failed_counts_as_placed(world):
     # Oct 26: the brick dropped into the cup, then the retreat was refused. No replan to pick it
-    # again; the arm lifts straight up before folding.
-    sk = FakeSkills(release_then_fail=True)
+    # again; the arm folds via the hover.
+    world.release_then_fail = True
     planner = FakePlanner('pick "red block"\nplace "red block" in "cup"\ndone')
-    ok, why = brain(planner, sk).run("red in cup")
+    ok, why = brain(planner, FakeSkills()).run("red in cup")
     assert ok and "unverified" in why, why
-    assert planner.replans == [] and sk.calls.count("fetch:red block") == 1, sk.calls
-    assert sk.arm.moves == [("move_to", plan_brain.RESET_SAFE_Z_M), ("reset",)], sk.arm.moves
+    assert planner.replans == [] and world.calls.count("pick red block") == 1, world.calls
 
 
-def test_fold_stays_put_when_it_cant_lift_straight_up():
-    sk = FakeSkills(release_then_fail=True, arm=FakeArm(stuck=True))
+def test_fold_goes_via_the_hover(world):
+    sk = FakeSkills()
+    assert brain(FakePlanner('pick "a"'), sk).fold() == ""
+    assert world.calls == ["hover"] and sk.arm.moves == [("reset",)], sk.arm.moves
+
+
+def test_fold_lifts_straight_up_where_the_hover_is_refused(world):
+    world.hover_ok = False
+    sk = FakeSkills(arm=FakeArm(z=-0.11))
+    assert brain(FakePlanner('pick "a"'), sk).fold() == ""
+    assert sk.arm.moves == [("move_to", RESET_SAFE_Z_M), ("reset",)], sk.arm.moves
+
+
+def test_fold_stays_put_beside_a_place_target_when_it_cant_lift(world):
+    world.hover_ok, world.release_then_fail = False, True
+    sk = FakeSkills(arm=FakeArm(stuck=True))
     ok, why = brain(FakePlanner('pick "red block"\nplace "red block" in "cup"\ndone'), sk).run("x")
     assert not ok and "stayed where it was" in why, why
     assert ("reset",) not in sk.arm.moves, sk.arm.moves  # no tilt-and-pull-in fold
 
 
-def test_fold_from_high_up_uses_the_normal_fold():
-    # Oct 26: after a pick the arm is ~19 cm up and can't go straight up; folding is safe there.
-    sk = FakeSkills(arm=FakePlanArm(z=0.06))
-    assert brain(FakePlanner('pick "a"'), sk).fold() == ""
-    assert sk.arm.moves == [("reset",)], sk.arm.moves
+def test_fold_away_from_a_place_target_folds_even_when_it_cant_lift(world):
+    # Oct 26: after the lift the wrist can't go straight up; not beside a place target, so
+    # the normal fold (with its tilt-and-pull-in fallback) is fine.
+    world.hover_ok = False
+    sk = FakeSkills(arm=FakeArm(z=-0.04, stuck=True))
+    assert brain(FakePlanner('pick "a"'), sk).fold() == "" and sk.arm.moves == [("reset",)], sk.arm.moves
 
 
-def test_fold_after_a_pick_folds_even_when_low():
-    # Oct 26: after the 9 cm lift the wrist can't go straight up; not beside a place target,
-    # so the normal fold (with its tilt-and-pull-in fallback) is fine.
-    sk = FakeSkills(arm=FakePlanArm(z=-0.04))
-    b = brain(FakePlanner('pick "red block"'), sk)
-    ok, _ = b.run("pick red")
-    assert ok and b.fold() == "" and sk.arm.moves == [("reset",)], sk.arm.moves  # main() folds after run()
+def test_leaving_auto_mode_stops_without_replanning(world, monkeypatch):
+    def dropped(sk, what, drive=True):
+        raise RobotError("POST /auto/cmd: HTTP 409: not in auto mode (mode is gamepad)")
 
-
-def test_leaving_auto_mode_stops_without_replanning():
-    class Dropped(FakeSkills):
-        def fetch(self, what):
-            raise RobotError("POST /auto/cmd: HTTP 409: not in auto mode (mode is gamepad)")
-
+    monkeypatch.setattr(chains, "pick", dropped)
     planner = FakePlanner('pick "red block"\ndone')
-    try:
-        brain(planner, Dropped()).run("pick red")
-    except OperatorTookOver as e:
-        assert "gamepad disconnecting" in str(e)
-    else:
-        raise AssertionError("expected OperatorTookOver")
+    with pytest.raises(OperatorTookOver, match="gamepad disconnecting"):
+        brain(planner, FakeSkills()).run("pick red")
     assert planner.replans == []
 
 
-def test_starts_holding():
+def test_starts_holding(world):
     sk = FakeSkills()
+    sk.gripped = True
     ok, _ = brain(FakePlanner('place "green block" next_to "red block"\ndone'), sk, holding="green block").run("x")
-    assert ok and sk.calls == ["scan:red block", "go_to:red block", "place_next_to:red block"], sk.calls
-
-
-if __name__ == "__main__":
-    tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
-    for t in tests:
-        t()
-        print(f"ok  {t.__name__}")
-    print(f"{len(tests)} passed")
-    sys.exit(0)
+    assert ok and world.calls == ["place green block next_to red block"], world.calls

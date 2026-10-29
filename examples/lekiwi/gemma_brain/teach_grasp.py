@@ -43,7 +43,7 @@ sys.path.insert(0, str(HERE))
 from arm import Arm  # noqa: E402
 from gemma import LlamaCpp  # noqa: E402
 from robot import Robot  # noqa: E402
-from skills import Log  # noqa: E402
+from runlog import Log  # noqa: E402
 from v2 import actions, params as prm  # noqa: E402
 from v2.geometry import Geometry  # noqa: E402
 from v2.skills import Skills2  # noqa: E402

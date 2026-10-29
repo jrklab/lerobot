@@ -43,7 +43,7 @@ sys.path.insert(0, str(HERE))
 from arm import Arm
 from gemma import LlamaCpp
 from robot import Robot
-from skills import Log
+from runlog import Log
 from v2 import actions, chains
 from v2.geometry import Geometry
 from v2.skills import Skills2

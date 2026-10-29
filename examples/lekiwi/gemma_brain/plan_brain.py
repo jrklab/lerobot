@@ -14,21 +14,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""LeKiwi brain, migration step 1: Gemma 4 26B writes the whole goal-level plan once, and
-code runs it on the existing skills (skills.py, unchanged).
+"""LeKiwi brain: say a task, the robot does it. Gemma 4 26B plans the task once from the two
+cameras; code runs the steps on the v2 skills (v2/executor.py, the task loop).
 
-    .venv/bin/python plan_brain.py "Pick up the red block and drop it into the cup on your right"
+    .venv/bin/python plan_brain.py "put the red block in the paper cup"
     .venv/bin/python plan_brain.py --plan-only "..."     # plan and check it; nothing moves
 
-Differences from brain.py: one planner call per task instead of one per skill; the plan is
-grammar-limited and checked before anything moves; scan and approach are added by code, not
-chosen by the model; a failed step is retried in code (pick: PICK_TRIES), then replanned (at
-most MAX_REPLANS times). Perception inside the skills asks the llama.cpp server instead of
-Ollama. Needs llama-server for 26B on --planner-url (and --vision-url).
-
-Step 2a: repeat looks at an object already found (the wrist line-up, servo and lift-check
-looks; the cup and place line-ups) ask E2B on --fast-url first, and 26B on the same frame
-when E2B finds nothing or its box fails the skill's own check. --no-fast turns it off.
+Needs llama-server for 26B on --planner-url (also the skills' boxes, --vision-url) and E2B on
+--fast-url for repeat looks at an object already found. v1's skills were retired on Oct 28
+(tag lekiwi-v1-final).
 """
 
 from __future__ import annotations
@@ -39,192 +33,19 @@ import logging
 import os
 import subprocess
 import sys
-import time
 from pathlib import Path
 
-from arm import JAW_TIP_OFFSET_M, RESET_SAFE_Z_M, Arm, PlanError
-from brain import PICK_TRIES
+from arm import Arm
 from gemma import LlamaCpp
-from planner import Planner, Step, check_plan, objects_in
+from planner import Planner
 from robot import CANDIDATE_URLS, OperatorTookOver, Robot, RobotError
-from skills import DROP_RIM_HEIGHT_M, Log, Result, Skills
+from runlog import Log
+from v2.executor import PlanBrain
+from v2.geometry import Geometry
+from v2.skills import Skills2
 
 PLANNER_URL = "http://127.0.0.1:8081"  # 26B-A4B, 70 image tokens
 FAST_URL = "http://127.0.0.1:8082"  # E2B Q4_K_M, 70 image tokens: repeat looks inside the skills
-MAX_REPLANS = 2
-# fold(): above this (TCP over the floor), Arm.reset's tilt-and-pull-in can't catch anything
-# we handle: the tallest is the cup's rim.
-FOLD_CLEAR_M = DROP_RIM_HEIGHT_M + 0.06
-# What the existing skills can run: (verb, relation).
-SUPPORTED = {("pick", None), ("place", "in"), ("place", "next_to")}
-
-
-class PlanBrain:
-    def __init__(self, sk: Skills | None, planner: Planner, log: Log, robot=None, holding: str | None = None):
-        self.sk, self.planner, self.log, self.robot = sk, planner, log, robot
-        self.holding = holding
-        self.scanned: set[str] = set()
-        self.near_target = False  # the gripper is low beside a place target (see fold())
-
-    def frames(self) -> tuple[bytes, bytes]:
-        now = time.time()
-        front, _ = self.robot.frame("front", after=now)
-        wrist, _ = self.robot.frame("wrist", after=now)
-        self.log.frame("plan_front", front)
-        self.log.frame("plan_wrist", wrist)
-        return front, wrist
-
-    def make_plan(self, goal: str, front: bytes, wrist: bytes) -> tuple[list[Step] | None, str]:
-        try:
-            steps, a = self.planner.plan(goal, front, wrist, self.holding)
-        except ValueError as e:
-            self.log.ev("plan", ok=False, error=str(e))
-            return None, f"the planner's answer was not a plan: {e}"
-        self.log.ev("plan", steps=[str(s) for s in steps], ms=round(a.ms))
-        print(f"plan ({a.ms / 1000:.1f} s):\n  " + "\n  ".join(map(str, steps)))
-        problems = check_plan(steps, SUPPORTED, self.holding)
-        if problems:
-            self.log.ev("plan_rejected", problems=problems)
-            return None, "plan not runnable: " + "; ".join(problems)
-        return steps, ""
-
-    # --- running one step on the existing skills ---
-
-    def ensure_scanned(self, objects: list[str]) -> Result:
-        new = [o for o in objects if o not in self.scanned and o != self.holding]
-        if not new or not self.sk.base_ok:
-            return Result(True)
-        r = self.sk.scan(new[:4])
-        self.log.ev("scan", objects=new, ok=r.ok, reason=r.reason)
-        self.scanned.update(new)
-        return r
-
-    def pick(self, what: str) -> Result:
-        reasons = []
-        for attempt in range(1, PICK_TRIES + 1):
-            r = self.sk.fetch(what)
-            if r.ok:
-                return r
-            reasons.append(r.reason)
-            self.log.ev("pick_retry", attempt=attempt, reason=r.reason)
-            print(f"    pick attempt {attempt} failed: {r.reason}")
-        return Result(False, f"failed {PICK_TRIES} times ({'; '.join(reasons)})")
-
-    def place(self, rel: str, target: str) -> Result:
-        r = self.sk.go_to(target)
-        self.log.ev("step", name="go_to", ok=r.ok, reason=r.reason)
-        if not r.ok:
-            return Result(False, f"could not reach the {target}: {r.reason}")
-        return self.sk.place_in(target) if rel == "in" else self.sk.place_next_to(target)
-
-    def fold(self) -> str:
-        """Fold the arm to rest. From low down, straight up to RESET_SAFE_Z_M first, keeping
-        the gripper's orientation. When that's refused right after a place (self.near_target),
-        the arm stays where it is: Arm.reset's fallback tilts the gripper and pulls it in while
-        still low, and on Oct 26 that dragged the cup 10 cm toward the robot. Elsewhere (e.g.
-        after a pick, the wrist can't go straight up from 9 cm) it folds normally. Returns why
-        it stayed, or "" when folded."""
-        arm = self.sk.arm
-        try:
-            p = arm.tcp()[:3, 3]
-            if p[2] < RESET_SAFE_Z_M:
-                try:
-                    arm.move_to([p[0], p[1], RESET_SAFE_Z_M], speed=0.03,
-                                z_min=min(arm.z_min, p[2] - JAW_TIP_OFFSET_M - 0.01))
-                except PlanError as e:
-                    # Clear of anything we handle (the cup rim, plus a margin), Arm.reset's
-                    # tilt-and-pull-in can't catch it: after a pick the arm is ~19 cm up and
-                    # the wrist can't go straight up from there (Oct 26), while the cup was
-                    # dragged with the jaws ~13 cm up.
-                    if self.near_target and self.sk.height() < FOLD_CLEAR_M:
-                        self.log.ev("fold", ok=False, reason=str(e), height=round(self.sk.height(), 3))
-                        return f"can't lift straight up from here ({e})"
-            arm.reset()
-        except (RobotError, PlanError) as e:
-            if isinstance(e, OperatorTookOver):
-                raise
-            self.log.ev("fold", ok=False, reason=str(e))
-            return str(e)
-        return ""
-
-    def run_step(self, s: Step) -> Result:
-        if s.verb == "pick":
-            return self.pick(s.obj)
-        return self.place(s.rel, s.target)
-
-    # --- the task ---
-
-    def run(self, goal: str) -> tuple[bool, str]:
-        self.log.ev("goal", goal=goal, planner=self.planner.model.model, holding=self.holding)
-        self.sk.holding = self.holding
-        front, wrist = self.frames()
-        steps, why = self.make_plan(goal, front, wrist)
-        if steps is None:
-            return False, why
-        done: list[Step] = []
-        unverified: list[str] = []
-        replans = repeats = 0
-        while steps:
-            s = steps[0]
-            r = self.ensure_scanned(objects_in(steps))
-            if not r.ok:
-                print(f"    scan: {r.reason}")
-            print(f"\n>>> {s}")
-            held_before = self.holding
-            try:
-                r = self.run_step(s)
-            except (RobotError, PlanError) as e:
-                if isinstance(e, OperatorTookOver):
-                    raise
-                if "not in auto mode" in str(e):
-                    # The Pi ends auto mode on gamepad input, the e-stop, or the gamepad
-                    # disconnecting (it powers off when idle: Oct 26). Nothing can move now.
-                    raise OperatorTookOver("robot left auto mode (gamepad input, e-stop, or the gamepad "
-                                           "disconnecting, e.g. asleep after idling)") from e
-                r = Result(False, f"robot error: {e}")
-            self.holding = getattr(self.sk, "holding", None)
-            self.near_target = s.verb == "place"
-            self.log.ev("step_result", step=str(s), ok=r.ok, reason=r.reason, holding=self.holding)
-            print(f"<<< {'OK' if r.ok else 'FAILED'}: {r.reason or 'done'}")
-            if not r.ok and s.verb == "place" and held_before == s.obj and self.holding is None:
-                # The gripper opened over the target, then something after it failed (Oct 26:
-                # the retreat from the cup). Placed, not verified: replanning would pick it again.
-                self.log.ev("place_unverified", step=str(s), reason=r.reason)
-                print(f"    released over the {s.target}: counting it as placed, unverified")
-                unverified.append(str(s))
-                r = Result(True)
-                why = self.fold()
-                if why:
-                    return False, f"placed ({s}, unverified), then the arm stayed where it was: {why}"
-            if r.ok:
-                done.append(s)
-                steps = steps[1:]
-                continue
-            if replans >= MAX_REPLANS:
-                return False, f"{s} failed after {MAX_REPLANS} replans: {r.reason}"
-            replans += 1
-            why = self.fold()
-            if why:
-                return False, f"{s} failed ({r.reason}); the arm stayed where it was to replan: {why}"
-            front, wrist = self.frames()
-            try:
-                new, a = self.planner.replan(goal, done, s, r.reason, self.holding, front, wrist)
-            except ValueError as e:
-                return False, f"{s} failed ({r.reason}) and the replan was not a plan: {e}"
-            # The same steps again: one more try is a retry; a second time won't go differently.
-            same = new == steps
-            if same and repeats:
-                return False, f"{s} failed twice ({r.reason}) and the replan didn't change it"
-            repeats += same
-            steps = new
-            self.log.ev("replan", n=replans, steps=[str(x) for x in steps], ms=round(a.ms))
-            print(f"replan {replans} ({a.ms / 1000:.1f} s):\n  " + "\n  ".join(map(str, steps)))
-            problems = check_plan(steps, SUPPORTED, self.holding)
-            if problems:
-                self.log.ev("plan_rejected", problems=problems)
-                return False, f"{s} failed ({r.reason}); replan not runnable: " + "; ".join(problems)
-        summary = "done: " + "; ".join(map(str, done))
-        return True, summary + (f" (unverified: {'; '.join(unverified)})" if unverified else "")
 
 
 def main() -> int:
@@ -233,7 +54,7 @@ def main() -> int:
     ap.add_argument("--planner-url", default=PLANNER_URL, help="llama-server running the planner (26B)")
     ap.add_argument("--vision-url", default=PLANNER_URL, help="llama-server for the skills' boxes and questions")
     ap.add_argument("--fast-url", default=FAST_URL, help="llama-server for repeat looks at an object already found (E2B)")
-    ap.add_argument("--no-fast", action="store_true", help="every look asks --vision-url (step 1 behaviour)")
+    ap.add_argument("--no-fast", action="store_true", help="every look asks --vision-url")
     ap.add_argument("--robot", default=None, help="LeKiwi web service URL (default: the first that answers of "
                     + ", ".join(CANDIDATE_URLS) + ")")
     ap.add_argument("--holding", default=None, help="what the gripper already holds at start, e.g. 'green block'")
@@ -241,11 +62,7 @@ def main() -> int:
                     help="read the two camera frames, plan and check the plan, then stop: nothing moves")
     ap.add_argument("--frames", nargs=2, metavar=("FRONT_JPG", "WRIST_JPG"), default=None,
                     help="with --plan-only: plan from these saved frames instead of the robot's cameras")
-    ap.add_argument("--scan-sweep", type=float, default=None, metavar="DEG",
-                    help="scan sweeps -DEG..+DEG in 30 deg steps instead of a full turn")
-    ap.add_argument("--no-turn-scan", action="store_true", help="scan never turns the robot around")
     ap.add_argument("--no-base", action="store_true", help="lock the base: arm-only picks within reach")
-    ap.add_argument("--v2", action="store_true", help="run the steps on the v2 chains (v2/executor.py)")
     args = ap.parse_args()
     logging.basicConfig(level=logging.WARNING)
 
@@ -266,22 +83,11 @@ def main() -> int:
     ok, summary = False, ""
     with robot:
         arm = Arm(robot)
-        if args.v2:
-            from v2.executor import PlanBrainV2
-            from v2.geometry import Geometry
-            from v2.skills import Skills2
-
-            if sys.platform == "darwin":  # no idle sleep mid-task (Oct 27: the Pi stopped on lost heartbeats)
-                subprocess.Popen(["caffeinate", "-i", "-w", str(os.getpid())])
-            sk = Skills2(robot, arm, Geometry.load(), log, main=LlamaCpp(args.vision_url),
-                         fast=None if args.no_fast else LlamaCpp(args.fast_url, "gemma4-e2b"))
-            pb = PlanBrainV2(sk, planner, log, robot, args.holding)
-        else:
-            sk = Skills(robot, arm, LlamaCpp(args.vision_url), log,
-                        fast=None if args.no_fast else LlamaCpp(args.fast_url, "gemma4-e2b"))
-            sk.turn_scan = not args.no_turn_scan
-            sk.scan_sweep_deg = args.scan_sweep
-            pb = PlanBrain(sk, planner, log, robot, args.holding)
+        if sys.platform == "darwin":  # no idle sleep mid-task (Oct 27: the Pi stopped on lost heartbeats)
+            subprocess.Popen(["caffeinate", "-i", "-w", str(os.getpid())])
+        sk = Skills2(robot, arm, Geometry.load(), log, main=LlamaCpp(args.vision_url),
+                     fast=None if args.no_fast else LlamaCpp(args.fast_url, "gemma4-e2b"))
+        pb = PlanBrain(sk, planner, log, robot, args.holding)
         try:
             ok, summary = pb.run(args.goal)
         except OperatorTookOver as e:
