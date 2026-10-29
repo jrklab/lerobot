@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""v2 layer 3, actions: readable names for common uses of the primitives (skills.py). They hold
+"""v2 layer 3, actions: readable names for common uses of the primitives (primitives.py). They hold
 no numbers of their own (test_v2.test_actions_and_chains_hold_no_numbers): every value is a
 params.py or geometry.py one, so a new action adds a name, not a parameter to calibrate."""
 
@@ -20,8 +20,8 @@ from __future__ import annotations
 
 import numpy as np
 
-from v2 import params as prm
-from v2.geometry import (
+from brain import params as prm
+from brain.geometry import (
     front_object_height,
     grasp_spot,
     locate_from_one_view,
@@ -29,7 +29,7 @@ from v2.geometry import (
     view_half_width,
     wrap_deg,
 )
-from v2.goals import (
+from brain.goals import (
     AngleGoal,
     BesideGoal,
     FrontApproachGoal,
@@ -37,11 +37,11 @@ from v2.goals import (
     placed_beside,
     round_centre,
 )
-from v2.params import Param
-from v2.skills import Result, Skills2
+from brain.params import Param
+from brain.primitives import Result, Skills
 
 
-def land(sk: Skills2) -> Result:
+def land(sk: Skills) -> Result:
     """Down to GRASP_LIFT_M above the predicted floor without pressing into it (v1's touch
     pushed into the floor and slid 8-10 mm, Oct 27); the contact stop stays as the safety. A
     contact more than half a brick above the floor may be the brick's edge: refused. From higher
@@ -64,7 +64,7 @@ def land(sk: Skills2) -> Result:
     return sk.move("arm", delta=(0.0, 0.0, r.data["contact_z"] + prm.GRASP_LIFT_M.value - sk.tcp()[2]))
 
 
-def lift(sk: Skills2) -> Result:
+def lift(sk: Skills) -> Result:
     """Straight up by the demo's lift, or, where the vertical gripper can't reach that high (at
     27 cm out it goes ~11 cm up; Oct 27 v2 pick), by half as much again until it can, but not
     less than the final look height; then whether the object is still held. The planner refuses
@@ -80,7 +80,7 @@ def lift(sk: Skills2) -> Result:
     return Result(held, "" if held else "nothing held after the lift", {**r.data, "held": held})
 
 
-def look_around(sk: Skills2, obj: str) -> Result:
+def look_around(sk: Skills, obj: str) -> Result:
     """Turn the base until the front camera finds `obj`: alternately left and right in widening
     steps of (1 - LOOK_OVERLAP) of the view's width, all the way round; then back up
     LOOK_BACK_M once (it may be too close to see) and turn round again. The base ends facing
@@ -111,7 +111,7 @@ def look_around(sk: Skills2, obj: str) -> Result:
     return Result(False, f"no {obj} in a full look around, nor after backing up")
 
 
-def approach(sk: Skills2, obj: str, tol=None) -> Result:
+def approach(sk: Skills, obj: str, tol=None) -> Result:
     """Base: find the object (looking around if it isn't in the forward view), then turn and
     drive until the front camera sees it at the reach point."""
     r = look_around(sk, obj)
@@ -124,23 +124,23 @@ def approach(sk: Skills2, obj: str, tol=None) -> Result:
     return r
 
 
-def hover(sk: Skills2) -> Result:
+def hover(sk: Skills) -> Result:
     """The open, vertical gripper over the reach point at the hover height, roll 0."""
     r = sk.move("arm", xy=(prm.REACH_POINT_X_M.value, 0.0), height=prm.HOVER_HEIGHT_M.value, roll=0.0)
     return sk.grip("open") if r.ok else r
 
 
-def line_up(sk: Skills2, obj: str) -> Result:
+def line_up(sk: Skills, obj: str) -> Result:
     """Base, with the gripper hovering: the object within the arm's reach of the grasp spot."""
     return sk.servo(obj, ReachGoal())
 
 
-def align(sk: Skills2, obj: str) -> Result:
+def align(sk: Skills, obj: str) -> Result:
     """Wrist roll: the object's long side across the jaws."""
     return sk.servo(obj, AngleGoal())
 
 
-def carry(sk: Skills2) -> Result:
+def carry(sk: Skills) -> Result:
     """Hold the object over the reach point at the hover height before the base drives: held low
     after the pick's lift (~6 cm at 27 cm out) the brick caught a cup's rim and pushed the cup
     ahead of the robot (owner, Oct 28). Folding instead cost ~10 s a task (fold, then unfold for
@@ -149,12 +149,12 @@ def carry(sk: Skills2) -> Result:
     return hover_at(sk, prm.HOVER_HEIGHT_M)
 
 
-def hover_at(sk: Skills2, height: Param) -> Result:
+def hover_at(sk: Skills, height: Param) -> Result:
     """The vertical gripper over the reach point at `height`, roll 0 (jaws as they are)."""
     return sk.move("arm", xy=(prm.REACH_POINT_X_M.value, 0.0), height=height.value, roll=0.0)
 
 
-def bring_into_view(sk: Skills2, container: str) -> Result:
+def bring_into_view(sk: Skills, container: str) -> Result:
     """Base moves until the whole container is inside the wrist frame, aiming its visible box's
     centre at the spot under the gripper (where the taught brick's middle was). Coarse: the
     floor's Jacobian and SERVO_GAIN; the two-height location after it is the precise part. The
@@ -188,7 +188,7 @@ def bring_into_view(sk: Skills2, container: str) -> Result:
     return Result(False, f"the {container} stays partly out of the wrist frame")
 
 
-def over_container(sk: Skills2, container: str) -> Result:
+def over_container(sk: Skills, container: str) -> Result:
     """Put the gripper over a stationary container (owner, Oct 27: it won't move): bring it
     wholly into the wrist view with the base, locate its opening's centre from one look with
     its rim height as the front camera measured it during the approach, and move over it once
@@ -222,19 +222,19 @@ def over_container(sk: Skills2, container: str) -> Result:
     return Result(False, f"couldn't get over the {container} in {int(prm.SERVO_MAX_LOOKS.value)} looks")
 
 
-def beside(sk: Skills2, ref: str) -> Result:
+def beside(sk: Skills, ref: str) -> Result:
     """Base, then arm: the reference object just beside where the held one will land."""
     r = sk.servo(ref, BesideGoal(tol_m=prm.REACH_TOL_M), part="base")
     return sk.servo(ref, BesideGoal(tol_m=prm.REACH_TOL_M)) if r.ok else r  # coarse here; precise at 3 cm
 
 
-def lower_to_release(sk: Skills2) -> Result:
+def lower_to_release(sk: Skills) -> Result:
     """Straight down to the demo's release height; stops early if the held object meets
     something (the container's bottom)."""
     return sk.move("arm", height=prm.RELEASE_ABOVE_FLOOR_M.value, until_contact=True)
 
 
-def release(sk: Skills2) -> Result:
+def release(sk: Skills) -> Result:
     """Open the jaws and check they hold nothing any more."""
     r = sk.grip("open")
     if not r.ok:
@@ -243,7 +243,7 @@ def release(sk: Skills2) -> Result:
     return Result(not held, "still holding after opening" if held else "", {**r.data, "held": held})
 
 
-def check_in(sk: Skills2, obj: str, container: str) -> Result:
+def check_in(sk: Skills, obj: str, container: str) -> Result:
     """After the release: is the object on the floor in the front camera? Then it missed the
     container. The front camera looks across the floor from ~4 cm up, so an object inside a
     container taller than that is hidden by its wall, and a miss lands around the reach point,
@@ -257,7 +257,7 @@ def check_in(sk: Skills2, obj: str, container: str) -> Result:
     return Result(True)
 
 
-def check_beside(sk: Skills2, obj: str, ref: str) -> Result:
+def check_beside(sk: Skills, obj: str, ref: str) -> Result:
     """After the release, from the hover: the object beside the reference with about the
     intended gap (goals.placed_beside). Can't see both: passes, unchecked."""
     a, b = sk.find(obj, "wrist", fast_ok=False), sk.find(ref, "wrist", fast_ok=False)
@@ -269,7 +269,7 @@ def check_beside(sk: Skills2, obj: str, ref: str) -> Result:
     return Result(ok, "" if ok else f"the {obj} is not beside the {ref}", {"checked": True})
 
 
-def put_down(sk: Skills2) -> Result:
+def put_down(sk: Skills) -> Result:
     """Set the held object back on the floor over the reach point: hover there, land, release,
     back up to the hover height."""
     for step in (lambda: hover_at(sk, prm.HOVER_HEIGHT_M), lambda: land(sk), lambda: release(sk),

@@ -35,7 +35,7 @@ import time
 from dataclasses import dataclass, field
 
 import numpy as np
-from arm import (
+from common.arm import (
     FLOOR_CLEARANCE_M,
     JAW_TIP_OFFSET_M,
     JOINT_LIMIT_MARGIN,
@@ -45,12 +45,12 @@ from arm import (
     PlanError,
     plan_ee_line,
 )
-from robot import RobotError
-from vision import colour_matches, measured_angle_of, snap_box
+from common.robot import RobotError
+from common.vision import colour_matches, measured_angle_of, snap_box
 
-from v2 import params as prm
-from v2.geometry import Geometry
-from v2.goals import Detection
+from brain import params as prm
+from brain.geometry import Geometry
+from brain.goals import Detection
 
 VERTICAL = 90.0  # convention: the arm model's pitch for a gripper pointing straight down
 
@@ -77,7 +77,7 @@ def has_colour(jpeg: bytes, box, obj: str) -> bool:
     return ok and not why.startswith("too few")
 
 
-class Skills2:
+class Skills:
     _last_moved: str | None = None  # "arm" or "base": what moved last, for the settle before a frame
 
     def __init__(self, robot, arm: Arm, geom: Geometry, log=None, main=None, fast=None):

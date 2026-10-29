@@ -22,8 +22,7 @@
 import sys
 
 import numpy as np
-
-from demo_extract import find_close, find_keyframes
+from calibration.demo_extract import find_close, find_keyframes
 
 rng = np.random.default_rng(0)
 

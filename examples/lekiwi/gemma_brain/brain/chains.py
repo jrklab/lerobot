@@ -26,9 +26,9 @@ which, so the executor can retry or replan.
 
 from __future__ import annotations
 
-from v2 import actions, params as prm
-from v2.goals import BesideGoal, JawGoal
-from v2.skills import Result, Skills2
+from brain import actions, params as prm
+from brain.goals import BesideGoal, JawGoal
+from brain.primitives import Result, Skills
 
 
 def run(steps) -> Result:
@@ -42,7 +42,7 @@ def run(steps) -> Result:
     return Result(True, data={"done": done})
 
 
-def pick(sk: Skills2, obj: str, drive: bool = True, start: str | None = None) -> Result:
+def pick(sk: Skills, obj: str, drive: bool = True, start: str | None = None) -> Result:
     """Pick `obj` from the floor. drive=False: the object is already near the reach point (the
     base stays put for the approach; the line-up still moves it). start: begin at this step (a
     retry resumes at "hover" rather than driving again)."""
@@ -65,7 +65,7 @@ def pick(sk: Skills2, obj: str, drive: bool = True, start: str | None = None) ->
     return run(steps)
 
 
-def place_in(sk: Skills2, obj: str, container: str, drive: bool = True) -> Result:
+def place_in(sk: Skills, obj: str, container: str, drive: bool = True) -> Result:
     """Put the held `obj` into `container` the way the owner's demo did: from above it, lowered
     to the demo's release height, then opened."""
     steps = [("holding", lambda: Result(sk.held(), "" if sk.held() else f"not holding the {obj}"))]
@@ -82,7 +82,7 @@ def place_in(sk: Skills2, obj: str, container: str, drive: bool = True) -> Resul
     return run(steps)
 
 
-def place_next_to(sk: Skills2, obj: str, ref: str, drive: bool = True) -> Result:
+def place_next_to(sk: Skills, obj: str, ref: str, drive: bool = True) -> Result:
     """Set the held `obj` down on the floor beside `ref`: lined up from the hover height, checked
     again low, landed like a grasp, then opened."""
     steps = [("holding", lambda: Result(sk.held(), "" if sk.held() else f"not holding the {obj}"))]

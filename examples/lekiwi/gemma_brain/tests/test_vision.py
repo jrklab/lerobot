@@ -17,7 +17,7 @@
 
 import cv2
 import numpy as np
-from vision import jaw_geometry
+from common.vision import jaw_geometry
 
 W, H = 640, 480
 BLUE = (200, 40, 20)  # BGR

@@ -35,20 +35,20 @@ from __future__ import annotations
 
 import time
 
-from arm import JAW_TIP_OFFSET_M, RESET_SAFE_Z_M, PlanError
-from planner import Planner, Step, check_plan
-from robot import OperatorTookOver, RobotError
-from runlog import Log
+from common.arm import JAW_TIP_OFFSET_M, RESET_SAFE_Z_M, PlanError
+from common.planner import Planner, Step, check_plan
+from common.robot import OperatorTookOver, RobotError
+from common.runlog import Log
 
-from v2 import actions, chains, params as prm
-from v2.skills import Result, Skills2
+from brain import actions, chains, params as prm
+from brain.primitives import Result, Skills
 
 # What the chains can run: (verb, relation).
 SUPPORTED = {("pick", None), ("place", "in"), ("place", "next_to")}
 
 
 class PlanBrain:
-    def __init__(self, sk: Skills2 | None, planner: Planner, log: Log, robot=None, holding: str | None = None):
+    def __init__(self, sk: Skills | None, planner: Planner, log: Log, robot=None, holding: str | None = None):
         self.sk, self.planner, self.log, self.robot = sk, planner, log, robot
         self.holding = holding
         if sk is not None:

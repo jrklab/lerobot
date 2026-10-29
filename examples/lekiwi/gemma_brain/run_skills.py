@@ -16,17 +16,17 @@
 
 # ruff: noqa: E402
 
-"""Robot runs of the v2 skills, one at a time (each needs the owner's OK).
+"""Robot runs of the skills, one at a time (each needs the owner's OK).
 
-    .venv/bin/python run_v2.py land                 hover at the reach point, land, back up, fold
-    .venv/bin/python run_v2.py pick ["red block"]   the pick chain (approach first)
-    .venv/bin/python run_v2.py pick --no-drive      the brick already near the reach point
-    .venv/bin/python run_v2.py place-in "red block" --to "paper cup"     (holding the brick)
-    .venv/bin/python run_v2.py next-to "red block" --to "green block"    (holding the brick)
-    .venv/bin/python run_v2.py trials --n 5 --back 0.40   driven picks in a row: after each the
+    .venv/bin/python run_skills.py land                 hover at the reach point, land, back up, fold
+    .venv/bin/python run_skills.py pick ["red block"]   the pick chain (approach first)
+    .venv/bin/python run_skills.py pick --no-drive      the brick already near the reach point
+    .venv/bin/python run_skills.py place-in "red block" --to "paper cup"     (holding the brick)
+    .venv/bin/python run_skills.py next-to "red block" --to "green block"    (holding the brick)
+    .venv/bin/python run_skills.py trials --n 5 --back 0.40   driven picks in a row: after each the
                          brick goes back on the floor, the arm folds and the base backs up
 
-Logs and frames under runs/<time>-v2-<what>/. The arm folds at the end, holding or not.
+Logs and frames under runs/<time>-skills-<what>/. The arm folds at the end, holding or not.
 """
 
 import argparse
@@ -40,13 +40,13 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
-from arm import Arm
-from gemma import LlamaCpp
-from robot import Robot
-from runlog import Log
-from v2 import actions, chains
-from v2.geometry import Geometry
-from v2.skills import Skills2
+from brain import actions, chains
+from brain.geometry import Geometry
+from brain.primitives import Skills
+from common.arm import Arm
+from common.gemma import LlamaCpp
+from common.robot import Robot
+from common.runlog import Log
 
 
 def main() -> None:
@@ -64,11 +64,11 @@ def main() -> None:
         # Keep the Mac from idle-sleeping while this process runs: on Oct 27 it slept 282 s
         # mid-pick (on battery), the heartbeats stopped and the Pi aborted the move.
         subprocess.Popen(["caffeinate", "-i", "-w", str(os.getpid())])
-    log = Log(HERE / "runs" / (datetime.datetime.now().strftime("%Y%m%dT%H%M%S") + f"-v2-{args.what}"))
+    log = Log(HERE / "runs" / (datetime.datetime.now().strftime("%Y%m%dT%H%M%S") + f"-skills-{args.what}"))
     robot = Robot()
     with robot:
         arm = Arm(robot)
-        sk = Skills2(robot, arm, Geometry.load(), log, main=LlamaCpp(args.main_url),
+        sk = Skills(robot, arm, Geometry.load(), log, main=LlamaCpp(args.main_url),
                      fast=LlamaCpp(args.fast_url, "gemma4-e2b") if args.fast_url else None)
         try:
             if args.what == "trials":

@@ -18,7 +18,7 @@
 
     python examples/lekiwi/web_server/test_auto_control.py     (or: pytest <this file>)
 
-The simulation (Sim, also used by gemma_brain/test_arm.py): each joint moves toward its
+The simulation (Sim, also used by gemma_brain/tests/test_arm.py): each joint moves toward its
 target at a capped speed, or is blocked at a "wall" (which then reports a stall); the base's
 measured velocity is its command. Joint units map to radians as +/-100 units = +/-180 deg,
 RobotBridge's uncalibrated fallback.

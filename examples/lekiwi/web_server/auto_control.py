@@ -70,7 +70,7 @@ MAX_JOINT_SPEED = 60.0  # units/s, on any joint in any segment
 DEFAULT_JOINT_SPEED = 35.0
 MAX_WAYPOINTS = 600
 CLEARANCE_SAMPLE_UNITS = 5.0
-# The jaw tips extend this far past the TCP along its approach axis (gemma_brain/arm.py's
+# The jaw tips extend this far past the TCP along its approach axis (gemma_brain/common/arm.py's
 # JAW_TIP_OFFSET_M, from the floor probe).
 JAW_TIP_OFFSET_M = 0.015
 # Floor guard for the jaw tips' z in the arm base frame when a command doesn't send its own

@@ -14,11 +14,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# ruff: noqa: E402
+
 """Calibrate the front camera's geometry after it is moved (calib.json "front_camera"), with
 the robot itself: one brick on the floor 0.6-1 m in front, roughly straight ahead, ~1 m of
 free floor up to it.
 
-    .venv/bin/python calibrate_front.py ["red Lego brick"] [--vision-url http://127.0.0.1:8081]
+    .venv/bin/python calibration/calibrate_front.py ["red Lego brick"] [--vision-url http://127.0.0.1:8081]
 
 1. Turn test: the brick's image column at heading 0, +8 and -8 deg -> FRONT_U_PER_DEG.
 2. Drive test: straight at it in 8 cm steps (at most 1 m), logging where its box meets the
@@ -45,16 +47,21 @@ import argparse
 import datetime
 import json
 import math
+import sys
 from pathlib import Path
 
 import numpy as np
-from arm import Arm
-from gemma import LlamaCpp
-from robot import Robot
-from runlog import Log
-from v2 import actions, params as prm
-from v2.geometry import Geometry, locate_from_one_view
-from v2.skills import Skills2
+
+ROOT = Path(__file__).resolve().parents[1]  # gemma_brain: common/, brain/, data/, runs/
+sys.path.insert(0, str(ROOT))
+
+from brain import actions, params as prm
+from brain.geometry import Geometry, locate_from_one_view
+from brain.primitives import Skills
+from common.arm import Arm
+from common.gemma import LlamaCpp
+from common.robot import Robot
+from common.runlog import Log
 
 TURN_DEG = 8.0
 STEP_M = 0.08
@@ -69,12 +76,12 @@ def main() -> None:
     ap.add_argument("target", nargs="?", default="red Lego brick")
     ap.add_argument("--vision-url", default="http://127.0.0.1:8081", help="llama-server for the boxes (26B)")
     args = ap.parse_args()
-    out = Path(__file__).parent / "runs" / (datetime.datetime.now().strftime("%Y%m%dT%H%M%S") + "-front-calib")
+    out = ROOT / "runs" / (datetime.datetime.now().strftime("%Y%m%dT%H%M%S") + "-front-calib")
     log = Log(out)
     robot = Robot()
     with robot:
         arm = Arm(robot)
-        sk = Skills2(robot, arm, Geometry.load(), log, main=LlamaCpp(args.vision_url))
+        sk = Skills(robot, arm, Geometry.load(), log, main=LlamaCpp(args.vision_url))
         was = sk.geom.front["u_per_deg"]
         arm.reset()
 
@@ -190,14 +197,14 @@ def main() -> None:
     print(f"fit rms {1000 * rms:.0f} mm:", value)
     if near > 0.99:
         print("WARNING: the stop row is at the very bottom of the view: approach can't see that close")
-    calib_path = Path(__file__).with_name("calib.json")
+    calib_path = ROOT / "data" / "calib.json"
     calib = json.loads(calib_path.read_text())
     calib["front_camera"] = {
         "value": value,
-        "meaning": "front-camera geometry for the approach and object heights (v2/geometry.py, goals.FrontApproachGoal)",
+        "meaning": "front-camera geometry for the approach and object heights (brain/geometry.py, goals.FrontApproachGoal)",
         "method": "calibrate_front.py: turn test, straight drive at a brick, wrist check at the reach point",
         "date": datetime.date.today().isoformat(),
-        "log": str(out.relative_to(Path(__file__).parent)),
+        "log": str(out.relative_to(ROOT)),
         "fit_rms_m": round(rms, 4),
     }
     calib_path.write_text(json.dumps(calib, indent=2) + "\n")

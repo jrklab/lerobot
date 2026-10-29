@@ -32,8 +32,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from v2 import params as prm
-from v2.geometry import IMAGE_PX, MissingCalibrationError, require_grasp_target
+from brain import params as prm
+from brain.geometry import IMAGE_PX, MissingCalibrationError, require_grasp_target
 
 
 @dataclass

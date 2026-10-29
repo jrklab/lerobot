@@ -15,7 +15,7 @@
 
 # ruff: noqa: E402
 
-"""Offline checks for the v2 skills (v2/): geometry, and move/land/grip run by the Pi's
+"""Offline checks for the v2 skills (brain/): geometry, and move/land/grip run by the Pi's
 AutoController in the web_server simulation (as test_arm.py)."""
 
 import json
@@ -26,15 +26,15 @@ import cv2
 import numpy as np
 
 HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE.parent / "web_server"))
+sys.path.insert(0, str(HERE.parents[1] / "web_server"))
 
-from arm import Arm, Calibration  # noqa: E402
+from brain import actions, goals, params as prm  # noqa: E402
+from brain.geometry import Geometry, fit_floor  # noqa: E402
+from brain.goals import Detection  # noqa: E402
+from brain.primitives import Skills  # noqa: E402
+from common.arm import Arm, Calibration  # noqa: E402
 from test_arm import SimRobot as _SimRobot  # noqa: E402
 from test_auto_control import Sim  # noqa: E402
-from v2 import actions, goals, params as prm  # noqa: E402
-from v2.geometry import Geometry, fit_floor  # noqa: E402
-from v2.goals import Detection  # noqa: E402
-from v2.skills import Skills2  # noqa: E402
 
 CAL = Calibration()
 
@@ -62,7 +62,7 @@ def geom(floor_z):
 def skills_over(real_floor_tcp_z, predicted):
     # The sim's floor stops the TCP; ours is TCP z at contact, so the same number.
     sim = Sim(floor_z=real_floor_tcp_z)
-    sk = Skills2(SimRobot(sim), Arm(SimRobot(sim), CAL, body_check=False), geom(predicted))
+    sk = Skills(SimRobot(sim), Arm(SimRobot(sim), CAL, body_check=False), geom(predicted))
     assert sk.move(xy=(0.22, 0.0), height=0.05).ok
     return sim, sk
 
@@ -157,12 +157,12 @@ def _stray_numbers(path):
 def test_v2_code_holds_no_stray_numbers():
     # Layers 1-3: every value comes from params.py (with its source) or geometry.py (CALIB);
     # actions and chains may not even mark conventions.
-    for name in ("skills.py", "goals.py", "geometry.py", "actions.py", "chains.py"):
-        path = HERE / "v2" / name
+    for name in ("primitives.py", "goals.py", "geometry.py", "actions.py", "chains.py"):
+        path = HERE.parent / "brain" / name
         stray = _stray_numbers(path)
         assert not stray, f"numbers outside params.py: {stray} (move them there with their source, or mark a convention)"
     for name in ("actions.py", "chains.py"):
-        assert "# convention" not in (HERE / "v2" / name).read_text()
+        assert "# convention" not in (HERE.parent / "brain" / name).read_text()
 
 
 def test_the_stray_number_check_catches_one(tmp_path):
@@ -179,7 +179,7 @@ class FakeModel:
         self.boxes, self.calls = list(boxes), 0
 
     def box(self, jpeg, what):
-        from gemma import Answer
+        from common.gemma import Answer
 
         self.calls += 1
         self.asked = what
@@ -194,7 +194,7 @@ def red_frame(box):
 
 
 def test_placed_beside_measures_the_gap_and_level():
-    from v2.goals import placed_beside
+    from brain.goals import placed_beside
 
     # Beside: the reference's right edge left of the object by about half its width.
     held = [0.45, 0.5, 0.55, 0.7]
@@ -234,7 +234,7 @@ class FrameRobot:
 
 
 def finder(jpeg, main, fast):
-    sk = Skills2.__new__(Skills2)
+    sk = Skills.__new__(Skills)
     sk.robot, sk.log, sk.main, sk.fast, sk.seen = FrameRobot(jpeg), None, main, fast, {}
     return sk
 
@@ -244,9 +244,9 @@ def test_find_uses_the_fast_model_only_when_tracking_and_checks_its_colour(monke
     jpeg = red_frame(box)
     main, fast = FakeModel([box, box]), FakeModel([[0.05, 0.05, 0.15, 0.15], box])
     sk = finder(jpeg, main, fast)
-    import v2.skills as skills_v2
+    import brain.primitives as primitives
 
-    monkeypatch.setattr(skills_v2.time, "sleep", lambda s: None)
+    monkeypatch.setattr(primitives.time, "sleep", lambda s: None)
     assert sk.find("red block") is not None and (main.calls, fast.calls) == (1, 0)  # first sight: main
     d = sk.find("red block")  # tracking: fast boxed grey floor -> rejected by colour -> main
     assert d is not None and d.by == "main" and (main.calls, fast.calls) == (2, 1)
@@ -256,9 +256,9 @@ def test_find_uses_the_fast_model_only_when_tracking_and_checks_its_colour(monke
 
 def test_a_front_box_ending_above_the_horizon_is_not_on_the_floor(monkeypatch):
     # Oct 28: carried at the hover, the jaw tips show at the front frame's top.
-    import v2.skills as skills_v2
+    import brain.primitives as primitives
 
-    monkeypatch.setattr(skills_v2.time, "sleep", lambda s: None)
+    monkeypatch.setattr(primitives.time, "sleep", lambda s: None)
     high, low = [0.50, 0.00, 0.60, 0.20], [0.40, 0.40, 0.50, 0.55]
     for box, found in ((high, False), (low, True)):
         sk = finder(red_frame(box), FakeModel([box]), None)
@@ -269,7 +269,7 @@ def test_a_front_box_ending_above_the_horizon_is_not_on_the_floor(monkeypatch):
 
 def test_a_measured_move_takes_up_the_arms_play():
     # Oct 28 trials: a 2 mm reversal moved the encoders 0 mm, a forward step went 3.5 mm too far.
-    from v2.skills import Result
+    from brain.primitives import Result
 
     class Play:
         """An arm whose position follows its command only once the command is more than `slack`
@@ -289,7 +289,7 @@ def test_a_measured_move_takes_up_the_arms_play():
         resolution = 4096
 
     def skills(arm):
-        sk = Skills2.__new__(Skills2)
+        sk = Skills.__new__(Skills)
         sk.log, sk.arm, sk.move, sk._settle = None, type("A", (), {"calib": Cal()})(), arm.move, lambda: None
         sk.tcp = lambda: np.array([*arm.pos, -0.08])
         return sk
@@ -324,7 +324,7 @@ def test_the_look_settle_ends_once_the_arm_is_still_and_waits_after_the_base():
     class Cal:
         resolution = 4096
 
-    sk = Skills2.__new__(Skills2)
+    sk = Skills.__new__(Skills)
     sk.log, sk.arm = None, type("A", (), {"calib": Cal()})()
     path = iter([0.25, 0.254] + [0.258] * 50)  # still from the 3rd read
     reads = []
@@ -342,7 +342,7 @@ def test_the_look_settle_ends_once_the_arm_is_still_and_waits_after_the_base():
 
 
 def test_carry_holds_at_the_hover_without_folding():
-    from v2.skills import Result
+    from brain.primitives import Result
 
     calls = []
 
@@ -359,9 +359,9 @@ def test_carry_holds_at_the_hover_without_folding():
 def test_container_looks_ask_for_its_rim(monkeypatch):
     # Oct 28 replay: "the rim of the paper cup" boxed it in 55 of 55 wrist frames, "the paper cup
     # on the floor" missed all 6 with the cup's middle under the held brick.
-    import v2.skills as skills_v2
+    import brain.primitives as primitives
 
-    monkeypatch.setattr(skills_v2.time, "sleep", lambda s: None)
+    monkeypatch.setattr(primitives.time, "sleep", lambda s: None)
     box = [0.2, 0.3, 0.8, 0.95]
     main = FakeModel([box, box])
     sk = finder(red_frame(box), main, None)
@@ -400,14 +400,14 @@ class SimServo:
         j = self.goal._jac(self, self.h) * self.true_scale
         self.point = self.point + j @ np.asarray(delta[:2], float)  # the object, seen from the moving camera
         self.moves += 1
-        from v2.skills import Result
+        from brain.primitives import Result
 
         return Result(True)
 
     def ev(self, *a, **k):
         pass
 
-    servo = Skills2.servo
+    servo = Skills.servo
 
 
 def jaw_geom():
@@ -430,7 +430,7 @@ def test_servo_converges_with_a_30_percent_wrong_jacobian():
 
 def test_jaw_goal_needs_the_midpoint_teach():
     import pytest
-    from v2.geometry import MissingCalibrationError
+    from brain.geometry import MissingCalibrationError
 
     sim = SimServo.__new__(SimServo)
     sim.geom, sim.roll, sim.h = geom(-0.11), 0.0, 0.03
@@ -442,11 +442,11 @@ def test_the_roll_ranges_ends_are_moves_the_planner_accepts():
     # Oct 28 full task: a brick at 15 deg, the range ending at ~14: the roll clamped to the end
     # was refused six times (the joint at 100.4, the planner's limit 99).
     # The robot's own calibration (the sim's uncalibrated one gives a different range):
-    from arm import Calibration
+    from common.arm import Calibration
 
     cal = Calibration(*_real_cal())
     sim = Sim(floor_z=-0.12)
-    sk = Skills2(SimRobot(sim), Arm(SimRobot(sim), cal, body_check=False), geom(-0.12))
+    sk = Skills(SimRobot(sim), Arm(SimRobot(sim), cal, body_check=False), geom(-0.12))
     assert actions.hover(sk).ok
     for end in sk.roll_range:
         r = sk.move("arm", delta=(0.0, 0.0, 0.0), roll=end)
@@ -454,7 +454,7 @@ def test_the_roll_ranges_ends_are_moves_the_planner_accepts():
 
 
 def _real_cal():
-    c = json.loads((Path(__file__).parent / "arm_calibration.json").read_text())  # robot.calibration(), Oct 28
+    c = json.loads((Path(__file__).parent / "fixtures" / "arm_calibration.json").read_text())  # robot.calibration(), Oct 28
     return c["joints"], c["motor_resolution"]
 
 
@@ -502,8 +502,8 @@ def test_front_approach_stops_turning_once_a_turn_carries_the_object_across_the_
 
 
 def test_pick_chain_runs_its_steps_in_order_and_stops_at_the_first_failure(monkeypatch):
-    from v2 import chains
-    from v2.skills import Result
+    from brain import chains
+    from brain.primitives import Result
 
     calls = []
 
@@ -512,7 +512,7 @@ def test_pick_chain_runs_its_steps_in_order_and_stops_at_the_first_failure(monke
 
     for name in ("approach", "hover", "line_up", "align", "land", "lift"):
         monkeypatch.setattr(chains.actions, name, ok(name))
-    sk = Skills2.__new__(Skills2)
+    sk = Skills.__new__(Skills)
     sk.servo = lambda obj, goal, part=None: (calls.append(type(goal).__name__), Result(True))[1]
     sk.move = lambda part, **k: (calls.append("down"), Result(True))[1]
     sk.grip = lambda how, **k: (calls.append(how), Result(True))[1]
@@ -534,8 +534,8 @@ def test_pick_chain_runs_its_steps_in_order_and_stops_at_the_first_failure(monke
 
 
 def test_only_the_pis_check_refusals_count_as_refused():
-    from robot import RobotError
-    from v2.skills import pi_refused
+    from brain.primitives import pi_refused
+    from common.robot import RobotError
 
     assert pi_refused(RobotError("POST /auto/cmd: HTTP 409: trajectory: the gripper reaches z -0.091 m at waypoint 6, below z_min -0.085 m"))
     assert not pi_refused(RobotError("POST /auto/cmd: HTTP 409: busy: command 12 (trajectory) is still running"))
@@ -544,9 +544,9 @@ def test_only_the_pis_check_refusals_count_as_refused():
 
 
 def _chain_sk(calls, held=True):
-    from v2.skills import Result
+    from brain.primitives import Result
 
-    sk = Skills2.__new__(Skills2)
+    sk = Skills.__new__(Skills)
     sk.servo = lambda obj, goal, part=None: (calls.append(f"{type(goal).__name__}:{part or goal.part}"), Result(True))[1]
     sk.move = lambda part, **k: (calls.append("move"), Result(True))[1]
     sk.grip = lambda how, **k: (calls.append(how), Result(True))[1]
@@ -556,7 +556,7 @@ def _chain_sk(calls, held=True):
 
 
 def test_place_in_runs_over_lower_release(monkeypatch):
-    from v2 import chains
+    from brain import chains
 
     calls = []
     monkeypatch.setattr(prm, "demo_place_view", lambda: ([0.15, 0.05, 0.75, 0.80], 0.106))
@@ -572,14 +572,14 @@ def test_place_in_runs_over_lower_release(monkeypatch):
 
 
 def test_place_needs_something_held():
-    from v2 import chains
+    from brain import chains
 
     r = chains.place_in(_chain_sk([], held=False), "red block", "paper cup", drive=False)
     assert not r.ok and r.data["failed"] == "holding"
 
 
 def test_place_next_to_lines_up_twice_and_lands(monkeypatch):
-    from v2 import chains
+    from brain import chains
 
     calls = []
     sk = _chain_sk(calls)
@@ -628,14 +628,14 @@ def test_above_goal_converges_on_a_container(monkeypatch):
         def move(self, part, delta=None, roll=None, **kw):
             # the container's rim is nearer the camera than the floor: it moves 1.5x more
             self.centre = self.centre + 1.5 * (self.geom.jacobian(self.h) @ np.asarray(delta[:2]))
-            from v2.skills import Result
+            from brain.primitives import Result
 
             return Result(True)
 
         def ev(self, *a, **k):
             pass
 
-        servo = Skills2.servo
+        servo = Skills.servo
 
     w = World()
     assert w.servo("paper cup", goal).ok
@@ -653,7 +653,7 @@ def test_lift_right_after_landing_is_allowed():
 
 def test_a_move_crossing_the_clearance_goes_at_the_near_speed_only_below_it():
     # Oct 28 trials: a 13 cm lift from the floor took 13 s at the near speed all the way.
-    from arm import FLOOR_CLEARANCE_M, JAW_TIP_OFFSET_M
+    from common.arm import FLOOR_CLEARANCE_M, JAW_TIP_OFFSET_M
 
     sim, sk = skills_over(real_floor_tcp_z=-0.12, predicted=-0.12)
     assert actions.land(sk).ok
@@ -661,7 +661,7 @@ def test_a_move_crossing_the_clearance_goes_at_the_near_speed_only_below_it():
     # guard is taken (Oct 28 fit). Tilted the same way about where the arm is:
     x = sk.cmd_tcp()[0]
     sk.geom.floor_coef = np.array([-0.12 + 0.0224 * x, -0.0224, 0.0])
-    sk.arm.floor_z = float(sk.geom.floor_coef[0]) - JAW_TIP_OFFSET_M  # as Skills2.__init__ sets them
+    sk.arm.floor_z = float(sk.geom.floor_coef[0]) - JAW_TIP_OFFSET_M  # as Skills.__init__ sets them
     sk.arm.z_min = sk.arm.floor_z + FLOOR_CLEARANCE_M + JAW_TIP_OFFSET_M
     sent = []
     orig = sk.arm.robot.trajectory
@@ -690,7 +690,7 @@ def test_a_move_crossing_the_clearance_goes_at_the_near_speed_only_below_it():
 
 
 def test_lift_halves_where_the_full_lift_is_out_of_reach():
-    from v2.skills import Result
+    from brain.primitives import Result
 
     tried = []
 
@@ -719,7 +719,7 @@ def test_contact_moves_always_carry_their_own_floor_guard():
 
 
 def test_a_robot_refusal_is_a_failed_step_not_a_crash():
-    from robot import RobotError
+    from common.robot import RobotError
 
     sim, sk = skills_over(-0.12, -0.12)
 
@@ -739,7 +739,7 @@ def test_held_needs_the_hold_watch_not_just_a_high_reading():
         def status(self):
             return self.st
 
-    sk = Skills2.__new__(Skills2)
+    sk = Skills.__new__(Skills)
     for pos, state, want in ((6.8, "holding", True), (22.9, None, False), (1.6, "holding", False), (6.0, "dropped", False)):
         sk.robot = R(pos, state)
         assert sk.held() is want, (pos, state)
@@ -757,7 +757,7 @@ def test_round_centre_ignores_where_the_hidden_near_side_ends():
 def test_locate_from_one_view_recovers_a_cup_placed_in_a_simulated_view():
     # A camera model consistent with geometry.py: a point at (dx, dy) from the TCP's vertical
     # and height r is seen at under_tcp(z) - J(h) (d + h) / z @ (dx, dy), z = d + h - r.
-    from v2.geometry import locate_from_one_view
+    from brain.geometry import locate_from_one_view
 
     g = jaw_geom()
     g.grasp_box, g.grasp_target_height = [0.411, 0.613, 0.545, 0.927], 0.0015
@@ -769,7 +769,7 @@ def test_locate_from_one_view_recovers_a_cup_placed_in_a_simulated_view():
 
 
 def test_front_object_height_of_the_cup_in_two_logged_views():
-    from v2.geometry import front_object_height
+    from brain.geometry import front_object_height
 
     g = geom(-0.11)
     g.front = {"u_per_deg": 0.0184, "range_k": 0.0583, "range_horizon_v": 0.335}
@@ -793,10 +793,10 @@ def test_front_approach_is_done_within_the_line_ups_reach_and_aims_just_short():
 
 
 def test_a_failed_frame_request_resyncs_the_clock_and_retries(monkeypatch):
-    import v2.skills as skills_v2
-    from robot import RobotError
+    import brain.primitives as primitives
+    from common.robot import RobotError
 
-    monkeypatch.setattr(skills_v2.time, "sleep", lambda s: None)
+    monkeypatch.setattr(primitives.time, "sleep", lambda s: None)
 
     class R:
         _clock_offset, calls = 36.0, 0
@@ -820,7 +820,7 @@ def test_base_moves_ask_for_the_pis_stopping_tolerance_more():
             sent.append((round(dx, 4), round(dy, 4), round(dtheta_deg, 2)))
             return {"result": {"moved": [dx, dy, dtheta_deg]}}
 
-    sk = Skills2.__new__(Skills2)
+    sk = Skills.__new__(Skills)
     sk.robot, sk.log = R(), None
     sk.move("base", delta=(0.006, 0.008))  # 1 cm asked: the Pi would end it at once
     sk.move("base", roll=-5.0)
@@ -828,9 +828,9 @@ def test_base_moves_ask_for_the_pis_stopping_tolerance_more():
 
 
 def test_look_around_turns_left_and_right_until_it_finds_the_object():
-    from v2 import params as prm_
-    from v2.geometry import look_offsets
-    from v2.skills import Result
+    from brain import params as prm_
+    from brain.geometry import look_offsets
+    from brain.primitives import Result
 
     class World:
         """The object is seen when it's within half the view of the base's heading."""
@@ -877,7 +877,7 @@ def test_a_base_turn_over_the_pis_limit_goes_in_two():
             sent.append(round(dtheta_deg, 2))
             return {"result": {"moved": [dx, dy, dtheta_deg]}}
 
-    sk = Skills2.__new__(Skills2)
+    sk = Skills.__new__(Skills)
     sk.robot, sk.log = R(), None
     assert sk.move("base", roll=-180.0).ok
     stop = prm.BASE_TURN_STOP_SHORT_DEG.value
@@ -886,7 +886,7 @@ def test_a_base_turn_over_the_pis_limit_goes_in_two():
 
 def test_over_container_uses_the_look_that_brought_it_into_view(monkeypatch):
     # Oct 28: the look right after bring_into_view's got no box for a cup filling the view.
-    from v2.skills import Result
+    from brain.primitives import Result
 
     looks, moves = [Detection(box=[0.17, 0.14, 0.84, 0.97])], []
 
@@ -914,7 +914,7 @@ def test_over_container_uses_the_look_that_brought_it_into_view(monkeypatch):
 
 
 def test_bring_into_view_moves_towards_the_container_and_stops_if_it_drifts_away():
-    from v2.skills import Result
+    from brain.primitives import Result
 
     class World:
         geom, roll = jaw_geom(), 0.0

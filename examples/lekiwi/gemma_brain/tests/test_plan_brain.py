@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Offline checks for planner.py and the task loop (v2/executor.py): plan parsing and checking,
+"""Offline checks for planner.py and the task loop (brain/task_loop.py): plan parsing and checking,
 and the loop's steps, retries, replans and fold against fake chains. No robot, no model.
 
     uv run pytest test_plan_brain.py
@@ -25,14 +25,14 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from arm import RESET_SAFE_Z_M, PlanError
-from gemma import Answer
-from planner import Step, check_plan, objects_in, parse_plan
-from robot import OperatorTookOver, RobotError
-from runlog import Log
-from v2 import actions, chains, params as prm
-from v2.executor import SUPPORTED, PlanBrain
-from v2.skills import Result
+from brain import actions, chains, params as prm
+from brain.primitives import Result
+from brain.task_loop import SUPPORTED, PlanBrain
+from common.arm import RESET_SAFE_Z_M, PlanError
+from common.gemma import Answer
+from common.planner import Step, check_plan, objects_in, parse_plan
+from common.robot import OperatorTookOver, RobotError
+from common.runlog import Log
 
 
 class FakeModel:
@@ -79,7 +79,7 @@ class FakeArm:
 
 
 class FakeSkills:
-    """What the task loop reads off Skills2: what's held, the arm, the height."""
+    """What the task loop reads off Skills: what's held, the arm, the height."""
 
     def __init__(self, arm=None):
         self.holding, self.arm, self.roll, self.seen = None, arm or FakeArm(), 0.0, {}

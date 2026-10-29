@@ -32,7 +32,7 @@ from pathlib import Path
 
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "web_server"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "web_server"))
 
 import so101_kinematics as kin  # noqa: E402
 from auto_control import JOINT_RANGE, MAX_JOINT_SPEED  # noqa: E402

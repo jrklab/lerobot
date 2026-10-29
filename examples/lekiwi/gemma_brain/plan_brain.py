@@ -15,7 +15,7 @@
 # limitations under the License.
 
 """LeKiwi brain: say a task, the robot does it. Gemma 4 26B plans the task once from the two
-cameras; code runs the steps on the v2 skills (v2/executor.py, the task loop).
+cameras; code runs the steps on the skills (brain/task_loop.py, the task loop).
 
     .venv/bin/python plan_brain.py "put the red block in the paper cup"
     .venv/bin/python plan_brain.py --plan-only "..."     # plan and check it; nothing moves
@@ -35,14 +35,14 @@ import subprocess
 import sys
 from pathlib import Path
 
-from arm import Arm
-from gemma import LlamaCpp
-from planner import Planner
-from robot import CANDIDATE_URLS, OperatorTookOver, Robot, RobotError
-from runlog import Log
-from v2.executor import PlanBrain
-from v2.geometry import Geometry
-from v2.skills import Skills2
+from brain.geometry import Geometry
+from brain.primitives import Skills
+from brain.task_loop import PlanBrain
+from common.arm import Arm
+from common.gemma import LlamaCpp
+from common.planner import Planner
+from common.robot import CANDIDATE_URLS, OperatorTookOver, Robot, RobotError
+from common.runlog import Log
 
 PLANNER_URL = "http://127.0.0.1:8081"  # 26B-A4B, 70 image tokens
 FAST_URL = "http://127.0.0.1:8082"  # E2B Q4_K_M, 70 image tokens: repeat looks inside the skills
@@ -85,7 +85,7 @@ def main() -> int:
         arm = Arm(robot)
         if sys.platform == "darwin":  # no idle sleep mid-task (Oct 27: the Pi stopped on lost heartbeats)
             subprocess.Popen(["caffeinate", "-i", "-w", str(os.getpid())])
-        sk = Skills2(robot, arm, Geometry.load(), log, main=LlamaCpp(args.vision_url),
+        sk = Skills(robot, arm, Geometry.load(), log, main=LlamaCpp(args.vision_url),
                      fast=None if args.no_fast else LlamaCpp(args.fast_url, "gemma4-e2b"))
         pb = PlanBrain(sk, planner, log, robot, args.holding)
         try:

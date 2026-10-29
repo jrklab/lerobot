@@ -14,10 +14,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# ruff: noqa: E402
+
 """Measure the floor height in the arm base frame by touching it, gripper closed and
 pointing straight down.
 
-    .venv/bin/python calibrate_floor.py [--x 0.22 0.28] [--write]
+    .venv/bin/python calibration/calibrate_floor.py [--x 0.22 0.28] [--write]
 
 The TCP is lowered in small steps. After each step, the measured TCP height (forward
 kinematics of the measured joints) is compared with the commanded one. In free air the arm
@@ -37,13 +39,17 @@ import argparse
 import datetime
 import json
 import logging
+import sys
 import time
 from pathlib import Path
 
 import numpy as np
 
-from arm import Arm, PlanError
-from robot import Robot, RobotError
+ROOT = Path(__file__).resolve().parents[1]  # gemma_brain: common/, brain/, data/, runs/
+sys.path.insert(0, str(ROOT))
+
+from common.arm import Arm, PlanError
+from common.robot import Robot, RobotError
 
 STEP_M = 0.003
 CONTACT_GAP_M = 0.0015
@@ -52,7 +58,7 @@ FAST_TO_Z_M = -0.08  # descend in one move to here (the floor is ~-0.113 for the
 START_Z_M = 0.03  # TCP height the descent starts from
 NEAR_X_M = 0.22  # a start point reachable straight down from "ready"
 LOWEST_Z_M = -0.20  # never command below this, contact or not
-CALIB = Path(__file__).with_name("calib.json")
+CALIB = ROOT / "data" / "calib.json"
 
 
 def gap(arm: Arm) -> tuple[float, float, float]:

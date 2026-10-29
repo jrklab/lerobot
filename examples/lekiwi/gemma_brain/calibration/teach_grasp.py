@@ -19,7 +19,7 @@
 """The owner's midpoint teach (v2's grasp target, calib.json "wrist_grasp_target"): where the
 brick's box sits in the wrist image, just before closing, when it is held by its middle.
 
-    .venv/bin/python teach_grasp.py ["red block"] [--write] [--close]
+    .venv/bin/python calibration/teach_grasp.py ["red block"] [--write] [--close]
 
 1. The open, vertical gripper goes over the reach point at 10 cm, then lands at the grasp
    height (jaw tips GRASP_LIFT_M above the floor, without pressing).
@@ -37,18 +37,18 @@ import sys
 import time
 from pathlib import Path
 
-HERE = Path(__file__).resolve().parent
+HERE = Path(__file__).resolve().parents[1]  # gemma_brain
 sys.path.insert(0, str(HERE))
 
-from arm import Arm  # noqa: E402
-from gemma import LlamaCpp  # noqa: E402
-from robot import Robot  # noqa: E402
-from runlog import Log  # noqa: E402
-from v2 import actions, params as prm  # noqa: E402
-from v2.geometry import Geometry  # noqa: E402
-from v2.skills import Skills2  # noqa: E402
+from brain import actions, params as prm  # noqa: E402
+from brain.geometry import Geometry  # noqa: E402
+from brain.primitives import Skills  # noqa: E402
+from common.arm import Arm  # noqa: E402
+from common.gemma import LlamaCpp  # noqa: E402
+from common.robot import Robot  # noqa: E402
+from common.runlog import Log  # noqa: E402
 
-CALIB = HERE / "calib.json"
+CALIB = HERE / "data" / "calib.json"
 
 
 def main() -> None:
@@ -65,7 +65,7 @@ def main() -> None:
     robot = Robot()
     with robot:
         arm = Arm(robot)
-        sk = Skills2(robot, arm, Geometry.load(), log, main=LlamaCpp(args.vision_url))
+        sk = Skills(robot, arm, Geometry.load(), log, main=LlamaCpp(args.vision_url))
         try:
             xy = (prm.REACH_POINT_X_M.value, 0.0)
             for r in (sk.move(xy=xy, height=prm.HOVER_HEIGHT_M.value, roll=0.0), sk.grip("open"), actions.land(sk)):

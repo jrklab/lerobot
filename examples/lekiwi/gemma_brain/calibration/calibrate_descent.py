@@ -14,6 +14,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# ruff: noqa: E402
+
 """Fit how a floor point moves in the wrist image as the gripper goes straight down
 (calib.json "wrist_descent"), from the logged picks in runs/ (no robot motion).
 
@@ -26,18 +28,22 @@ Every logged descent between two looks with no sideways move in between is one s
     how far the brick lands from where the model put it, in mm at the floor. The arm's sag
     differs with reach and roll, so this is noise the final check must allow for.
 
-    python calibrate_descent.py [--runs 'runs/2026*'] [--write]
+    python calibration/calibrate_descent.py [--runs 'runs/2026*'] [--write]
 """
 
 import argparse
 import datetime
 import glob
 import json
+import sys
 from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]  # gemma_brain: common/, brain/, data/, runs/
+sys.path.insert(0, str(ROOT))
 
 import numpy as np
 
-CALIB = Path(__file__).with_name("calib.json")
+CALIB = ROOT / "data" / "calib.json"
 MOVES = ("servo_step", "along_step", "base", "lineup_arm", "roll_step")
 
 
@@ -72,7 +78,7 @@ def descents(log: Path) -> list[dict]:
 
 
 def descents_v2(log: Path) -> list[dict]:
-    """The same pairs from a v2 run (run_v2.py): heights from the arm moves' goals over the
+    """The same pairs from a v2 run (run_skills.py): heights from the arm moves' goals over the
     predicted floor, wrist boxes from find events; a pair is two wrist looks with only a
     vertical arm move between them (same x, y and roll, no base move). v2 has no frame at
     the grasp height, so no "last" pairs."""
@@ -100,7 +106,7 @@ def inside(v: float) -> bool:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--runs", nargs="+", default=["runs/2026*"], help="glob(s) of run folders")
+    ap.add_argument("--runs", nargs="+", default=[str(ROOT / "runs" / "2026*")], help="glob(s) of run folders")
     ap.add_argument("--write", action="store_true")
     args = ap.parse_args()
     logs = sorted({p for pattern in args.runs for p in glob.glob(f"{pattern}/log.jsonl")})

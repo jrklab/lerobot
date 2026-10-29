@@ -1,4 +1,3 @@
-
 # Copyright 2025 The HuggingFace Inc. team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -13,6 +12,5 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""LeKiwi brain, version 2 skills (design doc "Step 5 design"): generic find / move /
-servo / grip skills over measured geometry, chained per plan verb. v1 (../skills.py) stays as
-the reference until v2 matches it."""
+"""Scripts that measure this robot into data/calib.json, and the demo extractor that writes
+data/demos/."""

@@ -27,9 +27,20 @@ from pathlib import Path
 import numpy as np
 
 HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE.parent / "web_server"))
+sys.path.insert(0, str(HERE.parents[1] / "web_server"))
 
-from arm import FLOOR_CLEARANCE_M, IK_ARM_JOINTS, NAMED_POSES, Arm, Calibration, PlanError, arm_points, plan_ee_line, tool_orientation, tool_pitch_roll  # noqa: E402
+from common.arm import (  # noqa: E402
+    FLOOR_CLEARANCE_M,
+    IK_ARM_JOINTS,
+    NAMED_POSES,
+    Arm,
+    Calibration,
+    PlanError,
+    arm_points,
+    plan_ee_line,
+    tool_orientation,
+    tool_pitch_roll,
+)
 from test_auto_control import Sim, run_tests  # noqa: E402
 
 CAL = Calibration()  # uncalibrated: the same +/-100 = +/-180 deg mapping as the Sim
@@ -124,7 +135,7 @@ def test_reset_goes_home_clear_of_the_floor():
 def test_trapezoid_timing():
     # Short moves aren't padded: a 2 cm move at 3 cm/s, accel 0.15 m/s^2 takes ~0.73 s
     # (triangular profile), not 3x its constant-speed time.
-    from arm import _trapezoid_time
+    from common.arm import _trapezoid_time
     total = _trapezoid_time(0.02, 0.02, 0.03, 0.15)
     assert 0.6 < total < 0.9, total
     # A long move cruises: 30 cm at 3 cm/s ~ 10.2 s.

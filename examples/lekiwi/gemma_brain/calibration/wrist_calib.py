@@ -14,10 +14,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# ruff: noqa: E402
+
 """Wrist camera: how a TCP move shows up in the image (the image Jacobian), measured by
 moving the gripper over a block on the floor and asking Gemma where the block is.
 
-    .venv/bin/python wrist_calib.py [--x 0.22] [--z 0.0] [--step 0.02] [--write]
+    .venv/bin/python calibration/wrist_calib.py [--x 0.22] [--z 0.0] [--step 0.02] [--write]
 
 The gripper points straight down at (x, 0, z); then it moves +/-step along X and Y (arm base
 frame), and each time a fresh wrist frame (taken after the move settled) goes to Gemma's box
@@ -31,17 +33,21 @@ import argparse
 import datetime
 import json
 import logging
+import sys
 import time
 from pathlib import Path
 
 import numpy as np
 
-from arm import Arm
-from gemma import Gemma, LlamaCpp
-from robot import Robot
+ROOT = Path(__file__).resolve().parents[1]  # gemma_brain: common/, brain/, data/, runs/
+sys.path.insert(0, str(ROOT))
+
+from common.arm import Arm
+from common.gemma import Gemma, LlamaCpp
+from common.robot import Robot
 
 WHAT = "the Lego brick on the floor"
-CALIB = Path(__file__).with_name("calib.json")
+CALIB = ROOT / "data" / "calib.json"
 
 
 def look(robot: Robot, gemma: Gemma, out: Path, tag: str, arm: Arm) -> dict:
@@ -73,7 +79,7 @@ def main() -> None:
     args = ap.parse_args()
     logging.basicConfig(level=logging.WARNING)
 
-    out = Path(__file__).parent / "runs" / (datetime.datetime.now().strftime("%Y%m%dT%H%M%S") + "-wrist-calib")
+    out = ROOT / "runs" / (datetime.datetime.now().strftime("%Y%m%dT%H%M%S") + "-wrist-calib")
     out.mkdir(parents=True)
     robot, gemma = Robot(), (LlamaCpp(args.vision_url) if args.vision_url else Gemma())
     recs = []
@@ -123,7 +129,7 @@ def main() -> None:
             "pose": f"TCP pointing straight down, roll 0, at ({args.x}, 0, {args.z})",
             "method": f"wrist_calib.py: +/-{args.step} m moves, Gemma box centres, least squares (rms {rms_px:.1f} px)",
             "date": datetime.date.today().isoformat(),
-            "log": str(out.relative_to(Path(__file__).parent)),
+            "log": str(out.relative_to(ROOT)),
         }
         CALIB.write_text(json.dumps(calib, indent=2) + "\n")
         print(f"wrote {CALIB}")

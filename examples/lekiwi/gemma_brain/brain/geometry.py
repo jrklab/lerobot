@@ -31,7 +31,7 @@ from pathlib import Path
 
 import numpy as np
 
-from v2 import params as prm
+from brain import params as prm
 
 HERE = Path(__file__).resolve().parent.parent
 IMAGE_PX = np.array([640.0, 480.0])  # convention: the cameras' 640x480 frames
@@ -65,7 +65,7 @@ class Geometry:
     grasp_box: list | None = None  # the whole taught box (x0, y0, x1, y1)
 
     @classmethod
-    def load(cls, calib_path: Path = HERE / "calib.json", touches_path: Path = HERE / "floor_touches.json") -> Geometry:
+    def load(cls, calib_path: Path = HERE / "data" / "calib.json", touches_path: Path = HERE / "data" / "floor_touches.json") -> Geometry:
         calib = json.loads(calib_path.read_text())
         for key, maker in MAKERS.items():
             if key not in calib:

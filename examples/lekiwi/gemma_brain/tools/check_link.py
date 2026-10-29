@@ -14,10 +14,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# ruff: noqa: E402
+
 """Is the link to the robot good enough to drive it? Sends heartbeats the way the brain does
 (every 0.1 s, one kept-open connection) for a while and reports the reply times. Nothing moves.
 
-    .venv/bin/python link_test.py [--seconds 30] [--robot http://10.42.0.1:8000]
+    .venv/bin/python tools/check_link.py [--seconds 30] [--robot http://10.42.0.1:8000]
 
 The Pi stops any motion after HEARTBEAT_TIMEOUT_S (1.5 s) without a heartbeat: any gap near
 that would cut a move short.
@@ -26,9 +28,14 @@ that would cut a move short.
 import argparse
 import http.client
 import statistics
+import sys
 import time
+from pathlib import Path
 
-from robot import find_url
+ROOT = Path(__file__).resolve().parents[1]  # gemma_brain: common/, brain/, data/, runs/
+sys.path.insert(0, str(ROOT))
+
+from common.robot import find_url
 
 PI_TIMEOUT_S = 1.5
 
