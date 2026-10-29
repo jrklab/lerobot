@@ -190,21 +190,30 @@ class Skills2:
 
     def move_measured(self, delta) -> Result:
         """A sideways arm move of `delta` (dx, dy) as the encoders measure it: after the move, the
-        shortfall is commanded again until the measured TCP is within half the servo tolerance of
-        where it should be. The arm has play in its reach: after the 3 cm descent it sat ~12 mm
-        short of its command, a forward step then went ~3.5 mm too far, a 2 mm reversal didn't move
-        it at all; the camera saw the same as the encoders (Oct 28 trials, 20261028T215239)."""
-        want = self.tcp()[:2] + np.asarray(delta, float)
+        shortfall is commanded again until the measured TCP is within the servo tolerance of
+        where it should be, or a correction doesn't move it (the motors ignore ~1-2 mm commands:
+        8 corrections left 1.2 and 2.2 mm, Oct 28 run 20261028T221138). The arm has play in its
+        reach: after the 3 cm descent it sat ~12 mm short of its command, a forward step then
+        went ~3.5 mm too far, a 2 mm reversal didn't move it at all; the camera saw the same as
+        the encoders (Oct 28 trials, 20261028T215239)."""
+        at = self.tcp()[:2]
+        want = at + np.asarray(delta, float)
         r = self.move("arm", delta=(float(delta[0]), float(delta[1]), 0.0))
-        for _ in range(int(prm.SERVO_MAX_LOOKS.value)):
+        tick = 2 * math.pi / self.arm.calib.resolution  # one encoder step, rad
+        n = 0
+        for n in range(int(prm.SERVO_MAX_LOOKS.value)):
             if not r.ok:
                 return r
             self._settle()
-            miss = want - self.tcp()[:2]
-            if np.linalg.norm(miss) <= prm.SERVO_TOL_M.value / 2:  # convention: half, so a step's miss alone can't fail a look
+            now = self.tcp()[:2]
+            miss = want - now
+            if np.linalg.norm(miss) <= prm.SERVO_TOL_M.value:
                 break
+            if n > 0 and np.linalg.norm(now - at) <= tick * np.linalg.norm(self.tcp()):  # the last correction didn't move it
+                break
+            at = now
             r = self.move("arm", delta=(float(miss[0]), float(miss[1]), 0.0))
-        self.ev("move_measured", delta=[round(float(v), 4) for v in delta],
+        self.ev("move_measured", delta=[round(float(v), 4) for v in delta], corrections=n,
                 miss=[round(float(v), 4) for v in want - self.tcp()[:2]])
         return r
 

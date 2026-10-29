@@ -252,17 +252,37 @@ def test_a_measured_move_takes_up_the_arms_play():
             self.pos = np.where(np.abs(gap) > self.slack, self.cmd - np.sign(gap) * self.slack, self.pos)
             return Result(True)
 
-    sk = Skills2.__new__(Skills2)
-    sk.log, play = None, Play(0.002)
-    sk.move = play.move
-    sk.tcp = lambda: np.array([*play.pos, -0.08])
-    sk._settle = lambda: None
+    class Cal:
+        resolution = 4096
+
+    def skills(arm):
+        sk = Skills2.__new__(Skills2)
+        sk.log, sk.arm, sk.move, sk._settle = None, type("A", (), {"calib": Cal()})(), arm.move, lambda: None
+        sk.tcp = lambda: np.array([*arm.pos, -0.08])
+        return sk
+
+    play = Play(0.003)
+    sk = skills(play)
     play.move("arm", delta=(0.006, 0.0, 0.0))  # last pushed forward: the play is taken up behind
-    for d in ((-0.002, 0.0), (0.003, 0.001)):
-        before = play.pos.copy()
+    for d in ((-0.004, 0.0), (0.004, 0.001)):
+        before, sent = play.pos.copy(), len(play.sent)
         assert sk.move_measured(d).ok
-        assert np.linalg.norm(play.pos - before - d) <= prm.SERVO_TOL_M.value / 2
-        assert len(play.sent) > 1  # the shortfall was commanded again
+        assert np.linalg.norm(play.pos - before - d) <= prm.SERVO_TOL_M.value
+        assert len(play.sent) > sent + 1  # the shortfall was commanded again
+
+    class Stuck(Play):
+        """Moves 1 mm on the first command, then ignores the small corrections (Oct 28: 8
+        corrections left 1.2 and 2.2 mm)."""
+
+        def move(self, part, delta=None, **k):
+            self.sent.append(delta[:2])
+            if len(self.sent) == 1:
+                self.pos = self.pos + np.sign(delta[:2]) * 0.001
+            return Result(True)
+
+    stuck = Stuck(0.0)
+    assert skills(stuck).move_measured((0.005, 0.0)).ok
+    assert len(stuck.sent) == 2  # one correction, which didn't move it: no more
 
 
 def test_the_look_settle_ends_once_the_arm_is_still_and_waits_after_the_base():
