@@ -19,7 +19,6 @@ params.py or geometry.py one, so a new action adds a name, not a parameter to ca
 from __future__ import annotations
 
 import numpy as np
-from vision import MIN_COLOUR_PIXELS, colour_pixels, mostly_colour
 
 from v2 import params as prm
 from v2.geometry import (
@@ -245,39 +244,17 @@ def release(sk: Skills2) -> Result:
 
 
 def check_in(sk: Skills2, obj: str, container: str) -> Result:
-    """After the release, from the place height: does the container's rim box hold enough of
-    the object's colour (vision.colour_pixels: counted, so the gripper's blue jaws in the same
-    region can't outvote it)? Its inside has no strong colour of its own (a paper cup); no
-    model has to box an object half hidden by the rim. No container in view but the object on
-    the floor: missed. Can't see either, no colour word in the object's name, or a container
-    mostly the object's colour in its side view from the approach (a red cup for a red brick):
-    passes, unchecked."""
-    side = sk.seen.get(f"front:{container}")  # its side view from the approach: nothing in front of it
-    if side is not None and mostly_colour(side.jpeg, side.box, obj):
-        # Its inside would show the object's colour with or without the object in it.
-        sk.ev("place_check", obj=obj, target=container, checked=False, why="same colour")
-        return Result(True, f"can't tell: the {container} is the same colour as the {obj}", {"checked": False})
-    det = sk.find(container, "wrist", fast_ok=False, rim=True)
-    if det is None:
-        # The container gone from under the gripper and the object on the floor in view: missed
-        # (Oct 28 miss test: the cup slid out of view, the brick lay plain on the floor, and
-        # "can't see the cup" had passed it).
-        on_floor = sk.find(obj, "wrist", fast_ok=False)
-        sk.ev("place_check", obj=obj, target=container, checked=on_floor is not None, ok=False if on_floor else None,
-              box=None if on_floor is None else on_floor.box)
-        if on_floor is not None:
-            return Result(False, f"the {obj} is on the floor, no {container} under it", {"checked": True})
-        return Result(True, f"couldn't see the {container} or the {obj} to check", {"checked": False})
-    # In the rim's own box: a square down from its top edge (the far rim) reached past a cup cut
-    # off by the frame's top onto the floor and counted the brick lying there (Oct 28 miss test:
-    # 4940 red pixels, 0 inside the cup's box; the two good places count the same either way).
-    n = colour_pixels(det.jpeg, det.box, obj)
-    if n is None:
-        sk.ev("place_check", obj=obj, target=container, checked=False)
-        return Result(True, f"couldn't check the {obj} is in the {container}", {"checked": False})
-    inside = n >= MIN_COLOUR_PIXELS
-    sk.ev("place_check", obj=obj, target=container, checked=True, ok=inside, pixels=n, box=det.box)
-    return Result(inside, "" if inside else f"the {obj} is not inside the {container}", {"checked": True})
+    """After the release: is the object on the floor in the front camera? Then it missed the
+    container. The front camera looks across the floor from ~4 cm up, so an object inside a
+    container taller than that is hidden by its wall, and a miss lands around the reach point,
+    which it sees; the arm at the place height is out of its floor view (Oct 28 carry check).
+    A miss hidden behind the container passes. The same find() as the approach, nothing else
+    (owner, Oct 29: the wrist pixel counts had grown too hand-crafted)."""
+    det = sk.find(obj, "front", fast_ok=False)
+    sk.ev("place_check", obj=obj, target=container, on_floor=det is not None, box=None if det is None else det.box)
+    if det is not None:
+        return Result(False, f"the {obj} is on the floor, not in the {container}", {"box": det.box})
+    return Result(True)
 
 
 def check_beside(sk: Skills2, obj: str, ref: str) -> Result:

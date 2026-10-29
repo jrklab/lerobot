@@ -193,24 +193,9 @@ def red_frame(box):
     return cv2.imencode(".jpg", img)[1].tobytes()
 
 
-def test_place_checks_count_the_objects_colour_and_measure_the_gap():
+def test_placed_beside_measures_the_gap_and_level():
     from v2.goals import placed_beside
-    from vision import colour_pixels
 
-    # Over the cup the blue jaws share the opening with the red brick (Oct 28 wrist frame):
-    # the brick is counted, not outvoted.
-    img = np.full((480, 640, 3), 230, np.uint8)
-    cv2.rectangle(img, (150, 380), (490, 480), (200, 40, 30), -1)  # the blue jaws, big
-    cv2.rectangle(img, (290, 300), (350, 360), (30, 30, 220), -1)  # the red brick, small
-    with_brick = cv2.imencode(".jpg", img)[1].tobytes()
-    img[300:361, 290:351] = 230
-    empty = cv2.imencode(".jpg", img)[1].tobytes()
-    ob = [0.2, 0.12, 0.84, 1.0]  # the cup's box, the jaws inside it
-    assert colour_pixels(with_brick, ob, "red block") > 1000 and colour_pixels(empty, ob, "red block") < 15
-    assert colour_pixels(empty, ob, "block") is None  # no colour word: can't tell
-    # Oct 28 miss test: the cup slid up, cut off by the frame's top, the brick on the floor below
-    # it: nothing red inside the cup's box.
-    assert colour_pixels(with_brick, [0.2, 0.0, 0.84, 0.27], "red block") == 0
     # Beside: the reference's right edge left of the object by about half its width.
     held = [0.45, 0.5, 0.55, 0.7]
     assert placed_beside(held, [0.30, 0.52, 0.40, 0.72])  # gap 0.05 = intended
@@ -219,52 +204,26 @@ def test_place_checks_count_the_objects_colour_and_measure_the_gap():
     assert not placed_beside(held, [0.30, 0.80, 0.40, 1.0])  # not level
 
 
-def test_a_container_the_objects_colour_leaves_the_place_unchecked(monkeypatch):
-    # A white cup with red print is not "red" (Oct 28: up to 9% red); a red cup is, and its
-    # inside would show red with or without the brick.
-    from vision import mostly_colour
-
-    img = np.full((480, 640, 3), 235, np.uint8)
-    cv2.rectangle(img, (300, 200), (330, 215), (30, 30, 220), -1)  # a little red print
-    white_cup = cv2.imencode(".jpg", img)[1].tobytes()
-    cv2.rectangle(img, (260, 160), (460, 300), (30, 30, 220), -1)
-    red_cup = cv2.imencode(".jpg", img)[1].tobytes()
-    box = [0.4, 0.33, 0.72, 0.63]
-    assert not mostly_colour(white_cup, box, "red block") and mostly_colour(red_cup, box, "red block")
+def test_place_in_check_is_the_front_camera_finding_the_object_on_the_floor():
+    # Oct 28 miss tests: the brick lay on the floor by the slid cup. The check is one front look:
+    # on the floor = missed; not there = in (a brick in the cup is behind its wall).
+    asked = []
 
     class S:
-        seen = {"front:paper cup": Detection(box=box, jpeg=red_cup)}
-        looked = False
+        def __init__(self, on_floor):
+            self.on_floor = on_floor
 
-        def find(self, *a, **k):
-            S.looked = True
-
-        def ev(self, *a, **k):
-            pass
-
-    r = actions.check_in(S(), "red block", "paper cup")
-    assert r.ok and not r.data["checked"] and "same colour" in r.reason and not S.looked
-
-
-def test_no_container_under_the_gripper_but_the_object_on_the_floor_is_a_miss():
-    # Oct 28 miss test: the cup slid out of view; "couldn't see the cup" had passed the place.
-    class S:
-        seen = {}
-
-        def __init__(self, brick_seen):
-            self.brick_seen = brick_seen
-
-        def find(self, obj, cam, fast_ok=True, rim=False, **k):
-            return Detection(box=[0.38, 0.35, 0.52, 0.56]) if (obj == "red block" and self.brick_seen) else None
+        def find(self, obj, cam, fast_ok=True, **k):
+            asked.append((obj, cam, fast_ok))
+            return Detection(box=[0.4, 0.62, 0.5, 0.7]) if self.on_floor else None
 
         def ev(self, *a, **k):
             pass
 
     r = actions.check_in(S(True), "red block", "paper cup")
-    assert not r.ok and r.data["checked"] and "on the floor" in r.reason
-    r = actions.check_in(S(False), "red block", "paper cup")
-    assert r.ok and not r.data["checked"]
-
+    assert not r.ok and "on the floor" in r.reason
+    assert actions.check_in(S(False), "red block", "paper cup").ok
+    assert asked == [("red block", "front", False)] * 2  # the brick, front camera, the main model
 
 class FrameRobot:
     def __init__(self, jpeg):

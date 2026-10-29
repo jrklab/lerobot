@@ -211,38 +211,6 @@ def colour_matches(jpeg: bytes, box, what: str) -> tuple[bool, str]:
     return _hue_matches(cv2.cvtColor(roi, cv2.COLOR_BGR2HSV).reshape(-1, 3), words)
 
 
-def _colour_count(jpeg: bytes, box, what: str) -> tuple[int, int] | None:
-    """(pixels with the colour `what` names among the strongly coloured ones, all pixels) in the
-    box; None with no colour word."""
-    words = [w for w in HUES if w in what.lower()]
-    if not words:
-        return None
-    img = cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_COLOR)
-    h, w = img.shape[:2]
-    x0, y0, x1, y1 = box
-    roi = img[int(y0 * h) : max(int(y0 * h) + 1, int(y1 * h)), int(x0 * w) : max(int(x0 * w) + 1, int(x1 * w))]
-    hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV).reshape(-1, 3)
-    hue = hsv[:, 0][hsv[:, 1] > STRONG_SAT]
-    n = int(sum(((lo <= hue) & (hue <= hi)).sum() for word in words for lo, hi in HUES[word]))
-    return n, len(hsv)
-
-
-def colour_pixels(jpeg: bytes, box, what: str) -> int | None:
-    """How many strongly coloured pixels in the box have the colour `what` names; None with no
-    colour word. Counted, not a median: over a cup the gripper's blue jaws share the box with
-    a red brick inside (Oct 28 wrist frames) and would outvote it."""
-    c = _colour_count(jpeg, box, what)
-    return None if c is None else c[0]
-
-
-def mostly_colour(jpeg: bytes, box, what: str) -> bool:
-    """More than half the box has the colour `what` names: an object that colour, not one with
-    some print on it (Oct 28 front views: the white paper cup at most 9% red from its print,
-    the red brick 75% red in its own box). False with no colour word."""
-    c = _colour_count(jpeg, box, what)
-    return c is not None and c[0] > c[1] / 2  # convention: more than half
-
-
 def _hue_matches(hsv: np.ndarray, words: list[str]) -> tuple[bool, str]:
     """Is the median hue of these HSV pixels' strongly coloured ones (N x 3) one of `words`'
     colours? Too few coloured pixels to tell passes."""
