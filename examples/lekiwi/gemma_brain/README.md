@@ -125,7 +125,8 @@ Scripts that move the robot are never named `*_test.py` (pytest would run them);
 
 - Driven picks 5/5 in the last four batches (63-69 s each); the cup and next-to tasks work end
   to end (cup: 67.5 s). Small samples, not success rates.
-- Place relations other than "in" and "next to" are run as "next to".
+- Place relations other than "in" and "next to" (on, left_of, ...) are refused by the plan
+  check before anything moves.
 - The fast model's box at 3 cm sometimes changes height between looks and the servo chases it.
 - The arm has 2-3 mm of play in its reach; servo steps correct it from the encoders.
 - The Pi's power supply sags under load; give it a solid 5.1 V / 3 A supply.

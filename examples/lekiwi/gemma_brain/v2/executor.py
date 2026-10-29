@@ -116,7 +116,9 @@ class PlanBrain:
 
     def place(self, rel: str, target: str) -> Result:
         what = self.sk.holding or "object"
-        chain = chains.place_in if rel == "in" else chains.place_next_to
+        chain = {"in": chains.place_in, "next_to": chains.place_next_to}.get(rel)
+        if chain is None:  # check_plan stops these before anything moves; never run another chain
+            return Result(False, f"no chain for 'place {rel}'")
         r = chain(self.sk, what, target)
         if not self.sk.held():  # released, whether or not the steps after it went well
             self.sk.holding = None

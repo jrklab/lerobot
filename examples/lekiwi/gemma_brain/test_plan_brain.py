@@ -182,6 +182,13 @@ def test_unsupported_plan_moves_nothing(world):
     assert world.calls == [], world.calls
 
 
+def test_a_place_relation_without_a_chain_runs_nothing(world):
+    sk = FakeSkills()
+    sk.holding = "red block"
+    r = brain(FakePlanner(), sk).place("on", "blue block")
+    assert not r.ok and "no chain" in r.reason and world.calls == [], world.calls
+
+
 def test_pick_retries_with_a_fold_between_then_succeeds(world):
     world.fail = {"pick red block": 2}
     sk = FakeSkills()
