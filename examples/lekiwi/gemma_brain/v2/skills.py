@@ -188,6 +188,26 @@ class Skills2:
         self.ev("move", part="base", delta=None if delta is None else list(delta), turn=turn, moved=moved)
         return Result(True, data={"moved": moved})
 
+    def move_measured(self, delta) -> Result:
+        """A sideways arm move of `delta` (dx, dy) as the encoders measure it: after the move, the
+        shortfall is commanded again until the measured TCP is within half the servo tolerance of
+        where it should be. The arm has play in its reach: after the 3 cm descent it sat ~12 mm
+        short of its command, a forward step then went ~3.5 mm too far, a 2 mm reversal didn't move
+        it at all; the camera saw the same as the encoders (Oct 28 trials, 20261028T215239)."""
+        want = self.tcp()[:2] + np.asarray(delta, float)
+        r = self.move("arm", delta=(float(delta[0]), float(delta[1]), 0.0))
+        for _ in range(int(prm.SERVO_MAX_LOOKS.value)):
+            if not r.ok:
+                return r
+            self._settle()
+            miss = want - self.tcp()[:2]
+            if np.linalg.norm(miss) <= prm.SERVO_TOL_M.value / 2:  # convention: half, so a step's miss alone can't fail a look
+                break
+            r = self.move("arm", delta=(float(miss[0]), float(miss[1]), 0.0))
+        self.ev("move_measured", delta=[round(float(v), 4) for v in delta],
+                miss=[round(float(v), 4) for v in want - self.tcp()[:2]])
+        return r
+
     @property
     def roll_range(self) -> tuple[float, float]:
         """(min, max) wrist roll keeping the roll joint within ROLL_FROM_REST_DEG of its rest
@@ -338,8 +358,7 @@ class Skills2:
             elif part == "base":
                 r = self.move("base", delta=step.get("delta"), roll=step.get("roll"))
             else:
-                d = step["delta"]
-                r = self.move("arm", delta=(d[0], d[1], 0.0))
+                r = self.move_measured(step["delta"])
             if not r.ok:
                 return Result(False, f"servo move refused: {r.reason}", {"looks": k + 1})
         return Result(False, f"{goal.__class__.__name__} not met after {int(prm.SERVO_MAX_LOOKS.value)} looks",

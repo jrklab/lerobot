@@ -234,6 +234,37 @@ def test_a_front_box_ending_above_the_horizon_is_not_on_the_floor(monkeypatch):
         assert (sk.find("red block", "front") is not None) == found
 
 
+def test_a_measured_move_takes_up_the_arms_play():
+    # Oct 28 trials: a 2 mm reversal moved the encoders 0 mm, a forward step went 3.5 mm too far.
+    from v2.skills import Result
+
+    class Play:
+        """An arm whose position follows its command only once the command is more than `slack`
+        away, from the side it was pushed (backlash)."""
+
+        def __init__(self, slack):
+            self.cmd, self.pos, self.slack, self.sent = np.zeros(2), np.zeros(2), slack, []
+
+        def move(self, part, delta=None, **k):
+            self.sent.append(delta[:2])
+            self.cmd = self.cmd + np.asarray(delta[:2])
+            gap = self.cmd - self.pos
+            self.pos = np.where(np.abs(gap) > self.slack, self.cmd - np.sign(gap) * self.slack, self.pos)
+            return Result(True)
+
+    sk = Skills2.__new__(Skills2)
+    sk.log, play = None, Play(0.002)
+    sk.move = play.move
+    sk.tcp = lambda: np.array([*play.pos, -0.08])
+    sk._settle = lambda: None
+    play.move("arm", delta=(0.006, 0.0, 0.0))  # last pushed forward: the play is taken up behind
+    for d in ((-0.002, 0.0), (0.003, 0.001)):
+        before = play.pos.copy()
+        assert sk.move_measured(d).ok
+        assert np.linalg.norm(play.pos - before - d) <= prm.SERVO_TOL_M.value / 2
+        assert len(play.sent) > 1  # the shortfall was commanded again
+
+
 def test_the_look_settle_ends_once_the_arm_is_still_and_waits_after_the_base():
     import time as _time
 
@@ -286,6 +317,9 @@ class SimServo:
         return np.zeros(3)
 
     cmd_tcp = tcp
+
+    def move_measured(self, delta):
+        return self.move("arm", delta=delta)
 
     def find(self, obj, cam, angle=False):
         u, v = self.point
@@ -494,6 +528,9 @@ def test_above_goal_converges_on_a_container(monkeypatch):
             return np.zeros(3)
 
         cmd_tcp = tcp
+
+        def move_measured(self, delta):
+            return self.move("arm", delta=delta)
 
         def find(self, obj, cam, angle=False):
             u, v = self.centre
