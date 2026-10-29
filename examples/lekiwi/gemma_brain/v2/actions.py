@@ -35,7 +35,6 @@ from v2.goals import (
     BesideGoal,
     FrontApproachGoal,
     ReachGoal,
-    opening_box,
     placed_beside,
     round_centre,
 )
@@ -246,7 +245,7 @@ def release(sk: Skills2) -> Result:
 
 
 def check_in(sk: Skills2, obj: str, container: str) -> Result:
-    """After the release, from the place height: does the container's opening hold enough of
+    """After the release, from the place height: does the container's rim box hold enough of
     the object's colour (vision.colour_pixels: counted, so the gripper's blue jaws in the same
     region can't outvote it)? Its inside has no strong colour of its own (a paper cup); no
     model has to box an object half hidden by the rim. No container in view but the object on
@@ -269,7 +268,10 @@ def check_in(sk: Skills2, obj: str, container: str) -> Result:
         if on_floor is not None:
             return Result(False, f"the {obj} is on the floor, no {container} under it", {"checked": True})
         return Result(True, f"couldn't see the {container} or the {obj} to check", {"checked": False})
-    n = colour_pixels(det.jpeg, opening_box(det.box), obj)
+    # In the rim's own box: a square down from its top edge (the far rim) reached past a cup cut
+    # off by the frame's top onto the floor and counted the brick lying there (Oct 28 miss test:
+    # 4940 red pixels, 0 inside the cup's box; the two good places count the same either way).
+    n = colour_pixels(det.jpeg, det.box, obj)
     if n is None:
         sk.ev("place_check", obj=obj, target=container, checked=False)
         return Result(True, f"couldn't check the {obj} is in the {container}", {"checked": False})

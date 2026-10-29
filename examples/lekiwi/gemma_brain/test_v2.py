@@ -194,7 +194,7 @@ def red_frame(box):
 
 
 def test_place_checks_count_the_objects_colour_and_measure_the_gap():
-    from v2.goals import opening_box, placed_beside
+    from v2.goals import placed_beside
     from vision import colour_pixels
 
     # Over the cup the blue jaws share the opening with the red brick (Oct 28 wrist frame):
@@ -205,9 +205,12 @@ def test_place_checks_count_the_objects_colour_and_measure_the_gap():
     with_brick = cv2.imencode(".jpg", img)[1].tobytes()
     img[300:361, 290:351] = 230
     empty = cv2.imencode(".jpg", img)[1].tobytes()
-    ob = opening_box([0.2, 0.12, 0.84, 0.9])
+    ob = [0.2, 0.12, 0.84, 1.0]  # the cup's box, the jaws inside it
     assert colour_pixels(with_brick, ob, "red block") > 1000 and colour_pixels(empty, ob, "red block") < 15
     assert colour_pixels(empty, ob, "block") is None  # no colour word: can't tell
+    # Oct 28 miss test: the cup slid up, cut off by the frame's top, the brick on the floor below
+    # it: nothing red inside the cup's box.
+    assert colour_pixels(with_brick, [0.2, 0.0, 0.84, 0.27], "red block") == 0
     # Beside: the reference's right edge left of the object by about half its width.
     held = [0.45, 0.5, 0.55, 0.7]
     assert placed_beside(held, [0.30, 0.52, 0.40, 0.72])  # gap 0.05 = intended

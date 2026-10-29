@@ -331,7 +331,8 @@ class Skills2:
         # rim: a container seen from above, close: "the rim of the paper cup" found it in 55 of 55
         # saved wrist frames, "the paper cup on the floor" in 49, none of the 6 where its middle was
         # under the held brick and the jaws (Oct 28 replay); the boxes differ only below the rim,
-        # which nothing uses (round_centre, opening_box and the in-view test use its top and sides).
+        # which round_centre and the in-view test don't use, and the place check wants the
+        # opening the rim encloses.
         prompt = f"the rim of the {obj}" if rim else f"the {obj} on the floor"
         tracked = self.seen.get(f"{cam}:{obj}")
         a, by = None, ""
