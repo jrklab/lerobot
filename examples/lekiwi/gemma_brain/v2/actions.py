@@ -209,7 +209,7 @@ def over_container(sk: Skills2, container: str) -> Result:
 def beside(sk: Skills2, ref: str) -> Result:
     """Base, then arm: the reference object just beside where the held one will land."""
     r = sk.servo(ref, BesideGoal(tol_m=prm.REACH_TOL_M), part="base")
-    return sk.servo(ref, BesideGoal()) if r.ok else r
+    return sk.servo(ref, BesideGoal(tol_m=prm.REACH_TOL_M)) if r.ok else r  # coarse here; precise at 3 cm
 
 
 def lower_to_release(sk: Skills2) -> Result:

@@ -50,7 +50,9 @@ def pick(sk: Skills2, obj: str, drive: bool = True) -> Result:
         ("hover", lambda: actions.hover(sk)),
         ("line_up", lambda: actions.line_up(sk, obj)),
         ("align", lambda: actions.align(sk, obj)),
-        ("centre_high", lambda: sk.servo(obj, JawGoal())),
+        # coarse at 10 cm (the line-up's tolerance), precise at 3 cm: the 10 cm stage spent 4-5
+        # looks on precision the 3 cm stage redoes in 1-2 (Oct 28 speed check)
+        ("centre_high", lambda: sk.servo(obj, JawGoal(tol_m=prm.REACH_TOL_M))),
         ("down", lambda: sk.move("arm", height=prm.FINAL_LOOK_HEIGHT_M.value)),
         ("centre_low", lambda: sk.servo(obj, JawGoal())),
         ("land", lambda: actions.land(sk)),

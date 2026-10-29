@@ -691,3 +691,10 @@ def test_bring_into_view_moves_towards_the_container_and_stops_if_it_drifts_away
     w = World([0.15, 0.55], sign=-1.0)  # a world where moves push it further out
     r = actions.bring_into_view(w, "paper cup")
     assert not r.ok and "further out" in r.reason and w.moves == 1
+
+
+def test_servo_converges_at_the_gain_with_the_jacobian_30_percent_off_either_way():
+    for scale in (0.7, 1.3):
+        sim = SimServo(jaw_geom(), start_err=[0.12, -0.10], true_scale=scale)
+        r = sim.servo("red block", sim.goal)
+        assert r.ok and r.data["looks"] <= 6, (scale, r)

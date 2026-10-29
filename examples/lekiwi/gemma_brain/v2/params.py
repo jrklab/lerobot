@@ -72,7 +72,7 @@ GRIPPER_EMPTY_MAX = Param(3.5, "SPEC", "closed on nothing reads 1.3-2.1; on the 
 
 # --- RULE ---
 GRASP_LIFT_M = Param(0.004, "RULE", "jaw tips above the floor when closing: inside the brick's lower half")
-SERVO_GAIN = Param(0.5, "RULE", "fraction of the measured error corrected per look (no overshoot with noisy boxes)")
+SERVO_GAIN = Param(0.8, "RULE", "fraction of the measured error corrected per look: 0.5 until Oct 28; with the re-measured Jacobian (fit 2.7 px) less damping is needed, and the simulated servo converges at 0.8 with the Jacobian 30% off either way")
 STEP_IN_VIEW_FRACTION = Param(0.25, "RULE", "one move may shift the target by at most this share of the image, so it stays in view")
 REACH_POINT_X_M = Param(0.25, "RULE", "where the base parks the object (arm x): vertical reach at 10 cm is 0.14-0.28 m; owner: 0.22 sat too close to the base")
 HOVER_HEIGHT_M = Param(0.10, "RULE", "line-up and first servo height: where the image Jacobian was measured (9.4 cm) and the object fills a small part of the view")
