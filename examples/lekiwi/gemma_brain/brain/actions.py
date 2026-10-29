@@ -85,16 +85,18 @@ def look_around(sk: Skills, obj: str) -> Result:
     steps of (1 - LOOK_OVERLAP) of the view's width, all the way round; then back up
     LOOK_BACK_M once (it may be too close to see) and turn round again. The base ends facing
     the view it was found in. Oct 27 trial: the brick wasn't in the single forward view."""
-    if sk.find(obj, "front") is not None:
-        return Result(True, data={"turned": 0.0})
+    det = sk.find(obj, "front")
+    if det is not None:
+        return Result(True, data={"turned": 0.0, "det": det})
     step = (1 - prm.LOOK_OVERLAP.value) / sk.geom.front["u_per_deg"]  # share of the view's width, in deg
     for backed in (False, True):
         if backed:
             r = sk.move("base", delta=(-prm.LOOK_BACK_M.value, 0.0))
             if not r.ok:
                 return r
-            if sk.find(obj, "front") is not None:
-                return Result(True, data={"turned": 0.0, "backed": True})
+            det = sk.find(obj, "front")
+            if det is not None:
+                return Result(True, data={"turned": 0.0, "backed": True, "det": det})
         at = 0.0
         for off in look_offsets(step):
             # The short way round: from 163 deg right to facing backwards is 17 deg, not 343
@@ -103,8 +105,9 @@ def look_around(sk: Skills, obj: str) -> Result:
             if not r.ok:
                 return r
             at = off
-            if sk.find(obj, "front") is not None:
-                return Result(True, data={"turned": at, "backed": backed})
+            det = sk.find(obj, "front")
+            if det is not None:
+                return Result(True, data={"turned": at, "backed": backed, "det": det})
         r = sk.move("base", roll=-at)  # face the start again before backing up or giving up
         if not r.ok:
             return r
@@ -113,10 +116,15 @@ def look_around(sk: Skills, obj: str) -> Result:
 
 def approach(sk: Skills, obj: str, tol=None) -> Result:
     """Base: find the object (looking around if it isn't in the forward view), then turn and
-    drive until the front camera sees it at the reach point."""
+    drive until the front camera sees it at the reach point. The first drive is measured on the
+    main model's box, the look that found it, not a second look a second later: from 0.5 m away
+    one pixel of the box's bottom is ~1.5 cm, and the fast model's box sat 7 px higher than the
+    main model's of the same view, the drive went 9 cm too far and lost the brick (Oct 29,
+    run 20261029T071804)."""
     r = look_around(sk, obj)
     if r.ok:
-        r = sk.servo(obj, FrontApproachGoal(tol))
+        first = r.data["det"] if r.data["det"].by == "main" else sk.find(obj, "front", fast_ok=False)
+        r = sk.servo(obj, FrontApproachGoal(tol), first=first)
     det = sk.seen.get(f"front:{obj}")
     if r.ok and det is not None:  # side-on, for placing into it later (front_object_height)
         sk.heights[obj] = front_object_height(sk.geom, det.box)

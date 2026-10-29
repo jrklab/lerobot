@@ -121,6 +121,12 @@ class Geometry:
         return self.descent_p0 + (np.asarray(point, float) - self.descent_p0) * s
 
 
+def front_view_margin(geom: Geometry) -> float:
+    """How much floor (m) the front camera still sees beyond the approach's target row
+    (near_bottom), to the frame's bottom: an overshoot larger than this loses the object."""
+    return geom.front_range(geom.front["near_bottom"]) - geom.front_range(1.0)  # convention: the frame's bottom row
+
+
 def front_object_height(geom: Geometry, box) -> float:
     """An object's height (m) from its front-camera box: the camera's height over the floor is
     range_k / f (the range model k / (bottom - horizon) is a pinhole's distance), and the object

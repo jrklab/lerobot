@@ -33,7 +33,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from brain import params as prm
-from brain.geometry import IMAGE_PX, MissingCalibrationError, require_grasp_target
+from brain.geometry import IMAGE_PX, MissingCalibrationError, front_view_margin, require_grasp_target
 
 
 @dataclass
@@ -182,7 +182,12 @@ class FrontApproachGoal:
         self._turned_from = None
         # Drive to just inside the line-up's reach (half its tolerance short): no overshoot past the
         # reach point with a 7 mm range model, and one or two drives instead of halving steps.
-        return {"delta": (max(self.remaining(err, sk) - self.tol_m.value / 2, 0.0), 0.0)}
+        # From further than the camera sees past the target (front_view_margin, ~7 cm), stop that
+        # far short and look again: from 0.5 m one pixel of the box is ~1.5 cm, and a 9 cm
+        # overshoot took the brick out of view (Oct 29); the margin is what can still be seen.
+        rem, margin = self.remaining(err, sk), front_view_margin(sk.geom)
+        short = margin if rem - self.tol_m.value / 2 > margin else self.tol_m.value / 2
+        return {"delta": (max(rem - short, 0.0), 0.0)}
 
 
 def round_centre(box) -> np.ndarray:

@@ -18,6 +18,7 @@ from pathlib import Path
 
 import numpy as np
 from brain import goals, params as prm
+from brain.geometry import front_view_margin
 from brain.goals import Detection
 from brain.primitives import Skills
 from helpers import (
@@ -103,7 +104,14 @@ def test_front_approach_is_done_within_the_line_ups_reach_and_aims_just_short():
     g = goals.FrontApproachGoal()
     far = g.error(Detection(box=[0.43, 0.40, 0.47, 0.45]), S())
     rem = g.remaining(far, S())
-    assert not g.done(far, S()) and abs(g.step(far, S())["delta"][0] - (rem - prm.REACH_TOL_M.value / 2)) < 1e-9
+    # From far, it stops the view margin short (Oct 29: a 9 cm overshoot lost the brick)...
+    margin = front_view_margin(S.geom)
+    assert 0.05 < margin < 0.1  # ~7 cm with these numbers
+    assert not g.done(far, S()) and abs(g.step(far, S())["delta"][0] - (rem - margin)) < 1e-9
+    # ...and from within the margin, to just inside the line-up's reach.
+    close = g.error(Detection(box=[0.43, 0.55, 0.47, 0.62]), S())
+    assert g.remaining(close, S()) - prm.REACH_TOL_M.value / 2 <= margin
+    assert abs(g.step(close, S())["delta"][0] - (g.remaining(close, S()) - prm.REACH_TOL_M.value / 2)) < 1e-9
     near = g.error(Detection(box=[0.43, 0.60, 0.47, 0.675]), S())  # ~1 cm to go
     assert g.remaining(near, S()) <= prm.REACH_TOL_M.value and g.done(near, S())
     not_yet = g.error(Detection(box=[0.43, 0.56, 0.47, 0.653]), S())  # Oct 27 run: 2.3 cm to go

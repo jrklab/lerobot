@@ -276,3 +276,35 @@ def test_place_next_to_lines_up_twice_and_lands(monkeypatch):
     r = chains.place_next_to(sk, "red block", "green block", drive=False)
     assert r.ok, r
     assert calls == ["move", "BesideGoal:base", "BesideGoal:arm", "move", "BesideGoal:arm", "land", "open", "move"]
+
+
+def test_the_approachs_first_drive_uses_the_main_models_look():
+    # Oct 29: the look-around's main-model box put the brick 0.47 m away, the next (fast-model)
+    # look 0.56 m; the drive went by the second and lost the brick.
+    from brain.primitives import Result
+
+    looks, used = [], []
+
+    def make(by):
+        return Detection(box=[0.48, 0.40, 0.53, 0.44], by=by)
+
+    class S:
+        seen, heights = {}, {}
+
+        def __init__(self, first_by):
+            self.first_by = first_by
+
+        def find(self, obj, cam, fast_ok=True, **k):
+            looks.append(fast_ok)
+            return make(self.first_by if len(looks) == 1 else "main")
+
+        def servo(self, obj, goal, part=None, first=None):
+            used.append(first.by)
+            return Result(True)
+
+        def ev(self, *a, **k):
+            pass
+
+    assert actions.approach(S("main"), "red block").ok and used == ["main"] and len(looks) == 1  # no second look
+    looks.clear(), used.clear()
+    assert actions.approach(S("fast"), "red block").ok and used == ["main"] and looks == [True, False]
