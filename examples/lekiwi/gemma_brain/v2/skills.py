@@ -62,6 +62,14 @@ class Result:
     data: dict = field(default_factory=dict)
 
 
+def pi_refused(e: RobotError) -> bool:
+    """The Pi turned the command down in its checks (HTTP 409: a joint limit, the floor guard):
+    the same command from the same pose is refused again. Not when it was busy or left auto
+    mode, which are 409s too."""
+    msg = str(e)
+    return "HTTP 409" in msg and "busy" not in msg and "not in auto mode" not in msg
+
+
 def has_colour(jpeg: bytes, box, obj: str) -> bool:
     """The box holds the colour `obj` names (vision.colour_matches), and enough coloured pixels
     to tell: v1's check passes a box with too few, which let a box on bare floor through."""
@@ -159,9 +167,10 @@ class Skills2:
                 self.arm.move_to(goal.tolist(), pitch_deg=VERTICAL, roll_deg=roll, speed=speed, z_min=z_min)
                 res = {}
         except PlanError as e:
-            return Result(False, f"can't move there: {e}", {"goal": goal.round(4).tolist()})
+            return Result(False, f"can't move there: {e}", {"goal": goal.round(4).tolist(), "refused": True})
         except RobotError as e:  # refused or stopped on the Pi: a failed step, not a crash
-            return Result(False, f"the robot refused or stopped the move: {e}", {"goal": goal.round(4).tolist()})
+            return Result(False, f"the robot refused or stopped the move: {e}",
+                          {"goal": goal.round(4).tolist(), "refused": pi_refused(e)})
         self.roll = roll
         self._last_moved = "arm"
         data = {"goal": goal.round(4).tolist(), "floor": round(floor, 4), "contact": False}
@@ -372,7 +381,7 @@ class Skills2:
             else:
                 r = self.move_measured(step["delta"])
             if not r.ok:
-                return Result(False, f"servo move refused: {r.reason}", {"looks": k + 1})
+                return Result(False, f"servo move refused: {r.reason}", {**r.data, "looks": k + 1})
         return Result(False, f"{goal.__class__.__name__} not met after {int(prm.SERVO_MAX_LOOKS.value)} looks",
                       {"err": None if err is None else err.tolist()})
 

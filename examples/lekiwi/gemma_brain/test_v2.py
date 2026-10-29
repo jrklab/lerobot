@@ -476,6 +476,23 @@ def test_pick_chain_runs_its_steps_in_order_and_stops_at_the_first_failure(monke
     r = chains.pick(sk, "red block", drive=False)
     assert not r.ok and r.data["failed"] == "close" and "close:" in r.reason
     assert calls[0] == "hover"
+    calls.clear()
+    sk.grip = lambda how, **k: (calls.append(how), Result(True))[1]
+    assert chains.pick(sk, "red block", start="hover").ok and calls[0] == "hover"  # a retry: no approach
+    # A refused move's flag reaches the chain's result, for the task loop's retry choice.
+    sk.servo = lambda obj, goal, part=None: Result(False, "servo move refused: can't move there", {"refused": True})
+    r = chains.pick(sk, "red block")
+    assert not r.ok and r.data["refused"] and r.data["failed"] == "centre_high"
+
+
+def test_only_the_pis_check_refusals_count_as_refused():
+    from robot import RobotError
+    from v2.skills import pi_refused
+
+    assert pi_refused(RobotError("POST /auto/cmd: HTTP 409: trajectory: the gripper reaches z -0.091 m at waypoint 6, below z_min -0.085 m"))
+    assert not pi_refused(RobotError("POST /auto/cmd: HTTP 409: busy: command 12 (trajectory) is still running"))
+    assert not pi_refused(RobotError("POST /auto/cmd: HTTP 409: not in auto mode (mode is gamepad)"))
+    assert not pi_refused(RobotError("trajectory: stopped: heartbeat lost"))
 
 
 def _chain_sk(calls, held=True):

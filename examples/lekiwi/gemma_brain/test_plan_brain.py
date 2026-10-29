@@ -105,19 +105,22 @@ def world(monkeypatch):
 
     class W:
         calls, fail, release_then_fail, hover_ok = [], {}, False, True
+        fail_data: dict = {}  # what a failed chain's result carries, e.g. {"failed": "land"}
 
     w = W()
-    w.calls, w.fail = [], {}
+    w.calls, w.fail, w.fail_data = [], {}, {}
 
     def do(call, sk):
         w.calls.append(call)
         if w.fail.get(call, 0) > 0:
             w.fail[call] -= 1
-            return Result(False, f"{call} failed")
+            return Result(False, f"{call} failed", dict(w.fail_data))
         return Result(True)
 
-    def pick(sk, what, drive=True):
+    def pick(sk, what, drive=True, start=None):
         r = do(f"pick {what}", sk)
+        if start is not None:
+            w.calls[-1] += f" from {start}"
         sk.gripped = r.ok
         return r
 
@@ -187,9 +190,40 @@ def test_pick_retries_with_a_fold_between_then_succeeds(world):
     assert sk.holding == "red block"
 
 
+def test_a_refused_pick_is_not_retried(world):
+    # Oct 28: a wrist roll past its limit was refused six times over two plans (~140 s).
+    world.fail = {"pick red block": 99}
+    world.fail_data = {"failed": "align", "refused": True}
+    planner = FakePlanner('pick "red block"', 'pick "red block"', 'pick "red block"')
+    ok, why = brain(planner, FakeSkills()).run("pick red")
+    assert not ok and "didn't change" in why, why
+    assert world.calls.count("pick red block") == 2, world.calls  # once per plan, not three
+
+
+def test_a_pick_failing_after_the_hover_resumes_there_without_folding(world):
+    world.fail = {"pick red block": 1}
+    world.fail_data = {"failed": "centre_low"}
+    ok, _ = brain(FakePlanner('pick "red block"\ndone'), FakeSkills()).run("pick red")
+    assert ok and world.calls == ["pick red block", "pick red block from hover"], world.calls
+
+
+def test_a_second_failure_after_resuming_starts_over_from_the_approach(world):
+    world.fail = {"pick red block": 2}
+    world.fail_data = {"failed": "land"}
+    ok, _ = brain(FakePlanner('pick "red block"\ndone'), FakeSkills()).run("pick red")
+    assert ok and world.calls == ["pick red block", "pick red block from hover", "hover", "pick red block"], world.calls
+
+
+def test_a_failed_approach_starts_over_after_a_fold(world):
+    world.fail = {"pick red block": 1}
+    world.fail_data = {"failed": "approach"}
+    ok, _ = brain(FakePlanner('pick "red block"\ndone'), FakeSkills()).run("pick red")
+    assert ok and world.calls == ["pick red block", "hover", "pick red block"], world.calls
+
+
 def test_a_pick_that_gripped_before_a_later_step_failed_keeps_it(world, monkeypatch):
     sk = FakeSkills()
-    monkeypatch.setattr(chains, "pick", lambda sk, what, drive=True: (setattr(sk, "gripped", True), Result(False, "lift: refused"))[1])
+    monkeypatch.setattr(chains, "pick", lambda sk, what, drive=True, start=None: (setattr(sk, "gripped", True), Result(False, "lift: refused"))[1])
     ok, why = brain(FakePlanner('pick "red block"\ndone'), sk).run("pick red")
     assert ok and sk.holding == "red block", why
 
@@ -261,7 +295,7 @@ def test_fold_away_from_a_place_target_folds_even_when_it_cant_lift(world):
 
 
 def test_leaving_auto_mode_stops_without_replanning(world, monkeypatch):
-    def dropped(sk, what, drive=True):
+    def dropped(sk, what, drive=True, start=None):
         raise RobotError("POST /auto/cmd: HTTP 409: not in auto mode (mode is gamepad)")
 
     monkeypatch.setattr(chains, "pick", dropped)

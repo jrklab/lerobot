@@ -84,10 +84,17 @@ class PlanBrain:
         self.sk.seen.clear()
 
     def pick(self, what: str) -> Result:
+        """The pick chain, retried PICK_TRIES times where a retry can help. A refused move
+        (the planner or the Pi turned it down) is refused again from the same pose: no retry,
+        the planner hears why (Oct 28: a wrist roll past its limit failed six tries in two
+        plans, ~140 s). A failure after the hover resumes at the hover where the base already
+        is (the line-up finds the object again) instead of folding and driving again; a second
+        one, or a failed approach, starts over from the approach."""
         reasons = []
         tries = int(prm.PICK_TRIES.value)
+        start = None
         for attempt in range(1, tries + 1):
-            r = chains.pick(self.sk, what)
+            r = chains.pick(self.sk, what, start=start)
             if r.ok:
                 self.sk.holding = what
                 return r
@@ -95,9 +102,16 @@ class PlanBrain:
                 self.sk.holding = what
                 return Result(True, f"holding the {what} (after: {r.reason})")
             reasons.append(r.reason)
-            self.log.ev("pick_retry", attempt=attempt, reason=r.reason)
+            if r.data.get("refused"):
+                self.log.ev("pick_refused", attempt=attempt, reason=r.reason)
+                print(f"    pick attempt {attempt} refused, no retry: {r.reason}")
+                return Result(False, f"refused ({r.reason})", r.data)
+            after_hover = r.data.get("failed") not in (None, "approach", "hover")
+            start = "hover" if after_hover and start != "hover" else None
+            self.log.ev("pick_retry", attempt=attempt, reason=r.reason, resume=start or "approach")
             print(f"    pick attempt {attempt} failed: {r.reason}")
-            self.fold()
+            if start is None:
+                self.fold()
         return Result(False, f"failed {tries} times ({'; '.join(reasons)})")
 
     def place(self, rel: str, target: str) -> Result:

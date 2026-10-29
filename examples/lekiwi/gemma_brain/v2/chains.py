@@ -42,9 +42,10 @@ def run(steps) -> Result:
     return Result(True, data={"done": done})
 
 
-def pick(sk: Skills2, obj: str, drive: bool = True) -> Result:
+def pick(sk: Skills2, obj: str, drive: bool = True, start: str | None = None) -> Result:
     """Pick `obj` from the floor. drive=False: the object is already near the reach point (the
-    base stays put for the approach; the line-up still moves it)."""
+    base stays put for the approach; the line-up still moves it). start: begin at this step (a
+    retry resumes at "hover" rather than driving again)."""
     steps = [("approach", lambda: actions.approach(sk, obj))] if drive else []
     steps += [
         ("hover", lambda: actions.hover(sk)),
@@ -59,6 +60,8 @@ def pick(sk: Skills2, obj: str, drive: bool = True) -> Result:
         ("close", lambda: sk.grip("close")),
         ("lift", lambda: actions.lift(sk)),
     ]
+    if start is not None:
+        steps = steps[[name for name, _ in steps].index(start):]
     return run(steps)
 
 
