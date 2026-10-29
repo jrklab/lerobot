@@ -1,4 +1,5 @@
 .venv/
-runs/
+/runs/
 __pycache__/
-demos/
+/demos/
+!data/

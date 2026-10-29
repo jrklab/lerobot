@@ -27,7 +27,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent.parent
-DEMO_EXTRACT = HERE / "demos" / "pick_cup" / "extract-ep0.json"
+# Committed (data/demos/): the raw recording under demos/ is not, and without this file a
+# fresh checkout silently fell back to the defaults below (a 9 cm lift, no place view).
+DEMO_EXTRACT = HERE / "data" / "demos" / "pick_cup" / "extract-ep0.json"
 
 
 @dataclass(frozen=True)
