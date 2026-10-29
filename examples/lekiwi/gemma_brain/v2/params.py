@@ -77,7 +77,7 @@ STEP_IN_VIEW_FRACTION = Param(0.25, "RULE", "one move may shift the target by at
 REACH_POINT_X_M = Param(0.25, "RULE", "where the base parks the object (arm x): vertical reach at 10 cm is 0.14-0.28 m; owner: 0.22 sat too close to the base")
 HOVER_HEIGHT_M = Param(0.10, "RULE", "line-up and first servo height: where the image Jacobian was measured (9.4 cm) and the object fills a small part of the view")
 FINAL_LOOK_HEIGHT_M = Param(0.03, "RULE", "last servo height: jaws clear of the brick's top (11.4 mm) by more than the floor fit's error")
-PLACE_MAX_OFFSET_M = Param(0.05, "RULE", "a container wholly in the wrist view at the place hover is within this of the spot under the gripper (the view there spans ~13 cm); a larger located offset means the boxes weren't of it")
+PLACE_APPROACH_TOL_M = Param(0.05, "RULE", "the approach to a container is done this close (its near edge is a rough mark; the wrist step after it centres it): at the brick's 1.5 cm a cup approach ran out of looks (Oct 28)")
 PLACE_TOL_M = Param(0.002, "RULE", "how centred over a container before lowering: as tight as the grasp servo (SERVO_TOL_M); at 1 cm, measured at the floor, the brick landed in the cup near the rim (the rim is nearer the camera: ~1.5x the error; Oct 27)")
 NEXT_GAP_FRACTION = Param(0.5, "RULE", "gap left beside the reference object, as a share of the held brick's width in the image")
 LOOK_OVERLAP = Param(0.5, "RULE", "look-around: consecutive front views overlap by this share of the view (turn step = the rest of the view's width, from the front camera's calibration)")

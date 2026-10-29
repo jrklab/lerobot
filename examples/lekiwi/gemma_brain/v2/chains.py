@@ -18,7 +18,7 @@ which, so the executor can retry or replan.
 
     pick "x":  approach -> hover -> line_up -> align -> servo(JawGoal) at the hover height ->
                down to the final look height -> servo(JawGoal) -> land -> grip(close) -> lift
-    place "x" in "y":       approach y -> hover at the demo's place height -> over y (base,
+    place "x" in "y":       carry (arm folded, holding) -> approach y -> hover at the demo's place height -> over y (base,
                then arm) -> lower to the demo's release height -> release -> back up
     place "x" next_to "y":  approach y -> hover -> beside y (base, then arm) -> down to the
                final look height -> beside y again -> land -> release -> back up
@@ -64,7 +64,8 @@ def place_in(sk: Skills2, obj: str, container: str, drive: bool = True) -> Resul
     """Put the held `obj` into `container` the way the owner's demo did: from above it, lowered
     to the demo's release height, then opened."""
     steps = [("holding", lambda: Result(sk.held(), "" if sk.held() else f"not holding the {obj}"))]
-    steps += [("approach", lambda: actions.approach(sk, container))] if drive else []
+    steps += [("carry", lambda: actions.carry(sk)),
+              ("approach", lambda: actions.approach(sk, container, prm.PLACE_APPROACH_TOL_M))] if drive else []
     steps += [
         ("hover", lambda: actions.hover_at(sk, prm.PLACE_HOVER_M)),
         ("over", lambda: actions.over_container(sk, container)),
@@ -79,7 +80,7 @@ def place_next_to(sk: Skills2, obj: str, ref: str, drive: bool = True) -> Result
     """Set the held `obj` down on the floor beside `ref`: lined up from the hover height, checked
     again low, landed like a grasp, then opened."""
     steps = [("holding", lambda: Result(sk.held(), "" if sk.held() else f"not holding the {obj}"))]
-    steps += [("approach", lambda: actions.approach(sk, ref))] if drive else []
+    steps += [("carry", lambda: actions.carry(sk)), ("approach", lambda: actions.approach(sk, ref))] if drive else []
     steps += [
         ("hover", lambda: actions.hover_at(sk, prm.HOVER_HEIGHT_M)),
         ("beside_high", lambda: actions.beside(sk, ref)),

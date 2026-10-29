@@ -140,6 +140,11 @@ class FrontApproachGoal:
 
     cam = "front"
     part = "base"
+    tol_m = prm.REACH_TOL_M
+
+    def __init__(self, tol_m=None):
+        if tol_m is not None:  # looser for a container: PLACE_APPROACH_TOL_M
+            self.tol_m = tol_m
 
     def error(self, det: Detection, sk) -> np.ndarray:
         f = sk.geom.front
@@ -156,7 +161,7 @@ class FrontApproachGoal:
         # spent 8 looks on drives the base barely made, 1.2 cm commanded -> 0.2 cm moved).
         f = sk.geom.front
         u_tol = f["u_per_deg"] * prm.MIN_BASE_TURN_DEG.value  # about what the smallest turn fixes
-        return abs(float(err[0])) <= u_tol and self.remaining(err, sk) <= prm.REACH_TOL_M.value
+        return abs(float(err[0])) <= u_tol and self.remaining(err, sk) <= self.tol_m.value
 
     def step(self, err: np.ndarray, sk) -> dict:
         f = sk.geom.front
@@ -166,7 +171,7 @@ class FrontApproachGoal:
             return {"roll": float(np.sign(turn) * max(abs(turn), prm.MIN_BASE_TURN_DEG.value))}
         # Drive to just inside the line-up's reach (half its tolerance short): no overshoot past the
         # reach point with a 7 mm range model, and one or two drives instead of halving steps.
-        return {"delta": (max(self.remaining(err, sk) - prm.REACH_TOL_M.value / 2, 0.0), 0.0)}
+        return {"delta": (max(self.remaining(err, sk) - self.tol_m.value / 2, 0.0), 0.0)}
 
 
 def round_centre(box) -> np.ndarray:

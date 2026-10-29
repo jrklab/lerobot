@@ -343,16 +343,17 @@ def _chain_sk(calls, held=True):
 def test_place_in_runs_over_lower_release(monkeypatch):
     from v2 import chains
 
-    monkeypatch.setattr(prm, "demo_place_view", lambda: ([0.15, 0.05, 0.75, 0.80], 0.106))
-    monkeypatch.setattr(chains.actions, "approach", lambda sk, o: chains.Result(True))
     calls = []
+    monkeypatch.setattr(prm, "demo_place_view", lambda: ([0.15, 0.05, 0.75, 0.80], 0.106))
+    monkeypatch.setattr(chains.actions, "approach", lambda sk, o, tol=None: (calls.append("approach"), chains.Result(True))[1])
+    monkeypatch.setattr(chains.actions, "carry", lambda sk: (calls.append("carry"), chains.Result(True))[1])
     monkeypatch.setattr(chains.actions, "over_container", lambda sk, c: (calls.append("over"), chains.Result(True))[1])
     sk = _chain_sk(calls)
     seq = iter([True, True, False])  # held before, ... , empty after the release
     sk.held = lambda: next(seq)
     r = chains.place_in(sk, "red block", "paper cup")
     assert r.ok, r
-    assert calls == ["move", "over", "move", "open", "move"]
+    assert calls == ["carry", "approach", "move", "over", "move", "open", "move"]
 
 
 def test_place_needs_something_held():

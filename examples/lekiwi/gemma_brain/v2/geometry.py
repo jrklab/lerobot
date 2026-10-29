@@ -148,6 +148,14 @@ def locate_from_one_view(geom: Geometry, c, h: float, height: float, roll_deg: f
     return -np.linalg.solve(j, np.asarray(c, float) - under_tcp)
 
 
+def view_half_width(geom: Geometry, h: float, height: float) -> float:
+    """Half the wrist view's narrower side, in metres, on a plane `height` above the floor with
+    the jaw tips h above it: anything located further off can't be in view."""
+    z = geom.cam_above_tips + h - height
+    j = geom.jacobian(h) * (geom.cam_above_tips + h) / z  # image fraction per metre at that plane
+    return float(min(0.5 / np.linalg.norm(j[0]), 0.5 / np.linalg.norm(j[1])))  # convention: half the view
+
+
 def grasp_spot(geom: Geometry) -> np.ndarray:
     """The wrist-image spot under the gripper: the taught brick's box centre (it was held there)."""
     if geom.grasp_box is None:

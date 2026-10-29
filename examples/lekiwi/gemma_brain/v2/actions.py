@@ -21,7 +21,7 @@ from __future__ import annotations
 import numpy as np
 
 from v2 import params as prm
-from v2.geometry import front_object_height, grasp_spot, locate_from_one_view, look_offsets
+from v2.geometry import front_object_height, grasp_spot, locate_from_one_view, look_offsets, view_half_width
 from v2.goals import AngleGoal, BesideGoal, FrontApproachGoal, ReachGoal, round_centre
 from v2.params import Param
 from v2.skills import Result, Skills2
@@ -95,12 +95,12 @@ def look_around(sk: Skills2, obj: str) -> Result:
     return Result(False, f"no {obj} in a full look around, nor after backing up")
 
 
-def approach(sk: Skills2, obj: str) -> Result:
+def approach(sk: Skills2, obj: str, tol=None) -> Result:
     """Base: find the object (looking around if it isn't in the forward view), then turn and
     drive until the front camera sees it at the reach point."""
     r = look_around(sk, obj)
     if r.ok:
-        r = sk.servo(obj, FrontApproachGoal())
+        r = sk.servo(obj, FrontApproachGoal(tol))
     det = sk.seen.get(f"front:{obj}")
     if r.ok and det is not None:  # side-on, for placing into it later (front_object_height)
         sk.heights[obj] = front_object_height(sk.geom, det.box)
@@ -122,6 +122,15 @@ def line_up(sk: Skills2, obj: str) -> Result:
 def align(sk: Skills2, obj: str) -> Result:
     """Wrist roll: the object's long side across the jaws."""
     return sk.servo(obj, AngleGoal())
+
+
+def carry(sk: Skills2) -> Result:
+    """Fold the arm to rest, holding on, before the base drives: held low after the pick's lift
+    (~6 cm at 27 cm out) the brick caught a cup's rim and pushed the cup ahead of the robot
+    (owner, Oct 28)."""
+    sk.arm.reset()
+    sk.roll = 0.0
+    return Result(True)
 
 
 def hover_at(sk: Skills2, height: Param) -> Result:
@@ -171,19 +180,28 @@ def over_container(sk: Skills2, container: str) -> Result:
     rim = sk.heights.get(container)
     if rim is None:
         return Result(False, f"no side-on measurement of the {container}'s height (the approach makes it)")
-    r = bring_into_view(sk, container)
-    if not r.ok:
-        return r
-    det = sk.find(container, "wrist", fast_ok=False)
-    if det is None:
-        return Result(False, f"no {container} in the wrist camera")
-    delta = locate_from_one_view(sk.geom, round_centre(det.box), sk.height(), rim, sk.roll)
-    sk.ev("located", obj=container, delta=[round(float(v), 4) for v in delta], rim_height=round(rim, 4))
-    if np.linalg.norm(delta) > prm.PLACE_MAX_OFFSET_M.value:
-        return Result(False, f"the {container} measures {np.linalg.norm(delta):.3f} m off: not under the gripper",
-                      {"delta": delta.tolist()})
-    r = sk.move("arm", delta=(float(delta[0]), float(delta[1]), 0.0))
-    return Result(r.ok, r.reason, {**r.data, "rim_height": rim, "moved": delta.tolist()})
+    for _ in range(int(prm.SERVO_MAX_LOOKS.value)):
+        r = bring_into_view(sk, container)
+        if not r.ok:
+            return r
+        det = sk.find(container, "wrist", fast_ok=False)
+        if det is None:
+            return Result(False, f"no {container} in the wrist camera")
+        h = sk.height()
+        delta = locate_from_one_view(sk.geom, round_centre(det.box), h, rim, sk.roll)
+        sk.ev("located", obj=container, delta=[round(float(v), 4) for v in delta], rim_height=round(rim, 4))
+        if np.linalg.norm(delta) > view_half_width(sk.geom, h, rim):
+            # Not a container in view: the box wasn't of it (Oct 28: the held brick boxed as the cup).
+            return Result(False, f"the {container} measures {np.linalg.norm(delta):.3f} m off, outside the view",
+                          {"delta": delta.tolist()})
+        if np.linalg.norm(delta) <= prm.REACH_TOL_M.value:
+            r = sk.move("arm", delta=(float(delta[0]), float(delta[1]), 0.0))
+            return Result(r.ok, r.reason, {**r.data, "rim_height": rim, "moved": delta.tolist()})
+        # Further than the arm should reach vertically from here: the base takes it, look again.
+        r = sk.move("base", delta=(float(delta[0]), float(delta[1])))
+        if not r.ok:
+            return r
+    return Result(False, f"couldn't get over the {container} in {int(prm.SERVO_MAX_LOOKS.value)} looks")
 
 
 def beside(sk: Skills2, ref: str) -> Result:
