@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""v2 layer 1, the primitives: the only code that drives motors and cameras (design doc
+"""Layer 1, the primitives: the only code that drives motors and cameras (design doc
 "v2 skills: three layers"). Every value comes from geometry.py (CALIB) or params.py (DEMO,
 SPEC, RULE); the actions and chains above only compose these.
 

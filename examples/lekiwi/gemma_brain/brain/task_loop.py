@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""The task loop: a spoken task in, the planner's steps run on the v2 chains (design doc
+"""The task loop: a spoken task in, the planner's steps run on the chains (design doc
 "v2 skills: three layers").
 
     plan      the planner (26B) writes the whole plan once from one front and one wrist frame;

@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""The measured geometry the v2 skills work in, loaded once from calib.json and
+"""The measured geometry the skills work in, loaded once from calib.json and
 floor_touches.json, each with where it was measured (CALIB). No defaults: a missing
 calibration is an error naming the script that makes it.
 

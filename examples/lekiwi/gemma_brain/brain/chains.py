@@ -12,8 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""v2 layer 3, chains: what the planner's verbs expand to, as sequences of actions and
-primitives. No numbers here (test_v2); a chain stops at the first step that fails and says
+"""Layer 3, chains: what the planner's verbs expand to, as sequences of actions and
+primitives. No numbers here (tests/test_geometry.py); a chain stops at the first step that fails and says
 which, so the executor can retry or replan.
 
     pick "x":  approach -> hover -> line_up -> align -> servo(JawGoal) at the hover height ->

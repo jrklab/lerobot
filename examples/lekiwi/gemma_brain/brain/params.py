@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Every number the v2 skills use, with where it comes from. The owner's rule (Oct 27): few
+"""Every number the skills use, with where it comes from. The owner's rule (Oct 27): few
 hand-set values; each one is measured, taken from a demo, a spec, or set by a stated rule.
 
 Source tags: CALIB = measured by a script into calib.json (see geometry.py); DEMO = the owner's

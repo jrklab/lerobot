@@ -12,8 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""v2 layer 3, actions: readable names for common uses of the primitives (primitives.py). They hold
-no numbers of their own (test_v2.test_actions_and_chains_hold_no_numbers): every value is a
+"""Layer 3, actions: readable names for common uses of the primitives (primitives.py). They hold
+no numbers of their own (tests/test_geometry.py, test_brain_code_holds_no_stray_numbers): every value is a
 params.py or geometry.py one, so a new action adds a name, not a parameter to calibrate."""
 
 from __future__ import annotations

@@ -5,20 +5,34 @@ cameras; code runs each step on a small set of measured skills that close every 
 sensor; the LeKiwi web service on the Pi plays the motions back with its own safety checks.
 
 ```
-task ──> plan_brain.py ──> v2/executor.py (task loop) ──> v2/chains.py ──> v2/actions.py ──> v2/skills.py
-          26B: one plan      check, run, retry,           pick, place in,    approach, land,     find, servo,
-          from 2 frames      fold, replan                 place next to      carry, release...   move, grip
-                                                                                                    │
-                                    arm.py (IK) / robot.py (HTTP) ──> Pi: web_server/auto_control.py
-                                                                      (30 Hz playback, watchdog, stops)
+task ──> plan_brain.py ──> brain/task_loop.py ──> brain/chains.py ──> brain/actions.py ──> brain/primitives.py
+          26B: one plan     check, run, retry,     pick, place in,     approach, land,       find, servo,
+          from 2 frames     fold, replan, check    place next to       carry, release...     move, grip
+                                                                                                │
+                              common/arm.py (IK) / common/robot.py (HTTP) ──> Pi: web_server/auto_control.py
+                                                                              (30 Hz playback, watchdog, stops)
 ```
 
 The skills have three layers (design doc "v2 skills: three layers"): primitives
-(`v2/skills.py`: find, servo, move, grip), goals (`v2/goals.py`: what "done" looks like in an
-image), and actions and chains (`v2/actions.py`, `v2/chains.py`), which hold no numbers of their
-own. Every number is in `v2/params.py` with its source (CALIB, DEMO, SPEC or RULE) or measured
-into `calib.json` (`v2/geometry.py`). v1 (one tool call per skill, `brain.py`, `skills.py`) was
+(`brain/primitives.py`: find, servo, move, grip), goals (`brain/goals.py`: what "done" looks
+like in an image), and actions and chains (`brain/actions.py`, `brain/chains.py`), which hold no
+numbers of their own. Every number is in `brain/params.py` with its source (CALIB, DEMO, SPEC or
+RULE) or measured into `data/calib.json` (`brain/geometry.py`). v1 (one tool call per skill) was
 retired on 2026-10-28; it is at the git tag `lekiwi-v1-final`.
+
+## Folders
+
+| | |
+|---|---|
+| `plan_brain.py` | say a task (entry point) |
+| `run_skills.py` | one chain on the robot, or driven pick trials, without the planner |
+| `brain/` | the skills: params, geometry, primitives, goals, actions, chains, the task loop |
+| `common/` | shared by everything: the arm model and planner, the robot client, the models, vision, the run log |
+| `calibration/` | scripts that measure this robot into `data/calib.json`; the demo extractor |
+| `tools/` | robot checks: the link (`check_link.py`), the front view with the arm carried (`check_carry_view.py`) |
+| `data/` | `calib.json`, the floor touches, the demo extract (`data/demos/`) |
+| `tests/` | offline tests by layer; `uv run pytest` |
+| `runs/`, `demos/` | run logs and frames, raw teleop recordings (not in git) |
 
 ## A task, start to finish
 
@@ -92,36 +106,46 @@ A failed step folds the arm and the planner replans from what's done and why it 
 ## Robot runs without the planner
 
 ```bash
-.venv/bin/python run_v2.py pick                 # the pick chain on the red block (approach first)
-.venv/bin/python run_v2.py place-in "red block" --to "paper cup"     # holding the brick
-.venv/bin/python run_v2.py trials --n 5         # 5 driven picks: pick, put back, back up 40 cm, repeat
-.venv/bin/python run_v2.py land                 # hover at the reach point, land, back up
+.venv/bin/python run_skills.py pick                 # the pick chain on the red block (approach first)
+.venv/bin/python run_skills.py place-in "red block" --to "paper cup"     # holding the brick
+.venv/bin/python run_skills.py trials --n 5         # 5 driven picks: pick, put back, back up 40 cm, repeat
+.venv/bin/python run_skills.py land                 # hover at the reach point, land, back up
 ```
 
-## Calibrations (calib.json, this robot)
+## Calibrations (data/calib.json, this robot)
 
 | What | Script | When |
 |---|---|---|
-| floor height | `calibrate_floor.py` | new floor or arm calibration |
-| wrist image Jacobian | `wrist_calib.py` | wrist camera moved |
-| descent (camera above the jaw tips) | `calibrate_descent.py` (from pick logs) | wrist camera moved |
-| jaw geometry | `calibrate_jaws.py` | gripper or wrist camera changed |
-| front camera (turn, range, reach row) | `calibrate_front.py`: one brick 0.6-1 m ahead, clear floor | front camera moved |
-| grasp target | `teach_grasp.py` (the owner's midpoint teach) | gripper or wrist camera changed |
-| demo values (open width, lift, release, place view) | `demo_extract.py` on a teleop demo | new demo |
+| floor height | `calibration/calibrate_floor.py` | new floor or arm calibration |
+| wrist image Jacobian | `calibration/wrist_calib.py` | wrist camera moved |
+| descent (camera above the jaw tips) | `calibration/calibrate_descent.py` (from pick logs) | wrist camera moved |
+| jaw geometry | `calibration/calibrate_jaws.py` | gripper or wrist camera changed |
+| front camera (turn, range, reach row) | `calibration/calibrate_front.py`: one brick 0.6-1 m ahead, clear floor | front camera moved |
+| grasp target | `calibration/teach_grasp.py` (the owner's midpoint teach) | gripper or wrist camera changed |
+| demo values (open width, lift, release, place view) | `calibration/demo_extract.py` on a teleop demo (writes `data/demos/`) | new demo |
 
 The arm's joint angles are (ticks - 2047) x 2pi/4096 from the homing tick (fixed Oct 27).
 
 ## Tests
 
 ```bash
-uv run pytest test_*.py          # offline: geometry, servo sims, chains, the task loop, vision
+uv run pytest                    # all offline tests (tests/), from this folder
+uv run pytest tests/test_goals.py
 ```
+
+| File | Covers |
+|---|---|
+| `test_geometry.py` | geometry, and the rules: every param names its source, no stray numbers above the primitives |
+| `test_primitives.py` | find, move (in the web_server arm simulation), measured moves, settle, grip, base |
+| `test_goals.py` | the goals, and servo converging with the true Jacobian off |
+| `test_actions_chains.py` | land, lift, carry, look around, over a container, place checks, chain order |
+| `test_task_loop.py` | the planner's plans, retries, replans, folds, against fake chains |
+| `test_arm.py`, `test_vision.py`, `test_demo_extract.py` | IK and the Pi's checks, jaw geometry, demo keyframes |
 
 Scripts that move the robot are never named `*_test.py` (pytest would run them);
 `runs/` and `demos/` are not collected.
 
-## Known limits (2026-10-28)
+## Known limits (2026-10-29)
 
 - Driven picks 5/5 in the last four batches (63-69 s each); the cup and next-to tasks work end
   to end (cup: 67.5 s). Small samples, not success rates.
@@ -129,4 +153,8 @@ Scripts that move the robot are never named `*_test.py` (pytest would run them);
   check before anything moves.
 - The fast model's box at 3 cm sometimes changes height between looks and the servo chases it.
 - The arm has 2-3 mm of play in its reach; servo steps correct it from the encoders.
-- The Pi's power supply sags under load; give it a solid 5.1 V / 3 A supply.
+- The place-in check is one front-camera look for the object on the floor: a miss hidden behind
+  the container passes as placed.
+- The Pi's power supply sags under load; give it a solid 5.1 V / 3 A supply. On Oct 28 the Pi
+  ran at its temperature limit and the motor bus dropped (no status packets); restarting
+  `lekiwi-web` brought it back.

@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""v2 layer 2, goals: what "done" looks like in an image, for servo(). Each goal turns a
+"""Layer 2, goals: what "done" looks like in an image, for servo(). Each goal turns a
 detection into an error, says when the error is small enough, and turns it into one move of a
 part. Everything is computed from the detection's box and the measured geometry (CALIB) with
 params.py values; nothing per object.

@@ -17,7 +17,7 @@
 """Offline checks for planner.py and the task loop (brain/task_loop.py): plan parsing and checking,
 and the loop's steps, retries, replans and fold against fake chains. No robot, no model.
 
-    uv run pytest test_plan_brain.py
+    uv run pytest tests/test_task_loop.py
 """
 
 import tempfile
