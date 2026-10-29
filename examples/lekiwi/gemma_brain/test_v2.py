@@ -452,10 +452,20 @@ def test_a_move_crossing_the_clearance_goes_at_the_near_speed_only_below_it():
 
     sim, sk = skills_over(real_floor_tcp_z=-0.12, predicted=-0.12)
     assert actions.land(sk).ok
+    # The fitted floor tilts: 5.6 mm lower at the reach point than at x 0, where the free-move
+    # guard is taken (Oct 28 fit). Tilted the same way about where the arm is:
+    x = sk.cmd_tcp()[0]
+    sk.geom.floor_coef = np.array([-0.12 + 0.0224 * x, -0.0224, 0.0])
+    sk.arm.floor_z = float(sk.geom.floor_coef[0]) - JAW_TIP_OFFSET_M  # as Skills2.__init__ sets them
+    sk.arm.z_min = sk.arm.floor_z + FLOOR_CLEARANCE_M + JAW_TIP_OFFSET_M
     sent = []
     orig = sk.arm.robot.trajectory
 
     def spy(wps, durs, z_min=None, contact_stop=False):
+        # Oct 28: the free part, ending on the line, went with the free-move guard and the Pi
+        # refused it (the jaw tips below it): every part's guard is under the tips at the line.
+        x, y = sk.cmd_tcp()[:2]
+        assert z_min <= sk.geom.floor(x, y) + FLOOR_CLEARANCE_M, z_min
         sent.append((sk.height(), sum(durs)))
         return orig(wps, durs, z_min, contact_stop)
 

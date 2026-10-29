@@ -119,7 +119,9 @@ class Skills2:
         # from the floor was refused by the default one, which sits above its start: Oct 27 teach).
         clear = FLOOR_CLEARANCE_M + JAW_TIP_OFFSET_M
         h_from, h_to = p[2] - self.geom.floor(p[0], p[1]), goal[2] - floor
-        low = min(h_from, h_to) < clear
+        # On the line counts as low: the split below ends a move there, and the free-move guard
+        # sits above the jaw tips at the line (Oct 28: all 5 descents refused by the Pi).
+        low = min(h_from, h_to) < clear or bool(np.isclose(min(h_from, h_to), clear))
         if low and not until_contact and speed is None and max(h_from, h_to) > clear:
             # Only the part below the clearance at the near speed: a 13 cm lift from the floor
             # took 13 s, a 10 -> 3 cm descent 7 s, all at 1 cm/s (Oct 28 trials).
