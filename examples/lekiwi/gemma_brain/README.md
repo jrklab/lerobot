@@ -20,6 +20,26 @@ numbers of their own. Every number is in `brain/params.py` with its source (CALI
 RULE) or measured into `data/calib.json` (`brain/geometry.py`). v1 (one tool call per skill) was
 retired on 2026-10-28; it is at the git tag `lekiwi-v1-final`.
 
+## Quick start: a spoken task
+
+With the robot on and connected, and the two model servers running (steps 1-3 below):
+
+```bash
+curl -s http://127.0.0.1:8081/health; curl -s http://127.0.0.1:8082/health   # each: {"status":"ok"}
+curl -s -m 3 http://10.55.0.102:8000/auto/status | head -c 60; echo          # the robot: {"mode":...
+
+cd ~/Work/lerobot/examples/lekiwi/gemma_brain
+.venv/bin/python plan_brain.py "put the red block in the paper cup"
+.venv/bin/python plan_brain.py "put the red block next to the green block"
+.venv/bin/python plan_brain.py --holding "red block" "put the red block in the paper cup"   # already holding it
+.venv/bin/python plan_brain.py --plan-only "put the red block in the paper cup"           # plan and check only: nothing moves
+```
+
+It prints the plan, each step and its result, and ends with `SUCCESS` or `NOT DONE` and the log
+folder (`runs/<time>-plan/`). Stop with Ctrl-C, any gamepad input, or the gamepad's RB e-stop;
+the B button then folds the arm. A task can pick, place in, and place next to; other relations
+("on the plate") are refused by the plan check before anything moves.
+
 ## Folders
 
 | | |
@@ -67,7 +87,9 @@ llama-server -m ~/models/gguf/gemma-4-E2B_gemma-4-E2B-it-Q4_K_M.gguf \
 ```
 
 26B plans and boxes objects it hasn't seen yet; E2B answers the repeat looks at an object
-already found (its box must have the object's colour, else 26B is asked).
+already found (its box must have the object's colour, else 26B is asked). Check both are up:
+`curl -s http://127.0.0.1:8081/health; curl -s http://127.0.0.1:8082/health` (each prints
+`{"status":"ok"}`).
 
 **4. Set the scene.** The robot on the floor with room to turn and drive; the brick on the floor;
 for a place, the cup or the other brick nearby. Keep the gamepad at hand: any stick input or the
