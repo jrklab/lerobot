@@ -93,6 +93,8 @@ FLOOR_CLEARANCE_M = 0.02
 # probe: contact at TCP z -0.113 against a floor at -0.100).
 JAW_TIP_OFFSET_M = 0.015
 CLEARANCE_SAMPLES = 40
+# A planned joint stays this far (joint units) inside its range.
+JOINT_LIMIT_MARGIN = 1.0
 
 
 class PlanError(ValueError):
@@ -257,7 +259,7 @@ def plan_ee_line(
         for j, rad in zip(IK_ARM_JOINTS, q, strict=True):
             norm = calib.to_norm(j, float(rad))
             lo, hi = JOINT_RANGE[j]
-            if not lo + 1.0 <= norm <= hi - 1.0:
+            if not lo + JOINT_LIMIT_MARGIN <= norm <= hi - JOINT_LIMIT_MARGIN:
                 raise PlanError(f"{j} would hit its limit ({norm:.1f}) {where}")
             wp[j] = norm
         spans.append(max(abs(wp[j] - prev[j]) for j in IK_ARM_JOINTS))

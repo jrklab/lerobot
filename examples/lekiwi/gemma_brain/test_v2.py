@@ -18,6 +18,7 @@
 """Offline checks for the v2 skills (v2/): geometry, and move/land/grip run by the Pi's
 AutoController in the web_server simulation (as test_arm.py)."""
 
+import json
 import sys
 from pathlib import Path
 
@@ -325,6 +326,26 @@ def test_jaw_goal_needs_the_midpoint_teach():
     sim.geom, sim.roll, sim.h = geom(-0.11), 0.0, 0.03
     with pytest.raises(MissingCalibrationError):
         goals.JawGoal().target(sim, 0.03)
+
+
+def test_the_roll_ranges_ends_are_moves_the_planner_accepts():
+    # Oct 28 full task: a brick at 15 deg, the range ending at ~14: the roll clamped to the end
+    # was refused six times (the joint at 100.4, the planner's limit 99).
+    # The robot's own calibration (the sim's uncalibrated one gives a different range):
+    from arm import Calibration
+
+    cal = Calibration(*_real_cal())
+    sim = Sim(floor_z=-0.12)
+    sk = Skills2(SimRobot(sim), Arm(SimRobot(sim), cal, body_check=False), geom(-0.12))
+    assert actions.hover(sk).ok
+    for end in sk.roll_range:
+        r = sk.move("arm", delta=(0.0, 0.0, 0.0), roll=end)
+        assert r.ok, (end, r.reason)
+
+
+def _real_cal():
+    c = json.loads((Path(__file__).parent / "arm_calibration.json").read_text())  # robot.calibration(), Oct 28
+    return c["joints"], c["motor_resolution"]
 
 
 def test_angle_goal_rolls_within_the_range_using_the_brick_symmetry():

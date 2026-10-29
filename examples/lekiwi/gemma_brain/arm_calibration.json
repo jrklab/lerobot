@@ -1,0 +1,35 @@
+{
+ "motor_resolution": 4096,
+ "joints": {
+  "arm_shoulder_pan": {
+   "range_min": 665,
+   "range_max": 3401,
+   "drive_mode": 0
+  },
+  "arm_shoulder_lift": {
+   "range_min": 888,
+   "range_max": 3270,
+   "drive_mode": 0
+  },
+  "arm_elbow_flex": {
+   "range_min": 754,
+   "range_max": 2983,
+   "drive_mode": 0
+  },
+  "arm_wrist_flex": {
+   "range_min": 896,
+   "range_max": 2896,
+   "drive_mode": 0
+  },
+  "arm_wrist_roll": {
+   "range_min": 420,
+   "range_max": 3882,
+   "drive_mode": 0
+  },
+  "arm_gripper": {
+   "range_min": 1461,
+   "range_max": 2943,
+   "drive_mode": 0
+  }
+ }
+}

@@ -35,7 +35,16 @@ import time
 from dataclasses import dataclass, field
 
 import numpy as np
-from arm import FLOOR_CLEARANCE_M, JAW_TIP_OFFSET_M, NAMED_POSES, Arm, PlanError, plan_ee_line
+from arm import (
+    FLOOR_CLEARANCE_M,
+    JAW_TIP_OFFSET_M,
+    JOINT_LIMIT_MARGIN,
+    JOINT_RANGE,
+    NAMED_POSES,
+    Arm,
+    PlanError,
+    plan_ee_line,
+)
 from robot import RobotError
 from vision import colour_matches, measured_angle_of, snap_box
 
@@ -196,12 +205,31 @@ class Skills2:
                 return deg(wps[-1][joint])
 
             j0 = joint_at(0.0)
-            slope = (joint_at(-90.0) - j0) / -90.0  # convention: two rolls 90 deg apart give the joint-per-roll slope
+            toward_less = joint_at(-90.0) < j0  # convention: a quarter turn shows which way the joint goes
+
+            def roll_for(target):
+                """The roll whose joint angle is `target`, found by halving along the planner's own
+                IK: the joint isn't linear in the roll (a two-point slope put a -160 deg roll at
+                98.5 joint units, the planner at 100.5: refused, Oct 28 full task). It returns
+                the inner side, a roll the planner accepts."""
+                inner, outer = 0.0, -180.0 if (target < j0) == toward_less else 180.0  # convention: half a turn either way
+                for _ in range(12):  # convention: halvings: 180 deg / 2^12, under 0.05 deg
+                    mid = (inner + outer) / 2
+                    try:
+                        reached = (joint_at(mid) - target) * (target - j0) >= 0
+                    except PlanError:  # past the joint's limit
+                        reached = True
+                    inner, outer = (inner, mid) if reached else (mid, outer)
+                return inner
+
             rest = deg(NAMED_POSES["rest"][joint])
-            lo, hi = sorted((deg(-100.0), deg(100.0)))  # convention: the ends of the -100..100 joint units
+            # The ends the planner accepts: its joint range, JOINT_LIMIT_MARGIN inside (Oct 28: the
+            # full -100..100 ends made a roll clamped to the range's end a refused move).
+            jlo, jhi = JOINT_RANGE[joint]
+            lo, hi = sorted((deg(jlo + JOINT_LIMIT_MARGIN), deg(jhi - JOINT_LIMIT_MARGIN)))
             span = prm.ROLL_FROM_REST_DEG.value
             jmin, jmax = max(rest - span, lo), min(rest + span, hi)
-            self._roll_range = tuple(sorted(((jmin - j0) / slope, (jmax - j0) / slope)))
+            self._roll_range = tuple(sorted((roll_for(jmin), roll_for(jmax))))
         return self._roll_range
 
     def _settle(self) -> None:
