@@ -69,6 +69,9 @@ from calibration import boards
 
 CALIB = ROOT / "data" / "calib.json"
 IMAGE_SIZE = (640, 480)
+# The arm's frame (so101_kinematics: the URDF's base_link) has its origin on the arm's mounting
+# surface, 3.9 cm behind the pan axis; positions read more easily from the axis.
+PAN_AXIS_BASE = np.array([*kin._ORIGIN_TRANSFORMS[0][:2, 3], 0.0])
 # The lens model: radial distortion k1, k2 only. The full model's tangential terms and k3 lowered
 # the error by 0.01-0.02 px but let the optical centre wander: across four Oct 29 runs the front
 # camera's centre spread 15 px (x) and 8 px (y) with them, 1.5 and 4.8 px without; the wrist's
@@ -368,6 +371,11 @@ def main() -> None:
         f"{tilt:.1f} deg down (through the {FRONT_VIA} board; the scenes' estimates within {1000 * across:.1f} mm "
         f"of their mean, tilts {min(np.degrees(np.arcsin(-T[2, 2])) for T in fronts):.1f}-"
         f"{max(np.degrees(np.arcsin(-T[2, 2])) for T in fronts):.1f} deg)"
+    )
+    ahead, left, below = f["T_base_cam"][:3, 3] - PAN_AXIS_BASE
+    print(
+        f"  i.e. {100 * ahead:.1f} cm ahead of the arm's pan axis, {100 * left:.1f} cm to its left, "
+        f"{-100 * f['T_base_cam'][2, 3]:.1f} cm below the arm's mounting surface"
     )
     if args.write:
         calib = json.loads(CALIB.read_text())

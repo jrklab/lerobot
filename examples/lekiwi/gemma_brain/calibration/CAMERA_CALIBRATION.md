@@ -150,7 +150,7 @@ solved together and written to `data/calib.json` (commit 2679a902).
 | wrist lens | f 547 px, radial k1 k2; rms 0.41 px over 194 board views |
 | front lens | f 549 px, radial k1 k2; rms 0.53 px over 171 views |
 | wrist camera mount | 90 mm behind the TCP, 61 mm off the jaw axis, looking along the jaws |
-| front camera pose | 82 mm ahead of the arm's base, 48 mm below it (~6 cm above the floor), 8.1 deg down; the four scenes within 2.7 mm of their mean, tilts 7.4-8.5 deg |
+| front camera pose | 4.3 cm ahead of the arm's pan axis, 0.7 cm to its left, 4.8 cm below the arm's mounting surface (~5-6 cm above the floor), 8.1 deg down; the four scenes within 2.7 mm of their mean, tilts 7.4-8.5 deg. The owner's ruler check agrees (the camera sits right below the arm's base) |
 | arm model fit | rms 4.0 px over 152 poses (2-6 px by arm shape: about 1-3 mm at the board) |
 
 **Repeatability.** Run to run, the arm returns to the same place very consistently: in the same
@@ -185,6 +185,10 @@ on them: it returns to its start closed loop on the cameras.
 
 Before `--write` on a new run, look at: lens rms under ~0.6 px; the wrist mount physically
 sensible; the scenes' front camera estimates agreeing within a few mm.
+
+Positions in `calib.json` are in the arm model's frame (so101_kinematics, the URDF's
+`base_link`): its origin is on the arm's mounting surface, 3.9 cm behind the pan axis, so the
+front camera's T_base_cam reads x 82 mm there.
 
 Next: the geometry switches to these cameras (wrist first, then front), each checked on logged
 frames against the current fitted calibrations; then phase E re-measures what depends on them.
