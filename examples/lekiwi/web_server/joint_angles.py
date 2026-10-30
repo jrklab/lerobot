@@ -101,8 +101,12 @@ def shifted_calibration(
     its true angle (offset +d, as solve_cameras.py --fit-offsets measures it) gets readings d
     degrees higher. A Feetech motor reports Present_Position = Actual_Position - Homing_Offset,
     and its recorded range and position limits are in those reported ticks, so all three move
-    by the same number of ticks (the sign flipped for a reversed drive_mode). Refuses the
-    gripper (not in the arm model) and a range pushed outside 0..resolution-1."""
+    by the same number of ticks (the sign flipped for a reversed drive_mode). The motor stores
+    Homing_Offset in sign-magnitude with 11 bits (+/-2047: lerobot.motors.feetech's encoding
+    table), and an offset matters only modulo a turn (the encoder wraps), so it is brought back
+    into that range: this arm's elbow sits at 2014, and a correction of more than -3 deg would
+    otherwise overflow it. Refuses the gripper (not in the arm model) and a range pushed outside
+    0..resolution-1."""
     out = {j: dict(c) for j, c in joints.items()}
     for joint, d in offsets_deg.items():
         if joint == GRIPPER or joint not in out:
@@ -110,6 +114,11 @@ def shifted_calibration(
         c = out[joint]
         ticks = round((-d if c["drive_mode"] else d) * resolution / 360.0)
         c["homing_offset"] -= ticks
+        half = resolution // 2 - 1  # 2047: the largest magnitude the register holds
+        if c["homing_offset"] > half:
+            c["homing_offset"] -= resolution
+        elif c["homing_offset"] < -half:
+            c["homing_offset"] += resolution
         c["range_min"] += ticks
         c["range_max"] += ticks
         if c["range_min"] < 0 or c["range_max"] > resolution - 1:

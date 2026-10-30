@@ -465,9 +465,8 @@ def _deg_at(joints: dict, joint: str, actual_ticks: int) -> float:
     """The degrees the planner reads for a raw encoder position: Present_Position = actual -
     Homing_Offset, normalized over the recorded range as LeRobot's bus does, then to degrees."""
     c = joints[joint]
-    units = (actual_ticks - c["homing_offset"] - c["range_min"]) / (
-        c["range_max"] - c["range_min"]
-    ) * 200 - 100
+    present = (actual_ticks - c["homing_offset"]) % 4096  # the encoder wraps
+    units = (present - c["range_min"]) / (c["range_max"] - c["range_min"]) * 200 - 100
     return JointAngles(joints).to_deg(joint, units)
 
 
@@ -485,6 +484,14 @@ def test_a_shifted_zero_reads_the_true_angle():
             fixed[joint]["range_max"] - fixed[joint]["range_min"]
             == joints[joint]["range_max"] - joints[joint]["range_min"]
         )
+    # This arm's elbow offset (2014) is near the register's +/-2047: -9 deg needs it wrapped.
+    elbow = shifted_calibration(joints, {"arm_elbow_flex": -9.0})["arm_elbow_flex"]
+    assert -2047 <= elbow["homing_offset"] <= 2047 and elbow["homing_offset"] == 2014 + 102 - 4096
+    for actual in (1200, 1700, 2600):
+        moved = _deg_at({"arm_elbow_flex": elbow}, "arm_elbow_flex", actual) - _deg_at(
+            joints, "arm_elbow_flex", actual
+        )
+        assert abs(moved + 9.0) < 0.1
     with pytest.raises(ValueError):
         shifted_calibration(joints, {"arm_gripper": 1.0})
     with pytest.raises(ValueError):

@@ -31,8 +31,17 @@ compares them and, on a mismatch, asks at the keyboard for a recalibration, whic
 can't answer. --restore <backup> writes a backup back the same way.
 
 Teleop, the Pi's auto interface and the Mac planner all read the corrected zeros from here:
-there is no second offset table to keep in step. After a correction, run the camera capture
-again: its offsets should come out within their spread.
+there is no second offset table to keep in step. LeRobot's normalized units don't change (the
+reading and the recorded range move together: teleop and recorded demos are unaffected); the
+homing-based degrees the planner and the Pi use do, by the correction. Homing_Offset is stored
+in 11-bit sign-magnitude (+/-2047), so a shifted offset is wrapped by a turn
+(joint_angles.shifted_calibration).
+
+After a correction, redo what was measured through the arm's kinematics: the floor touches
+(calibrate_floor.py --write) and the camera calibration (capture_cameras.py scene,
+solve_cameras.py --fit-offsets --write: its offsets should now come out within their spread).
+The named poses (common/arm.py NAMED_POSES, degrees) then reach their intended true angles,
+physically moved by the correction.
 """
 
 from __future__ import annotations

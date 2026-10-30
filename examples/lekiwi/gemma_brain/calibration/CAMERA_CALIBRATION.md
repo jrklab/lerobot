@@ -142,9 +142,15 @@ all read the corrected zeros:
 
 It moves each motor's Homing_Offset and position limits by the same ticks, in the motors and the
 calibration file together (LeKiwi refuses to start quietly when they differ), after backing the
-file up; `--restore <backup> --write` undoes it. Then capture and solve again: the offsets
-should come out within their spread. Pan and wrist roll can't be corrected this way (the boards
-can't tell their zeros).
+file up; `--restore <backup> --write` undoes it. The offset register holds +/-2047 (11-bit
+sign-magnitude), so a shifted offset is wrapped by a turn: this arm's elbow sits at 2014.
+LeRobot's normalized units don't change (reading and range move together), so teleop and
+recorded demos are unaffected; the degrees the planner and the Pi use are corrected.
+
+Then redo what was measured through the arm's kinematics: the floor touches and the camera
+calibration (its offsets should now come out within their spread). The named poses (rest,
+ready, in degrees) move physically by the correction to their intended true angles. Pan and
+wrist roll can't be corrected this way (the boards can't tell their zeros).
 
 ## The arm poses
 
