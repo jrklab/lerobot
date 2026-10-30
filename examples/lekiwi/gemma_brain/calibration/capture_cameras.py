@@ -32,7 +32,7 @@ each a joint move checked for floor and body clearance, and at each one the wris
 a frame and the measured joint angles are recorded; the arm folds. Then the base sweep (not
 with --no-sweep): the base turns and backs up with the arm folded, and the front camera takes
 a frame at each stop, for its lens; then it drives back to the start, closed loop on the front
-camera's view of the floor board (once calib.json has the measured front camera; --reverse visits
+camera's view of the boards (once calib.json has the measured front camera; --reverse visits
 the arm poses in the opposite order). --plan-only prints the poses'
 joint targets (or why one is refused) and the sweep's moves, and moves nothing.
 runs/<t>-scene/scene.json plus the frames.
@@ -71,7 +71,7 @@ from common.arm import (
 )
 
 from calibration import boards
-from calibration.solve_cameras import FRONT_VIA, board_in_camera, inv
+from calibration.solve_cameras import board_in_camera, inv
 
 # A lens view is new when its board's centre moved this share of the image width from every
 # kept view of that board, or its size changed by this share; still when no corner moved more
@@ -128,8 +128,8 @@ SHAPE_CHANGES = (
 # lies ~6 cm ahead of the robot.
 SWEEP_BACK_M = (0.0, 0.10, 0.20)
 SWEEP_HEADINGS_DEG = (-20.0, -10.0, 0.0, 10.0, 20.0)
-# Back to the start after the sweep, closed loop: the front camera's view of the floor board
-# against the run's first frame says where the base is; turn, then drive, until within these
+# Back to the start after the sweep, closed loop: the front camera's view of the boards against
+# the run's first frame says where the base is; turn, then drive, until within these
 # (convention: the boards' placement tolerance is a few cm; odometry alone drifts ~1-2 cm in a
 # 20 cm sweep). A single drive never goes further forward than MAX_RETURN_FORWARD_M.
 RETURN_TOL_M = 0.01
@@ -350,20 +350,27 @@ def base_offset(T_cam_board_ref, T_cam_board_now, T_base_cam) -> tuple[float, fl
 
 
 def front_measure(robot, ref_boards: dict, cams: dict):
-    """A function giving the base's offset from the reference frame's place, from a fresh front
-    frame of the floor board (FRONT_VIA)."""
+    """A function giving the base's offset from where the reference frame was taken, from a fresh
+    front frame: one estimate per board seen in both (any fixed board will do; from 20 cm back
+    the floor board is too foreshortened to read, the upright ones aren't), their median."""
     K, dist = np.asarray(cams["front"]["K"]), np.asarray(cams["front"]["dist"])
     T_base_cam = np.asarray(cams["front"]["T_base_cam"])
-    ref = board_in_camera(K, dist, FRONT_VIA, ref_boards[FRONT_VIA])
+    ref = {n: board_in_camera(K, dist, n, d) for n, d in ref_boards.items()}
 
     def measure() -> tuple[float, float, float]:
         time.sleep(SETTLE_S)
         seen = boards.detect(robot.frame("front", after=time.time())[0])
-        if FRONT_VIA not in seen:
+        est = [
+            base_offset(ref[n], board_in_camera(K, dist, n, d), T_base_cam)
+            for n, d in seen.items()
+            if n in ref
+        ]
+        if not est:
             raise RuntimeError(
-                f"the {FRONT_VIA} board isn't in the front camera's view: can't find the start"
+                "none of the start's boards is in the front camera's view: can't find the start"
             )
-        return base_offset(ref, board_in_camera(K, dist, FRONT_VIA, seen[FRONT_VIA]), T_base_cam)
+        x, y, th = np.median(np.asarray(est), axis=0)
+        return float(x), float(y), float(th)
 
     return measure
 
@@ -444,7 +451,7 @@ def main() -> None:
                 (out / "scene.json").write_text(json.dumps(scene, indent=1) + "\n")
             print(f"{len(scene['sweep'])} sweep frames with a board")
             cams = _cameras()
-            if cams and scene["front"] and FRONT_VIA in scene["front"][0]["boards"]:
+            if cams and scene["front"] and scene["front"][0]["boards"]:
                 print("back to the start:")
                 scene["returned"] = return_to_start(
                     robot, front_measure(robot, scene["front"][0]["boards"], cams)
