@@ -251,4 +251,34 @@ task in 63 s, the brick centred in the cup, the cup measured 6.2 cm. Still weak:
 far away (one approach from 52 cm stopped 5 cm past its target; a pixel of the box's bottom is
 ~1 cm there); the line-up recovers it.
 
-Next: phase E re-measures what depends on the cameras (the floor, the grasp target).
+## Phase E: what depended on the cameras (Oct 30)
+
+- **The grasp target: kept.** Through the camera model the taught brick sits where it physically
+  should: its fixed-jaw edge 0.5 mm from the TCP across the closing direction, centred within
+  2 mm, its top face level with the TCP within 1 mm. The spot is image-space and the camera
+  rides the gripper, so neither the arm's recalibration nor the camera model changes it.
+- **The floor under the board.** The cameras measured the floor board's top (z -0.1058); the
+  robot works on the bare floor. The owner's ruler gave the board 1-1.5 mm, so the cameras'
+  floor is now -0.1071 (`solve_cameras.py --floor-board-thickness 0.00125`, calib.json
+  `floor_z`, `floor_board_thickness_m`). A touch on the board couldn't resolve this: the floor
+  probe's 3 mm steps and run-to-run sag are as large as the board, and 1 mm steps were below
+  the smallest move the Pi carries out (the arm didn't move).
+- **The jaw-tip offset: 9.7 mm, measured.** The jaw tips are modelled as one point on the TCP's
+  pointing axis (the URDF's gripper_frame_link); with the gripper straight down the offset is
+  the TCP's height above the tips. The floor probe's TCP at contact (-0.0973 m at x 0.24) less
+  the cameras' floor (-0.1071) gives 9.7 mm; the taught grasp agrees (the held brick's top
+  face level with the TCP, the tips 1.5 mm up: ~10 mm). It was 15 mm, estimated against a floor
+  measured before the joint-zero fix. Defined once, in `web_server/auto_control.py` (the Pi's
+  floor guard), imported by `common/arm.py`.
+- **Two floor-guard flaws the old offset hid.** With the tips where they are, the final look's
+  descent (TCP 3 cm up) ends with the tips 2.03 cm up, 0.3 mm over the free-move clearance: a
+  free move under the free-move guard. That guard was taken from the floor plane's height at
+  x 0, off by the plane's tilt at the reach point; it now comes from the floor at the reach
+  point, and a free move's guard never sits above its own lowest jaw tips (as joint moves
+  already had).
+- **Robot check** after the deploy: 3/3 driven picks (72, 61, 65 s), no move refused or stopped
+  by the Pi, every grip square on the brick's 15.8 mm side (15.6-15.7 mm).
+
+Not yet checked on the robot: correcting a joint zero (`apply_joint_offsets.py --write` and
+`--restore`), now with the offset wrap; a test is to write -5 deg on the elbow (wrapping
+2014 -> -1999), check the reading moved and the arm didn't, and restore.

@@ -140,6 +140,7 @@ A failed step folds the arm and the planner replans from what's done and why it 
 |---|---|---|
 | cameras (lenses, wrist mount, front pose, base turning centre, floor they see; joint zeros if needed) | `calibration/capture_cameras.py` + `solve_cameras.py` with the ChArUco boards: [setup](calibration/CAMERA_CALIBRATION.md) | a camera moved, or an arm recalibration |
 | floor height (where the jaws touch) | `calibration/calibrate_floor.py` | new floor or arm calibration |
+| jaw-tip offset (`web_server/auto_control.py` JAW_TIP_OFFSET_M, 9.7 mm) | the floor touch's TCP at contact less the cameras' floor (`calibration/CAMERA_CALIBRATION.md`, phase E) | gripper changed |
 | front stop row (`front_camera` near_bottom: a brick at the reach point) | from `calibration/calibrate_front.py` (Oct 27; the script is otherwise superseded) | reach point changed |
 | grasp target | `calibration/teach_grasp.py` (the owner's midpoint teach) | gripper or wrist camera changed |
 | gripper opening (mm against angle) | `calibration/calibrate_gripper.py` | gripper recalibrated |
