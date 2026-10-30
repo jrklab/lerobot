@@ -1,47 +1,26 @@
 {
- "meaning": "floor touches: TCP z (m, arm frame) where the jaws met the floor at TCP x, y, gripper vertical, arm model with the homing-tick joint zero (Oct 27 on); skills.floor_at() fits z = a + b x + c y + d r^2 once there are FLOOR_FIT_MIN_POINTS",
- "points": [
-  {
-   "x": 0.18,
-   "y": 0.0,
-   "z": -0.1094,
-   "how": "probe",
-   "run": "calibrate_floor.py 2026-10-27 --start-z -0.05"
-  },
-  {
-   "x": 0.24,
-   "y": 0.0,
-   "z": -0.1115,
-   "how": "probe",
-   "run": "calibrate_floor.py 2026-10-27 --start-z -0.05"
-  },
-  {
-   "x": 0.3,
-   "y": 0.0,
-   "z": -0.1127,
-   "how": "probe",
-   "run": "calibrate_floor.py 2026-10-27 --start-z -0.05"
-  },
-  {
-   "x": 0.222,
-   "y": 0.0145,
-   "z": -0.1135,
-   "how": "touch",
-   "run": "20261027T091240-plan"
-  },
-  {
-   "x": 0.2379,
-   "y": 0.008,
-   "z": -0.1035,
-   "how": "touch",
-   "run": "20261027T092934-plan"
-  },
-  {
-   "x": 0.2459,
-   "y": 0.0071,
-   "z": -0.1122,
-   "how": "touch",
-   "run": "20261027T092934-plan"
-  }
- ]
+  "meaning": "floor touches: TCP z (m, arm frame) where the jaws met the floor at TCP x, y, gripper vertical, joint angles in degrees from the homing tick under the Oct 29 arm recalibration (the touches before it, with the old zeros, sat ~1.4 cm lower: git history); brain/geometry.py fits a plane z = a + b x + c y",
+  "points": [
+    {
+      "x": 0.18,
+      "y": 0.0,
+      "z": -0.098,
+      "how": "probe",
+      "run": "calibrate_floor.py 2026-10-29 --start-z -0.05"
+    },
+    {
+      "x": 0.24,
+      "y": 0.0,
+      "z": -0.0973,
+      "how": "probe",
+      "run": "calibrate_floor.py 2026-10-29 --start-z -0.05"
+    },
+    {
+      "x": 0.3,
+      "y": 0.0,
+      "z": -0.0952,
+      "how": "probe",
+      "run": "calibrate_floor.py 2026-10-29 --start-z -0.05"
+    }
+  ]
 }

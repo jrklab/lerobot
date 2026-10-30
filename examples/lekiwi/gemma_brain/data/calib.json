@@ -8,32 +8,28 @@
     "previous": "-0.100: owner's tape measure, base top 100 mm above the floor (Oct 23), in the old model"
   },
   "floor_tcp_z_m": {
-    "value": -0.1112,
+    "value": -0.0968,
     "unit": "m",
     "frame": "arm base (so101_kinematics), TCP pointing straight down, gripper closed",
-    "method": "calibrate_floor.py, 3 vertical probes at x 0.18/0.24/0.30 (-0.1094/-0.1115/-0.1127), homing-tick joint zero",
-    "date": "2026-10-27",
+    "method": "calibrate_floor.py: touch the floor in 4 mm steps; contact = measured-vs-commanded gap growth",
+    "date": "2026-10-29",
     "probes": [
       {
-        "x": 0.22,
-        "floor_tcp_z": -0.1145,
-        "free_air_sag_mm": 2.2,
-        "run": "probe 2"
+        "x": 0.18,
+        "floor_tcp_z": -0.098,
+        "free_air_sag_mm": 0.7
       },
       {
-        "x": 0.27,
-        "floor_tcp_z": -0.1194,
-        "free_air_sag_mm": 4.4,
-        "run": "probe 2"
+        "x": 0.24,
+        "floor_tcp_z": -0.0973,
+        "free_air_sag_mm": 3.1
       },
       {
-        "x": 0.22,
-        "floor_tcp_z": -0.1119,
-        "free_air_sag_mm": 2.3,
-        "run": "probe 1, re-scored offline (live run missed contact)"
+        "x": 0.3,
+        "floor_tcp_z": -0.0952,
+        "free_air_sag_mm": 6.7
       }
-    ],
-    "validity": "the model's floor reading drops ~1 mm per cm of reach (-0.1145 at x 0.22, -0.1194 at 0.27): arm-model/sag error, not floor tilt; final grasp heights must close on contact or the wrist camera"
+    ]
   },
   "wrist_image_jacobian": {
     "value": [

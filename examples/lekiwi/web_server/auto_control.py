@@ -82,9 +82,9 @@ CLEARANCE_SAMPLE_DEG = 5.0
 # JAW_TIP_OFFSET_M, from the floor probe).
 JAW_TIP_OFFSET_M = 0.015
 # Floor guard for the jaw tips' z in the arm base frame when a command doesn't send its own
-# z_min: the measured floor (-0.126 m at the jaw tips with the homing-tick joint zero, Oct 27)
-# plus 2 cm. Was -0.05 ("conservative until calibrated"), which refused a safe 7.4 cm lowering.
-DEFAULT_Z_MIN_M = -0.106
+# z_min (the brain always sends one): the measured floor at the jaw tips (-0.112 m since the
+# Oct 29 arm recalibration; -0.126 with the old joint zeros) plus 2 cm.
+DEFAULT_Z_MIN_M = -0.092
 MAX_GRIPPER_SPEED = 104.0  # deg/s (80 units/s)
 DEFAULT_GRIPPER_SPEED = 65.0  # deg/s (50 units/s)
 MIN_GRIPPER_SPEED = 6.5  # deg/s (5 units/s)
