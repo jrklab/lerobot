@@ -23,6 +23,7 @@ the robot moves, nobody holds anything.
     .venv/bin/python calibration/capture_cameras.py scene --plan-only
     .venv/bin/python calibration/capture_cameras.py scene [--no-sweep] [--no-closeup] [--reverse]
     .venv/bin/python calibration/capture_cameras.py home --scene runs/<t>-scene
+    .venv/bin/python calibration/capture_cameras.py closeup
 
 The wrist board lies flat on the floor centred on the reach point (its long side across the
 robot), the front board stands upright in front where both cameras see it, the side board
@@ -485,6 +486,7 @@ def main() -> None:
     sp.add_argument(
         "--no-closeup", action="store_true", help="skip the side board close-up for the front lens"
     )
+    sub.add_parser("closeup", help="only the side board close-up, from where the robot is, and back")
     hp = sub.add_parser(
         "home", help="drive the base back to where a scene started (front camera, floor board)"
     )
@@ -498,6 +500,17 @@ def main() -> None:
 
     if args.what == "lens":
         capture_lens(Robot(), args.cam, args.views)  # frames only: the robot isn't taken over
+        return
+    if args.what == "closeup":
+        out, cams = _out("closeup"), _cameras()
+        with Robot() as robot:
+            ref = boards.detect(robot.frame("front", after=time.time())[0])
+            frames, turn = capture_closeup(robot, out, cams)
+            (out / "closeup.json").write_text(
+                json.dumps({"closeup": frames, "closeup_turn_deg": turn}, indent=1) + "\n"
+            )
+            print(f"{len(frames)} close-up frames in {out}; back to the start:")
+            return_to_start(robot, front_measure(robot, ref, cams))
         return
     if args.what == "home":
         ref = json.loads((args.scene / "scene.json").read_text())["front"][0]["boards"]
