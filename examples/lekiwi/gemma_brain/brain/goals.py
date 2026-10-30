@@ -33,7 +33,8 @@ from dataclasses import dataclass
 import numpy as np
 
 from brain import params as prm
-from brain.geometry import IMAGE_PX, MissingCalibrationError, front_view_margin, require_grasp_target
+from brain.cameras import IMAGE_PX
+from brain.geometry import MissingCalibrationError, front_view_margin, require_grasp_target
 
 
 @dataclass
@@ -73,15 +74,13 @@ class _WristPointGoal:
 
     def _carry(self, sk, point, height: float) -> np.ndarray:
         """A top-face image point seen at the taught height, as it appears at `height`."""
-        g, h_obj = sk.geom, prm.BRICK_HEIGHT_M.value
+        g = sk.geom
         h_taught = g.grasp_target_height if g.grasp_target_height is not None else prm.GRASP_LIFT_M.value
-        s = (g.cam_above_tips + h_taught - h_obj) / (g.cam_above_tips + height - h_obj)
-        return g.descent_p0 + (np.asarray(point, float) - g.descent_p0) * s
+        return g.carry(point, prm.BRICK_HEIGHT_M.value, h_taught, height)
 
     def _jac(self, sk, height: float) -> np.ndarray:
         # Image motion of a point on the top face (nearer the camera than the floor).
-        g, h_obj = sk.geom, prm.BRICK_HEIGHT_M.value
-        return sk.geom.jacobian(height, sk.roll) * (g.cam_above_tips + height) / (g.cam_above_tips + height - h_obj)
+        return sk.geom.jacobian(height, sk.roll, plane_h=prm.BRICK_HEIGHT_M.value)
 
     def error(self, det: Detection, sk) -> np.ndarray:
         h = sk.height()
@@ -135,8 +134,10 @@ class AngleGoal:
 
 
 class FrontApproachGoal:
-    """Front camera: the object's column straight ahead of the arm (u_target) and its bottom
-    edge on the row where it sits at the reach point (near_bottom): calibrate_front.py."""
+    """Front camera: the object straight ahead of the arm, its near edge where an object at the
+    reach point has it (Geometry.front_near_x, calibrate_front.py's brick). The error is the
+    base turn (deg, left positive) and the drive still to go (m), from the camera model: the
+    box's bottom centre is the object's near edge on the floor."""
 
     cam = "front"
     part = "base"
@@ -145,17 +146,17 @@ class FrontApproachGoal:
     def __init__(self, tol_m=None):
         if tol_m is not None:  # looser for a container: PLACE_APPROACH_TOL_M
             self.tol_m = tol_m
-        self._turned_from = None  # the column error before the last move, if it was a turn
+        self._turned_from = None  # the turn error before the last move, if it was a turn
 
     def error(self, det: Detection, sk) -> np.ndarray:
-        f = sk.geom.front
-        return np.array([f["u_target"] - det.center[0], f["near_bottom"] - det.box[3]])
+        p = sk.geom.front_point(((det.box[0] + det.box[2]) / 2, det.box[3]))
+        if p is None:  # find() refuses boxes ending above the horizon; keep the loop finite
+            raise MissingCalibrationError("a front box ending above the floor's horizon")
+        return np.array(sk.geom.front_turn_and_distance(p))
 
     def remaining(self, err: np.ndarray, sk) -> float:
-        """Metres still to drive, by the front camera's range model (rms 7 mm)."""
-        f = sk.geom.front
-        bottom = f["near_bottom"] - float(err[1])
-        return sk.geom.front_range(bottom) - sk.geom.front_range(f["near_bottom"])
+        """Metres still to drive."""
+        return float(err[1])
 
     def done(self, err: np.ndarray, sk) -> bool:
         # Within the wrist line-up's reach: it takes the rest (Oct 27: waiting for the exact row
@@ -163,28 +164,23 @@ class FrontApproachGoal:
         return self._column_ok(err, sk) and self.remaining(err, sk) <= self.tol_m.value
 
     def _column_ok(self, err: np.ndarray, sk) -> bool:
-        """Within about what the smallest turn fixes, or a turn just carried the object across
-        the column: turning can't do better from here, the line-up's sideways move takes the
-        rest. Close to the base a 3 deg turn moved the brick 0.11 across the image, twice the
-        tolerance, and the base turned left and right until it ran out of looks (Oct 28 trial 4)."""
-        u = float(err[0])
-        if abs(u) <= sk.geom.front["u_per_deg"] * prm.MIN_BASE_TURN_DEG.value:
+        """Within the smallest turn, or a turn just carried the object across straight ahead:
+        turning can't do better from here, the line-up's sideways move takes the rest (Oct 28
+        trial 4: close to the base the base turned left and right until it ran out of looks)."""
+        turn = float(err[0])
+        if abs(turn) <= prm.MIN_BASE_TURN_DEG.value:
             return True
-        return self._turned_from is not None and np.sign(u) != np.sign(self._turned_from)
+        return self._turned_from is not None and np.sign(turn) != np.sign(self._turned_from)
 
     def step(self, err: np.ndarray, sk) -> dict:
-        f = sk.geom.front
         if not self._column_ok(err, sk):
-            # A left turn moves the object right in the image.
-            self._turned_from = float(err[0])
-            turn = float(err[0]) / f["u_per_deg"]
+            self._turned_from = turn = float(err[0])
             return {"roll": float(np.sign(turn) * max(abs(turn), prm.MIN_BASE_TURN_DEG.value))}
         self._turned_from = None
         # Drive to just inside the line-up's reach (half its tolerance short): no overshoot past the
-        # reach point with a 7 mm range model, and one or two drives instead of halving steps.
-        # From further than the camera sees past the target (front_view_margin, ~7 cm), stop that
-        # far short and look again: from 0.5 m one pixel of the box is ~1.5 cm, and a 9 cm
-        # overshoot took the brick out of view (Oct 29); the margin is what can still be seen.
+        # reach point, and one or two drives instead of halving steps. From further than the camera
+        # sees past the target (front_view_margin), stop that far short and look again: far off one
+        # pixel of the box is centimetres, and a 9 cm overshoot took the brick out of view (Oct 29).
         rem, margin = self.remaining(err, sk), front_view_margin(sk.geom)
         short = margin if rem - self.tol_m.value / 2 > margin else self.tol_m.value / 2
         return {"delta": (max(rem - short, 0.0), 0.0)}
@@ -206,7 +202,9 @@ def placed_beside(held, ref) -> bool:
     w = held[2] - held[0]
     gap = held[0] - ref[2]
     intended = prm.NEXT_GAP_FRACTION.value * w
-    level = abs((held[1] + held[3]) - (ref[1] + ref[3])) / 2 <= (held[3] - held[1]) / 2  # convention: half its height
+    level = (
+        abs((held[1] + held[3]) - (ref[1] + ref[3])) / 2 <= (held[3] - held[1]) / 2
+    )  # convention: half its height
     return abs(gap - intended) <= intended and level
 
 
@@ -223,7 +221,9 @@ class AboveGoal:
             self.tol_m = tol_m
         view = prm.demo_place_view()
         if view is None:
-            raise MissingCalibrationError("no container view in the demo extract: run demo_extract.py --place-target")
+            raise MissingCalibrationError(
+                "no container view in the demo extract: run demo_extract.py --place-target"
+            )
         self.centre = round_centre(view[0])
 
     def error(self, det: Detection, sk) -> np.ndarray:
@@ -248,7 +248,9 @@ class BesideGoal(_WristPointGoal):
     def target(self, sk, height: float) -> np.ndarray:
         g = sk.geom
         if g.grasp_box is None:
-            raise MissingCalibrationError("calib.json 'wrist_grasp_target' has no box: run teach_grasp.py --write")
+            raise MissingCalibrationError(
+                "calib.json 'wrist_grasp_target' has no box: run teach_grasp.py --write"
+            )
         x0, y0, x1, y1 = g.grasp_box
         spot = np.array([x0 - prm.NEXT_GAP_FRACTION.value * (x1 - x0), (y0 + y1) / 2])
         return self._carry(sk, spot, height)

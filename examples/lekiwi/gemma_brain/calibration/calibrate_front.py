@@ -72,6 +72,10 @@ STOP_BOTTOM = 0.75
 
 
 def main() -> None:
+    raise SystemExit(
+        "superseded (Oct 30): the camera calibration (capture_cameras.py + solve_cameras.py) gives the front "
+        "camera's geometry; only this script's near_bottom (a brick at the reach point) is still read, from calib.json"
+    )
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("target", nargs="?", default="red Lego brick")
     ap.add_argument("--vision-url", default="http://127.0.0.1:8081", help="llama-server for the boxes (26B)")
@@ -193,7 +197,10 @@ def main() -> None:
     rms = math.sqrt(best[0] / len(idx))
     if rms > 0.03 or not 0.0 < u_target < 1.0:
         raise SystemExit(f"fit too poor to save (rms {1000 * rms:.0f} mm, u_target {u_target:.2f}): {value}")
-    print("rows (beyond reach m, bottom):", [(round(b, 3), round(v, 3)) for b, v in zip(beyond, bottom, strict=True)])
+    print(
+        "rows (beyond reach m, bottom):",
+        [(round(b, 3), round(v, 3)) for b, v in zip(beyond, bottom, strict=True)],
+    )
     print(f"fit rms {1000 * rms:.0f} mm:", value)
     if near > 0.99:
         print("WARNING: the stop row is at the very bottom of the view: approach can't see that close")

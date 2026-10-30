@@ -22,7 +22,8 @@ from pathlib import Path
 import cv2
 import numpy as np
 from brain import goals
-from brain.geometry import Geometry
+from brain.cameras import Cameras
+from brain.geometry import Geometry, near_distance
 from brain.goals import Detection
 from brain.primitives import Skills
 from common.arm import Arm, Calibration
@@ -45,10 +46,18 @@ class SimRobot(_SimRobot):
     def frame(self, cam, after=0.0):
         return b"", after
 
+# The measured cameras (calib.json "cameras", Oct 30), and how far below the TCP-at-contact floor
+# the floor they see lies (-0.0966 vs the floor board's -0.1058), and the front camera's box
+# bottom of a brick at the reach point (calibrate_front.py: u_target, near_bottom).
+CAMS = Cameras.from_calib(json.loads((Path(__file__).parents[1] / "data" / "calib.json").read_text())["cameras"]["value"])
+SEEN_BELOW_CONTACT_M = 0.0092
+NEAR_BOTTOM_UV = (0.451, 0.699)
+
 def geom(floor_z):
-    return Geometry(floor_coef=np.array([floor_z, 0.0, 0.0]), floor_points=3, jac=np.array([[4.2, 0.5], [0.7, -5.3]]),
-                    jac_height=0.094, cam_above_tips=0.1075, descent_p0=np.array([0.5, 0.15]),
-                    fixed_jaw_inner_u=0.564, fixed_jaw_tip_v=0.754, sources={}, gripper_curve=GRIPPER_CURVE)
+    g = Geometry(floor_coef=np.array([floor_z, 0.0, 0.0]), floor_points=3, cams=CAMS,
+                 floor_seen_z=floor_z - SEEN_BELOW_CONTACT_M, sources={}, gripper_curve=GRIPPER_CURVE)
+    g.front_near_x = near_distance(CAMS, g.front_point(NEAR_BOTTOM_UV))
+    return g
 
 
 # calibrate_gripper.py on this robot, Oct 29: [deg open, mm] (nothing, 2x4 both ways, 2x6 long).

@@ -215,5 +215,7 @@ Positions in `calib.json` are in the arm model's frame (so101_kinematics, the UR
 `base_link`): its origin is on the arm's mounting surface, 3.9 cm behind the pan axis, so the
 front camera's T_base_cam reads x 82 mm there.
 
-Next: the geometry switches to these cameras (wrist first, then front), each checked on logged
+Since Oct 30 the brain's geometry (brain/geometry.py) works from these cameras instead of the fitted
+image-space values, after checking both on logged runs (see the README's calibration table).
+Next:
 frames against the current fitted calibrations; then phase E re-measures what depends on them.

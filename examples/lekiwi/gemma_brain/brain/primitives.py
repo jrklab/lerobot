@@ -357,7 +357,7 @@ class Skills:
         if a.value is None or not has_colour(jpeg, a.value, obj):
             self.ev("find", obj=obj, cam=cam, found=False, box=a.value, by=by)
             return None
-        if cam == "front" and a.value[3] < self.geom.front["range_horizon_v"]:
+        if cam == "front" and a.value[3] < self.geom.front_horizon_v():
             # Nothing on the floor ends above the horizon: the held object's tips show there
             # when carried at the hover (Oct 28 check).
             self.ev("find", obj=obj, cam=cam, found=False, box=a.value, by=by, why="above the horizon")

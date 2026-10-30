@@ -69,53 +69,62 @@ def test_front_approach_turns_before_it_drives():
     class S:
         geom = geom(-0.11)
 
-    S.geom.front = {"u_per_deg": 0.0184, "u_target": 0.451, "near_bottom": 0.699, "range_k": 0.0583,
-                    "range_horizon_v": 0.335, "range_offset_m": 0.1}
     g = goals.FrontApproachGoal()
     turn = g.step(g.error(Detection(box=[0.6, 0.4, 0.7, 0.5]), S()), S())
-    # right of the target column: turn right (negative), since a left turn moves it right
-    assert "roll" in turn and turn["roll"] < 0
-    drive = g.step(g.error(Detection(box=[0.40, 0.4, 0.50, 0.5]), S()), S())
+    assert "roll" in turn and turn["roll"] < 0  # right of straight ahead: turn right (negative)
+    u = _straight_ahead_u(S.geom, 0.5)
+    drive = g.step(g.error(Detection(box=[u - 0.05, 0.4, u + 0.05, 0.5]), S()), S())
     assert "delta" in drive and drive["delta"][0] > 0
+
+
+def _straight_ahead_u(geom, v: float) -> float:
+    """The image column where a floor point at row v is straight ahead of the arm."""
+    us = np.linspace(0.2, 0.8, 601)
+    turns = [abs(geom.front_turn_and_distance(geom.front_point((u, v)))[0]) for u in us]
+    return float(us[int(np.argmin(turns))])
+
 
 def test_front_approach_stops_turning_once_a_turn_carries_the_object_across_the_column():
     class S:
         geom = geom(-0.11)
 
-    S.geom.front = {"u_per_deg": 0.0184, "u_target": 0.451, "near_bottom": 0.699, "range_k": 0.0583,
-                    "range_horizon_v": 0.335, "range_offset_m": 0.1}
     g = goals.FrontApproachGoal()
-    # Oct 28 trial 4: the brick ~3 cm past the reach point, each 3 deg turn moved it 0.11 across.
-    first = np.array([0.0875, -0.115])
+    # Oct 28 trial 4: the brick ~1 cm short of the stop, each 3 deg turn carried it across.
+    first = np.array([4.0, 0.01])  # turn 4 deg left, 1 cm to drive
     assert not g.done(first, S()) and "roll" in g.step(first, S())
-    crossed = np.array([-0.072, -0.105])
-    assert g.done(crossed, S())  # close enough in range; the line-up takes the column's rest
+    crossed = np.array([-3.5, 0.01])
+    assert g.done(crossed, S())  # close enough; the line-up takes the rest sideways
     # Not yet in range: drive instead of turning back.
     g2 = goals.FrontApproachGoal()
-    g2.step(np.array([0.0875, 0.2]), S())
-    assert "delta" in g2.step(np.array([-0.072, 0.2]), S())
+    g2.step(np.array([4.0, 0.2]), S())
+    assert "delta" in g2.step(np.array([-3.5, 0.2]), S())
+
 
 def test_front_approach_is_done_within_the_line_ups_reach_and_aims_just_short():
     class S:
         geom = geom(-0.11)
 
-    S.geom.front = {"u_per_deg": 0.0184, "u_target": 0.451, "near_bottom": 0.699, "range_k": 0.0583,
-                    "range_horizon_v": 0.335, "range_offset_m": 0.1}
     g = goals.FrontApproachGoal()
-    far = g.error(Detection(box=[0.43, 0.40, 0.47, 0.45]), S())
+    u = _straight_ahead_u(S.geom, 0.6)
+
+    def box(bottom):
+        return Detection(box=[u - 0.02, bottom - 0.05, u + 0.02, bottom])
+
+    far = g.error(box(0.45), S())
     rem = g.remaining(far, S())
     # From far, it stops the view margin short (Oct 29: a 9 cm overshoot lost the brick)...
     margin = front_view_margin(S.geom)
-    assert 0.05 < margin < 0.1  # ~7 cm with these numbers
+    assert 0.05 < margin < 0.12  # ~9 cm
     assert not g.done(far, S()) and abs(g.step(far, S())["delta"][0] - (rem - margin)) < 1e-9
     # ...and from within the margin, to just inside the line-up's reach.
-    close = g.error(Detection(box=[0.43, 0.55, 0.47, 0.62]), S())
+    close = g.error(box(0.62), S())
     assert g.remaining(close, S()) - prm.REACH_TOL_M.value / 2 <= margin
     assert abs(g.step(close, S())["delta"][0] - (g.remaining(close, S()) - prm.REACH_TOL_M.value / 2)) < 1e-9
-    near = g.error(Detection(box=[0.43, 0.60, 0.47, 0.675]), S())  # ~1 cm to go
+    near = g.error(box(0.69), S())  # under a centimetre to go
     assert g.remaining(near, S()) <= prm.REACH_TOL_M.value and g.done(near, S())
-    not_yet = g.error(Detection(box=[0.43, 0.56, 0.47, 0.653]), S())  # Oct 27 run: 2.3 cm to go
+    not_yet = g.error(box(0.64), S())  # ~4 cm to go
     assert not g.done(not_yet, S())
+
 
 def test_beside_goal_aims_left_of_the_taught_spot():
     g = jaw_geom()

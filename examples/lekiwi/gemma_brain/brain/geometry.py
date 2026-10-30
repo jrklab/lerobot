@@ -17,33 +17,46 @@ floor_touches.json, each with where it was measured (CALIB). No defaults: a miss
 calibration is an error naming the script that makes it.
 
     floor       TCP z where the vertical jaws meet the floor, a plane fitted to the touches
-    wrist       image Jacobian d(u, v)/d(x, y) at a height, scaled for other heights and rolls
-    descent     camera height above the jaw tips and the point a vertical descent heads for
-    jaws        the fixed jaw's tip row and inner edge in the wrist image
+    cameras     both cameras' lenses and poses, the floor plane they see and the point the base
+                turns about (brain/cameras.py; capture_cameras.py + solve_cameras.py): image
+                points to floor or object points and back, for the wrist camera at any height
+                and roll, the front camera at any distance
+    front       the box bottom of an object at the reach point (calibrate_front.py's near_bottom,
+                a brick): the front approach's stopping distance
     gripper     the jaw opening (mm) against the gripper angle (deg open from closed)
+
+The wrist's image-space values used to be fitted (an image Jacobian at one height, a descent
+point, the camera's depth above the tips; the front camera's image widths per degree and a
+range curve): until Oct 30 they were, and the camera model predicts the logged views at least
+as well (front turns: 16 px median error against 27; wrist: 14 px against 11, within half a
+millimetre at the brick, and through roll turns the fitted ones didn't model).
 """
 
 from __future__ import annotations
 
 import json
-import math
 from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+from common.arm import tool_orientation
 
 from brain import params as prm
+from brain.cameras import Cameras, on_plane, to_image
 
 HERE = Path(__file__).resolve().parent.parent
-IMAGE_PX = np.array([640.0, 480.0])  # convention: the cameras' 640x480 frames
 MAKERS = {
     "floor_tcp_z_m": "calibrate_floor.py",
-    "wrist_image_jacobian": "wrist_calib.py",
-    "wrist_descent": "calibrate_descent.py",
-    "wrist_jaws": "calibrate_jaws.py",
+    "cameras": "capture_cameras.py scene + solve_cameras.py --write",
     "front_camera": "calibrate_front.py",
     "gripper_opening": "calibrate_gripper.py",
 }
+IMAGE_CENTRE = np.array([0.5, 0.5])  # convention: image fractions
+MIDDLE_ROW_ENDS = ((0.0, 0.5), (1.0, 0.5))  # convention: image fractions
+BOTTOM_CENTRE = (0.5, 1.0)  # convention: image fractions
+EDGE_MIDPOINTS = ((0.0, 0.5), (1.0, 0.5), (0.5, 0.0), (0.5, 1.0))  # convention: image fractions
+FAR_M = 100.0  # convention: a floor point far enough ahead to stand for the horizon
+JACOBIAN_STEP_M = 1e-4  # convention: a TCP move small next to the view, large next to rounding
 
 
 class MissingCalibrationError(RuntimeError):
@@ -54,41 +67,46 @@ class MissingCalibrationError(RuntimeError):
 class Geometry:
     floor_coef: np.ndarray  # z = a + b x + c y (TCP z at floor contact, vertical gripper)
     floor_points: int
-    jac: np.ndarray  # d(u, v)/d(x, y) at jac_height, roll 0 (image fractions per metre)
-    jac_height: float
-    cam_above_tips: float
-    descent_p0: np.ndarray
-    fixed_jaw_inner_u: float
-    fixed_jaw_tip_v: float
+    cams: Cameras
+    floor_seen_z: float  # the floor plane the cameras were placed against (the floor board's)
     sources: dict
-    front: dict = None  # calibrate_front.py: u_per_deg, u_target, near_bottom, ...
+    front_near_x: float | None = None  # the box bottom of an object at the reach point: its distance
+    # from the turning centre once straight ahead, as an x (front_turn_and_distance measures so)
     grasp_target: np.ndarray | None = None  # taught (u of the box's right edge, v of its middle)
     grasp_target_height: float | None = None  # jaw tips above the floor when it was taught
     grasp_box: list | None = None  # the whole taught box (x0, y0, x1, y1)
     gripper_curve: list | None = None  # [[deg, mm], ...]: calibrate_gripper.py
 
     @classmethod
-    def load(cls, calib_path: Path = HERE / "data" / "calib.json", touches_path: Path = HERE / "data" / "floor_touches.json") -> Geometry:
+    def load(
+        cls,
+        calib_path: Path = HERE / "data" / "calib.json",
+        touches_path: Path = HERE / "data" / "floor_touches.json",
+    ) -> Geometry:
         calib = json.loads(calib_path.read_text())
         for key, maker in MAKERS.items():
             if key not in calib:
                 raise MissingCalibrationError(f"calib.json has no {key!r}: run {maker}")
         pts = json.loads(touches_path.read_text())["points"] if touches_path.exists() else []
-        coef = fit_floor(pts, calib["floor_tcp_z_m"]["value"])
-        jw = calib["wrist_image_jacobian"]
+        cams = Cameras.from_calib(calib["cameras"]["value"])
+        floor_seen = float(calib["cameras"]["value"]["floor_z"])
+        f = calib["front_camera"]["value"]
+        near = on_plane(cams.front, cams.T_base_cam, (f["u_target"], f["near_bottom"]), floor_seen)
         return cls(
-            floor_coef=coef,
+            floor_coef=fit_floor(pts, calib["floor_tcp_z_m"]["value"]),
             floor_points=len(pts),
-            jac=np.array(jw["value"]),
-            jac_height=float(jw["height_m"]),  # wrist_calib.py records it (Oct 27 on)
-            cam_above_tips=float(calib["wrist_descent"]["value"]["depth_m"]),
-            descent_p0=np.array(calib["wrist_descent"]["value"]["p0"]),
-            fixed_jaw_inner_u=float(calib["wrist_jaws"]["value"]["fixed_inner_u"]),
-            fixed_jaw_tip_v=float(calib["wrist_jaws"]["value"]["fixed_tip_v"]),
-            sources={k: {f: calib[k].get(f) for f in ("method", "date", "log") if f in calib[k]} for k in MAKERS},
-            front=dict(calib["front_camera"]["value"]),
-            grasp_target=np.array(calib["wrist_grasp_target"]["value"]) if "wrist_grasp_target" in calib else None,
-            grasp_target_height=calib["wrist_grasp_target"]["height_m"] if "wrist_grasp_target" in calib else None,
+            cams=cams,
+            floor_seen_z=floor_seen,
+            sources={
+                k: {f: calib[k].get(f) for f in ("method", "date", "log") if f in calib[k]} for k in MAKERS
+            },
+            front_near_x=None if near is None else near_distance(cams, near),
+            grasp_target=np.array(calib["wrist_grasp_target"]["value"])
+            if "wrist_grasp_target" in calib
+            else None,
+            grasp_target_height=calib["wrist_grasp_target"]["height_m"]
+            if "wrist_grasp_target" in calib
+            else None,
             grasp_box=calib["wrist_grasp_target"].get("box") if "wrist_grasp_target" in calib else None,
             gripper_curve=calib["gripper_opening"]["value"]["curve"],
         )
@@ -119,80 +137,134 @@ class Geometry:
     def floor(self, x: float, y: float) -> float:
         return float(self.floor_coef @ np.array([1.0, x, y]))
 
-    def jacobian(self, height: float, roll_deg: float = 0.0) -> np.ndarray:
-        """d(u, v)/d(TCP x, y) with the jaw tips `height` above the floor: the measured one,
-        scaled by the camera's distance to the floor and turned by -roll (pixel units, as the
-        image isn't square)."""
-        d = self.cam_above_tips
-        j = self.jac * (self.jac_height + d) / (max(height, 0.0) + d)
-        a = math.radians(-roll_deg)
-        rot = np.array([[math.cos(a), -math.sin(a)], [math.sin(a), math.cos(a)]])
-        return (rot @ (j * IMAGE_PX[:, None])) / IMAGE_PX[:, None]
+    # --- the wrist camera, the gripper vertical over the reach point ---
 
-    def front_range(self, bottom_v: float) -> float:
-        """Distance of an object on the floor whose box bottom is at image row bottom_v in the
-        front camera (calibrate_front.py's model: k / (bottom - horizon) - offset), metres."""
-        f = self.front
-        return f["range_k"] / max(bottom_v - f["range_horizon_v"], 1e-3) - f["range_offset_m"]  # convention: keeps the division finite at the horizon
+    def tcp_pose(self, height: float, roll_deg: float = 0.0, dx: float = 0.0, dy: float = 0.0) -> np.ndarray:
+        """The TCP pointing straight down over the reach point (plus dx, dy), the jaw tips
+        `height` above the floor, turned roll_deg about its axis: the pose the wrist skills
+        look from."""
+        x, y = prm.REACH_POINT_X_M.value + dx, dy
+        pose = np.eye(4)  # convention: a 4x4 pose
+        pose[:3, :3] = tool_orientation(x, y, 90.0, roll_deg)  # convention: pointing straight down
+        pose[:3, 3] = [x, y, self.floor(x, y) + height]
+        return pose
 
-    def tips_to_top(self, point, height: float, object_height: float) -> np.ndarray:
-        """Where a point at the jaw tips' depth appears on the top face of an object
-        `object_height` tall, with the tips `height` above the floor: nearer the camera, so
-        further from descent_p0 (the top face is what the camera boxes)."""
-        s = self.cam_above_tips / (self.cam_above_tips + height - object_height)
-        return self.descent_p0 + (np.asarray(point, float) - self.descent_p0) * s
+    def wrist_point(self, uv, height: float, plane_h: float, roll_deg: float = 0.0) -> np.ndarray | None:
+        """The point plane_h above the floor that the wrist camera sees at image point uv, the
+        jaw tips `height` up (arm frame)."""
+        cam = self.cams.wrist_pose(self.tcp_pose(height, roll_deg))
+        return on_plane(self.cams.wrist, cam, uv, self.floor_seen_z + plane_h)
+
+    def wrist_image(
+        self, p, height: float, roll_deg: float = 0.0, dx: float = 0.0, dy: float = 0.0
+    ) -> np.ndarray | None:
+        return to_image(self.cams.wrist, self.cams.wrist_pose(self.tcp_pose(height, roll_deg, dx, dy)), p)
+
+    def carry(self, point, plane_h: float, h_from: float, h_to: float, roll_deg: float = 0.0) -> np.ndarray:
+        """Where a point plane_h above the floor, seen at image `point` with the tips h_from up,
+        appears with them h_to up (a vertical descent or rise)."""
+        return self.wrist_image(self.wrist_point(point, h_from, plane_h, roll_deg), h_to, roll_deg)
 
     def descend(self, point, h_from: float, h_to: float) -> np.ndarray:
         """Where a floor point seen at image `point` with the tips h_from up appears at h_to."""
-        s = (self.cam_above_tips + h_from) / (self.cam_above_tips + h_to)
-        return self.descent_p0 + (np.asarray(point, float) - self.descent_p0) * s
+        return self.carry(point, 0.0, h_from, h_to)
+
+    def tips_to_top(self, point, height: float, object_height: float) -> np.ndarray:
+        """Where a point at the jaw tips' depth appears on the top face of an object
+        `object_height` tall, with the tips `height` above the floor (the point straight above
+        or below it on that face: what the camera boxes)."""
+        p = self.wrist_point(point, height, height)
+        return self.wrist_image([p[0], p[1], self.floor_seen_z + object_height], height)
+
+    def jacobian(self, height: float, roll_deg: float = 0.0, plane_h: float = 0.0) -> np.ndarray:
+        """d(u, v)/d(TCP x, y): how a point plane_h above the floor moves in the wrist image per
+        metre of TCP move, the tips `height` up, at the image spot under the gripper (the taught
+        grasp spot, else the image centre)."""
+        spot = grasp_spot(self) if self.grasp_box is not None else IMAGE_CENTRE
+        p = self.wrist_point(spot, height, plane_h, roll_deg)
+        here = self.wrist_image(p, height, roll_deg)
+        cols = [
+            (self.wrist_image(p, height, roll_deg, *step) - here) / JACOBIAN_STEP_M
+            for step in ((JACOBIAN_STEP_M, 0.0), (0.0, JACOBIAN_STEP_M))
+        ]
+        return np.column_stack(cols)
+
+    # --- the front camera ---
+
+    def front_point(self, uv) -> np.ndarray | None:
+        """The floor point the front camera sees at image point uv; None above the horizon."""
+        return on_plane(self.cams.front, self.cams.T_base_cam, uv, self.floor_seen_z)
+
+    def front_horizon_v(self) -> float:
+        """The image row of the floor's horizon straight ahead: nothing on the floor ends above it."""
+        far = self.cams.T_base_cam[:3, 3] + [FAR_M, 0.0, 0.0]
+        return float(to_image(self.cams.front, self.cams.T_base_cam, [far[0], far[1], self.floor_seen_z])[1])
+
+    def front_view_deg(self) -> float:
+        """The front camera's view across, in degrees (its image's middle row, edge to edge)."""
+        a, b = (self.cams.T_base_cam[:3, :3] @ self.cams.front.ray(uv) for uv in MIDDLE_ROW_ENDS)
+        return float(np.degrees(np.arccos(np.clip(a @ b, -1.0, 1.0))))
+
+    def front_turn_and_distance(self, p) -> tuple[float, float]:
+        """For a floor point p: the base turn (deg, left positive) that puts it straight ahead of
+        the arm, and how far it then lies beyond the approach's stop (front_near_x), metres. The
+        base turns about cams.turn_centre."""
+        v = np.asarray(p[:2], float) - self.cams.turn_centre
+        return float(np.degrees(np.arctan2(v[1], v[0]))), near_distance(self.cams, p) - self.front_near_x
+
+
+def near_distance(cams: Cameras, p) -> float:
+    """A floor point's x once the base has turned it straight ahead of the arm."""
+    return float(cams.turn_centre[0] + np.hypot(*(np.asarray(p[:2], float) - cams.turn_centre)))
 
 
 def front_view_margin(geom: Geometry) -> float:
-    """How much floor (m) the front camera still sees beyond the approach's target row
-    (near_bottom), to the frame's bottom: an overshoot larger than this loses the object."""
-    return geom.front_range(geom.front["near_bottom"]) - geom.front_range(1.0)  # convention: the frame's bottom row
+    """How much floor (m) the front camera still sees beyond the approach's stop, to the frame's
+    bottom: an overshoot larger than this loses the object."""
+    return geom.front_near_x - near_distance(geom.cams, geom.front_point(BOTTOM_CENTRE))
 
 
 def front_object_height(geom: Geometry, box) -> float:
-    """An object's height (m) from its front-camera box: the camera's height over the floor is
-    range_k / f (the range model k / (bottom - horizon) is a pinhole's distance), and the object
-    spans (bottom - top) / (bottom - horizon) of it. All from calibrate_front.py; a paper cup
-    came out 4.4 cm in 18 views from 0.5 m to the reach point, within 0.25 cm (Oct 28)."""
-    f = geom.front
-    f_v = f["u_per_deg"] * np.degrees(1.0) * IMAGE_PX[0] / IMAGE_PX[1]  # height fractions per radian
-    bottom, top = box[3], box[1]
-    return float(f["range_k"] / f_v * (bottom - top) / max(bottom - f["range_horizon_v"], 1e-3))  # convention: keeps the division finite at the horizon
+    """An object's height (m) from its front-camera box: its bottom edge is on the floor, which
+    gives its distance; the ray through its top edge, at that distance, gives the height."""
+    u = (box[0] + box[2]) / 2
+    bottom = geom.front_point((u, box[3]))
+    if bottom is None:
+        return 0.0
+    o = geom.cams.T_base_cam[:3, 3]
+    d = geom.cams.T_base_cam[:3, :3] @ geom.cams.front.ray((u, box[1]))
+    t = np.hypot(*(bottom[:2] - o[:2])) / np.hypot(*d[:2])
+    return float(o[2] + t * d[2] - geom.floor_seen_z)
 
 
 def locate_from_one_view(geom: Geometry, c, h: float, height: float, roll_deg: float = 0.0) -> np.ndarray:
-    """(dx, dy) in metres from the point under the TCP to an object's point seen at image `c`,
-    the jaw tips h above the floor, the point `height` above the floor. The point under the TCP
-    at a depth is where the taught brick's middle was (it was held between the jaws), moved
-    along the descent from descent_p0; the image offset from it, divided by the Jacobian scaled
-    to that depth, is the offset in metres."""
-    d = geom.cam_above_tips
+    """(dx, dy) in metres from the point under the gripper to an object's point seen at image
+    `c`, the jaw tips h above the floor, the point `height` above the floor. The point under the
+    gripper is where the taught brick's middle was (it was held between the jaws), carried with
+    the TCP to this height and roll."""
     x0, y0, x1, y1 = geom.grasp_box
-    taught_centre = np.array([(x0 + x1) / 2, (y0 + y1) / 2])
-    z_taught = d + geom.grasp_target_height - prm.BRICK_HEIGHT_M.value
-    z = d + h - height
-    under_tcp = geom.descent_p0 + (taught_centre - geom.descent_p0) * z_taught / z
-    j = geom.jacobian(h, roll_deg) * (d + h) / z
-    return -np.linalg.solve(j, np.asarray(c, float) - under_tcp)
+    taught = geom.wrist_point(
+        ((x0 + x1) / 2, (y0 + y1) / 2), geom.grasp_target_height, prm.BRICK_HEIGHT_M.value
+    )
+    in_tcp = np.linalg.inv(geom.tcp_pose(geom.grasp_target_height)) @ np.append(taught, 1.0)
+    under = (geom.tcp_pose(h, roll_deg) @ in_tcp)[:2]
+    return geom.wrist_point(c, h, height, roll_deg)[:2] - under
 
 
 def view_half_width(geom: Geometry, h: float, height: float) -> float:
     """Half the wrist view's narrower side, in metres, on a plane `height` above the floor with
     the jaw tips h above it: anything located further off can't be in view."""
-    z = geom.cam_above_tips + h - height
-    j = geom.jacobian(h) * (geom.cam_above_tips + h) / z  # image fraction per metre at that plane
-    return float(min(0.5 / np.linalg.norm(j[0]), 0.5 / np.linalg.norm(j[1])))  # convention: half the view
+    edges = [geom.wrist_point(uv, h, height) for uv in EDGE_MIDPOINTS]
+    across, along = np.linalg.norm(edges[1] - edges[0]), np.linalg.norm(edges[3] - edges[2])
+    return float(min(across, along) / 2)  # convention: half the view
 
 
 def grasp_spot(geom: Geometry) -> np.ndarray:
     """The wrist-image spot under the gripper: the taught brick's box centre (it was held there)."""
     if geom.grasp_box is None:
-        raise MissingCalibrationError("calib.json 'wrist_grasp_target' has no box: run teach_grasp.py --write")
+        raise MissingCalibrationError(
+            "calib.json 'wrist_grasp_target' has no box: run teach_grasp.py --write"
+        )
     x0, y0, x1, y1 = geom.grasp_box
     return np.array([(x0 + x1) / 2, (y0 + y1) / 2])
 
@@ -214,7 +286,9 @@ def wrap_deg(a: float) -> float:
 
 def require_grasp_target(geom: Geometry) -> np.ndarray:
     if geom.grasp_target is None:
-        raise MissingCalibrationError("calib.json has no 'wrist_grasp_target': run teach_grasp.py (the owner's midpoint teach)")
+        raise MissingCalibrationError(
+            "calib.json has no 'wrist_grasp_target': run teach_grasp.py (the owner's midpoint teach)"
+        )
     return geom.grasp_target
 
 

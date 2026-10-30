@@ -88,7 +88,7 @@ def look_around(sk: Skills, obj: str) -> Result:
     det = sk.find(obj, "front")
     if det is not None:
         return Result(True, data={"turned": 0.0, "det": det})
-    step = (1 - prm.LOOK_OVERLAP.value) / sk.geom.front["u_per_deg"]  # share of the view's width, in deg
+    step = (1 - prm.LOOK_OVERLAP.value) * sk.geom.front_view_deg()  # share of the view's width, in deg
     for backed in (False, True):
         if backed:
             r = sk.move("base", delta=(-prm.LOOK_BACK_M.value, 0.0))

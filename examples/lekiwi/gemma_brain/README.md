@@ -138,14 +138,17 @@ A failed step folds the arm and the planner replans from what's done and why it 
 
 | What | Script | When |
 |---|---|---|
-| floor height | `calibration/calibrate_floor.py` | new floor or arm calibration |
-| wrist image Jacobian | `calibration/wrist_calib.py` | wrist camera moved |
-| descent (camera above the jaw tips) | `calibration/calibrate_descent.py` (from pick logs) | wrist camera moved |
-| jaw geometry | `calibration/calibrate_jaws.py` | gripper or wrist camera changed |
-| front camera (turn, range, reach row) | `calibration/calibrate_front.py`: one brick 0.6-1 m ahead, clear floor | front camera moved |
+| cameras (lenses, wrist mount, front pose, base turning centre, floor they see; joint zeros if needed) | `calibration/capture_cameras.py` + `solve_cameras.py` with the ChArUco boards: [setup](calibration/CAMERA_CALIBRATION.md) | a camera moved, or an arm recalibration |
+| floor height (where the jaws touch) | `calibration/calibrate_floor.py` | new floor or arm calibration |
+| front stop row (`front_camera` near_bottom: a brick at the reach point) | from `calibration/calibrate_front.py` (Oct 27; the script is otherwise superseded) | reach point changed |
 | grasp target | `calibration/teach_grasp.py` (the owner's midpoint teach) | gripper or wrist camera changed |
+| gripper opening (mm against angle) | `calibration/calibrate_gripper.py` | gripper recalibrated |
 | demo values (open width, lift, release, place view) | `calibration/demo_extract.py` on a teleop demo (writes `data/demos/`) | new demo |
-| cameras (lenses, wrist mount, front pose, joint zeros) | `calibration/capture_cameras.py` + `solve_cameras.py` with the ChArUco boards: [setup](calibration/CAMERA_CALIBRATION.md) | a camera moved, or an arm recalibration |
+
+Superseded by the camera calibration on Oct 30 and no longer read: the wrist image Jacobian
+(`wrist_calib.py`), the descent model (`calibrate_descent.py`), the jaw rows (`calibrate_jaws.py`) and
+the front camera's turn rate, range curve and horizon (`calibrate_front.py`). Their values stay in
+`calib.json` for the record.
 
 The arm's joint angles are (ticks - 2047) x 2pi/4096 from the homing tick (fixed Oct 27).
 

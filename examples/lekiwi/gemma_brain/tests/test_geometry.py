@@ -37,9 +37,13 @@ def test_floor_fit_is_a_plane_and_falls_back_flat():
 def test_jacobian_grows_closer_to_the_floor_and_turns_with_roll():
     g = geom(-0.11)
     assert np.linalg.norm(g.jacobian(0.03)) > np.linalg.norm(g.jacobian(0.094))
-    assert np.allclose(g.jacobian(0.094), g.jac)
-    j90 = g.jacobian(0.094, 90.0) * [[640], [480]]
-    assert np.allclose(np.linalg.svd(j90, compute_uv=False), np.linalg.svd(g.jac * [[640], [480]], compute_uv=False))
+    # A roll turns the camera about the TCP's axis: the image motion turns, its size about
+    # doesn't (in pixels; within 5%: the lens's distortion centres 35 px off the image centre).
+    j0, j90 = (g.jacobian(0.094, r) * [[640], [480]] for r in (0.0, 90.0))
+    assert np.allclose(np.linalg.svd(j90, compute_uv=False), np.linalg.svd(j0, compute_uv=False), rtol=0.05)
+    # A point on an object's top face is nearer the camera: it moves more.
+    assert np.linalg.norm(g.jacobian(0.094, plane_h=0.03)) > np.linalg.norm(g.jacobian(0.094))
+
 
 def test_every_param_names_its_source():
     assert prm.ALL and all(p.source in ("CALIB", "DEMO", "SPEC", "RULE") and p.why for p in prm.ALL.values())
@@ -85,22 +89,26 @@ def test_the_stray_number_check_catches_one(tmp_path):
     assert _stray_numbers(p) == ["x.py:1: 0.002", "x.py:2: 0.5"]
 
 def test_locate_from_one_view_recovers_a_cup_placed_in_a_simulated_view():
-    # A camera model consistent with geometry.py: a point at (dx, dy) from the TCP's vertical
-    # and height r is seen at under_tcp(z) - J(h) (d + h) / z @ (dx, dy), z = d + h - r.
+    # The taught brick's middle, carried with the TCP from the taught height to 10.6 cm up, is
+    # the point under the gripper; a cup rim 4.4 cm up, 1.2 cm forward and 2 cm right of it,
+    # imaged by the camera model, is located back there.
     from brain.geometry import locate_from_one_view
 
     g = jaw_geom()
     g.grasp_box, g.grasp_target_height = [0.411, 0.613, 0.545, 0.927], 0.0015
-    d, rim, true, h = g.cam_above_tips, 0.044, np.array([0.012, -0.020]), 0.106
-    taught = np.array([(0.411 + 0.545) / 2, (0.613 + 0.927) / 2])
-    z_t, z = d + 0.0015 - prm.BRICK_HEIGHT_M.value, d + h - rim
-    c = g.descent_p0 + (taught - g.descent_p0) * z_t / z - (g.jacobian(h) * (d + h) / z) @ true
-    assert np.allclose(locate_from_one_view(g, c, h, rim), true, atol=1e-9)
+    rim, true, h = 0.044, np.array([0.012, -0.020]), 0.106
+    taught = g.wrist_point(((0.411 + 0.545) / 2, (0.613 + 0.927) / 2), 0.0015, prm.BRICK_HEIGHT_M.value)
+    under = (g.tcp_pose(h) @ np.linalg.inv(g.tcp_pose(0.0015)) @ np.append(taught, 1.0))[:2]
+    c = g.wrist_image([*(under + true), g.floor_seen_z + rim], h)
+    assert np.allclose(locate_from_one_view(g, c, h, rim), true, atol=1e-6)
+
 
 def test_front_object_height_of_the_cup_in_two_logged_views():
+    # The same cup from 0.3 and 0.6 m (Oct 28 logs) measures the same: 5.8-5.9 cm. The fitted
+    # model said 4.2-4.4 cm, its focal length taken from the turn test's image widths per degree,
+    # 23% too large with the parallax of the camera ahead of the turning centre.
     from brain.geometry import front_object_height
 
-    g = geom(-0.11)
-    g.front = {"u_per_deg": 0.0184, "range_k": 0.0583, "range_horizon_v": 0.335}
+    g = geom(-0.0966)
     near, far = front_object_height(g, [0.25, 0.321, 0.7, 0.803]), front_object_height(g, [0.5, 0.333, 0.88, 0.647])
-    assert abs(near - far) < 0.003 and 0.04 < near < 0.05  # Oct 28: 4.3 and 4.2 cm
+    assert abs(near - far) < 0.005 and 0.05 < near < 0.07
