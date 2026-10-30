@@ -57,7 +57,7 @@ def demo_place_view() -> tuple[list[float], float] | None:
 
 
 # --- DEMO (the owner's Oct 27 pick_cup demo; re-extract after the joint-zero fix for heights) ---
-OPEN_WIDTH = Param(_demo("open_width_deg", 32.1), "DEMO", "gripper opening before a grasp, deg open from closed (demo: 32.1; 24.6 normalized units until Oct 29)")
+OPEN_WIDTH = Param(_demo("open_width_mm", 44.5), "DEMO", "jaw opening before a grasp, mm (demo: 44.5, opened to 32.1 deg / 24.6 normalized units; geometry.gripper_mm)")
 LIFT_M = Param(_demo("lift_m", 0.09), "DEMO", "lift after the grasp (demo: 9.5 cm)")
 RELEASE_ABOVE_FLOOR_M = Param(_demo("release_z_above_floor_m", 0.06), "DEMO",
                               "TCP height above the floor at release inside a cup (demo: 5.9 cm)")
@@ -72,7 +72,7 @@ BASE_STOP_SHORT_M = Param(0.01, "SPEC", "the Pi ends a base drive within this of
 BASE_TURN_MAX_DEG = Param(180.0, "SPEC", "the Pi refuses a base turn over this in one command (auto_control: 1 m per axis, 180 deg)")
 BASE_TURN_STOP_SHORT_DEG = Param(2.0, "SPEC", "the Pi ends a base turn within this of its goal (auto_control.BASE_THETA_TOL_DEG): turns stopped ~2 deg short")
 CONTROL_PERIOD_S = Param(1 / 30, "SPEC", "the Pi reads the joints once per control tick (web_server/robot_bridge.py FPS 30): status reads closer together can return the same sample")
-GRIPPER_EMPTY_MAX = Param(4.6, "SPEC", "deg open: closed on nothing reads 1.7-2.7; on the brick's 16 mm side 8.7-9.1 (3.5, 1.3-2.1 and 6.7-7.0 normalized units until Oct 29)")
+GRIPPER_EMPTY_MAX = Param(5.0, "SPEC", "mm: a close that stops wider holds something: closed on nothing the jaws meet (0 mm, 1.2-1.6 deg), the brick's narrowest side is 15.8 mm (calibrate_gripper.py, Oct 29; was 4.6 deg, 3.5 normalized units)")
 
 # --- RULE ---
 GRASP_LIFT_M = Param(0.004, "RULE", "jaw tips above the floor when closing: inside the brick's lower half")

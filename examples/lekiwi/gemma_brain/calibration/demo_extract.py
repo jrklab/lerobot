@@ -188,6 +188,7 @@ def main() -> None:
     kf = find_keyframes(joints, z)
 
     from brain import params as prm  # the values the v2 skills use now, for the comparison
+    from brain.geometry import Geometry
     from common.gemma import LlamaCpp
     from common.vision import brick_angle, snap_box
 
@@ -208,6 +209,10 @@ def main() -> None:
     # unit values above stay for the record).
     out["open_width_deg"] = calib.to_deg("arm_gripper", out["open_width"])
     out["closed_width_deg"] = calib.to_deg("arm_gripper", out["closed_width"])
+    # ...and in mm of jaw opening (calibrate_gripper.py), what the brain uses since Oct 29.
+    geom = Geometry.load()
+    out["open_width_mm"] = geom.gripper_mm(out["open_width_deg"])
+    out["closed_width_mm"] = geom.gripper_mm(out["closed_width_deg"])
     base = np.abs(df[["x.vel", "y.vel"]].values).max(axis=1) > 0.005
     out["base_moved_between_close_and_release"] = bool(base[kf.close_end : kf.pre_release or len(df)].any())
     if kf.pre_release is not None:
@@ -259,8 +264,8 @@ def main() -> None:
                                       "centre": [round((b[0] + b[2]) / 2, 4), round((b[1] + b[3]) / 2, 4)]}
 
     rows = [
-        ("open width before the close", f"{out['open_width']:.1f}", f"OPEN_WIDTH {prm.OPEN_WIDTH.value:.1f}"),
-        ("jaw width at the close", f"{out['closed_width']:.1f}", f"empty below {prm.GRIPPER_EMPTY_MAX.value}; 2x4 seen 6.7-7.0"),
+        ("open width before the close (mm)", f"{out['open_width_mm']:.1f}", f"OPEN_WIDTH {prm.OPEN_WIDTH.value:.1f}"),
+        ("jaw width at the close (mm)", f"{out['closed_width_mm']:.1f}", f"empty below {prm.GRIPPER_EMPTY_MAX.value}; 2x4 short side 15.8"),
         ("hover -> close descend", _m(out["descend_m"]),
          f"hover {prm.HOVER_HEIGHT_M.value} m, last look {prm.FINAL_LOOK_HEIGHT_M.value} m above the floor"),
         ("lift after the close", _m(out["lift_m"]), f"LIFT_M {prm.LIFT_M.value:.3f}"),

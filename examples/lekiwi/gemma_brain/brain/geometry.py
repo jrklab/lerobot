@@ -20,6 +20,7 @@ calibration is an error naming the script that makes it.
     wrist       image Jacobian d(u, v)/d(x, y) at a height, scaled for other heights and rolls
     descent     camera height above the jaw tips and the point a vertical descent heads for
     jaws        the fixed jaw's tip row and inner edge in the wrist image
+    gripper     the jaw opening (mm) against the gripper angle (deg open from closed)
 """
 
 from __future__ import annotations
@@ -41,6 +42,7 @@ MAKERS = {
     "wrist_descent": "calibrate_descent.py",
     "wrist_jaws": "calibrate_jaws.py",
     "front_camera": "calibrate_front.py",
+    "gripper_opening": "calibrate_gripper.py",
 }
 
 
@@ -63,6 +65,7 @@ class Geometry:
     grasp_target: np.ndarray | None = None  # taught (u of the box's right edge, v of its middle)
     grasp_target_height: float | None = None  # jaw tips above the floor when it was taught
     grasp_box: list | None = None  # the whole taught box (x0, y0, x1, y1)
+    gripper_curve: list | None = None  # [[deg, mm], ...]: calibrate_gripper.py
 
     @classmethod
     def load(cls, calib_path: Path = HERE / "data" / "calib.json", touches_path: Path = HERE / "data" / "floor_touches.json") -> Geometry:
@@ -87,7 +90,31 @@ class Geometry:
             grasp_target=np.array(calib["wrist_grasp_target"]["value"]) if "wrist_grasp_target" in calib else None,
             grasp_target_height=calib["wrist_grasp_target"]["height_m"] if "wrist_grasp_target" in calib else None,
             grasp_box=calib["wrist_grasp_target"].get("box") if "wrist_grasp_target" in calib else None,
+            gripper_curve=calib["gripper_opening"]["value"]["curve"],
         )
+
+    def _gripper(self) -> tuple[np.ndarray, np.ndarray]:
+        if not self.gripper_curve:
+            raise MissingCalibrationError("calib.json has no 'gripper_opening': run calibrate_gripper.py")
+        c = np.asarray(self.gripper_curve, float)
+        return c[:, 0], c[:, 1]
+
+    def gripper_mm(self, deg: float) -> float:
+        """The jaw opening (mm, at the tips) for a gripper angle (deg open from closed): straight
+        between the measured points (the jaw swings on a pivot: 1.85 mm/deg near closed, 1.3
+        from 16 to 48 mm, Oct 29), beyond the last at its last segment's slope; 0 at or below
+        the angle where the jaws meet."""
+        d, m = self._gripper()
+        if deg > d[-1]:
+            return float(m[-1] + (deg - d[-1]) * (m[-1] - m[-2]) / (d[-1] - d[-2]))
+        return float(np.interp(deg, d, m))
+
+    def gripper_deg(self, mm: float) -> float:
+        """The gripper angle (deg open from closed) for a jaw opening in mm (gripper_mm's inverse)."""
+        d, m = self._gripper()
+        if mm > m[-1]:
+            return float(d[-1] + (mm - m[-1]) * (d[-1] - d[-2]) / (m[-1] - m[-2]))
+        return float(np.interp(mm, m, d))
 
     def floor(self, x: float, y: float) -> float:
         return float(self.floor_coef @ np.array([1.0, x, y]))

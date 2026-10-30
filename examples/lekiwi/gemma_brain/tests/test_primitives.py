@@ -258,9 +258,21 @@ def test_held_needs_the_hold_watch_not_just_a_high_reading():
             return self.st
 
     sk = Skills.__new__(Skills)
-    for pos, state, want in ((6.8, "holding", True), (22.9, None, False), (1.6, "holding", False), (6.0, "dropped", False)):
+    sk.geom = geom(-0.11)
+    # degrees open: on the brick's 15.8 mm side (9.9), open and not holding, empty (1.6: the jaws
+    # meet), closed further after a drop
+    for pos, state, want in ((9.9, "holding", True), (32.0, None, False), (1.6, "holding", False), (9.0, "dropped", False)):
         sk.robot = R(pos, state)
         assert sk.held() is want, (pos, state)
+
+
+def test_the_gripper_opening_in_mm_follows_the_measured_curve():
+    g = geom(-0.11)
+    assert g.gripper_mm(1.0) == 0.0  # the jaws meet at 1.41 deg
+    assert abs(g.gripper_mm(9.93) - 15.8) < 1e-9 and abs(g.gripper_mm(16.0) - 23.6) < 0.1
+    assert abs(g.gripper_mm(40.0) - (47.8 + 5.33 * 16 / 12.35)) < 1e-6  # past the last: its slope
+    for mm in (0.0, 5.0, 15.8, 44.5, 60.0):
+        assert abs(g.gripper_mm(g.gripper_deg(mm)) - mm) < 1e-9
 
 def test_a_failed_frame_request_resyncs_the_clock_and_retries(monkeypatch):
     import brain.primitives as primitives

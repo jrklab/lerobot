@@ -48,7 +48,11 @@ class SimRobot(_SimRobot):
 def geom(floor_z):
     return Geometry(floor_coef=np.array([floor_z, 0.0, 0.0]), floor_points=3, jac=np.array([[4.2, 0.5], [0.7, -5.3]]),
                     jac_height=0.094, cam_above_tips=0.1075, descent_p0=np.array([0.5, 0.15]),
-                    fixed_jaw_inner_u=0.564, fixed_jaw_tip_v=0.754, sources={})
+                    fixed_jaw_inner_u=0.564, fixed_jaw_tip_v=0.754, sources={}, gripper_curve=GRIPPER_CURVE)
+
+
+# calibrate_gripper.py on this robot, Oct 29: [deg open, mm] (nothing, 2x4 both ways, 2x6 long).
+GRIPPER_CURVE = [[1.41, 0.0], [9.93, 15.8], [22.32, 31.8], [34.67, 47.8]]
 
 def skills_over(real_floor_tcp_z, predicted):
     # The sim's floor stops the TCP; ours is TCP z at contact, so the same number.

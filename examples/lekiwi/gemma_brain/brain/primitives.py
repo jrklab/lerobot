@@ -409,19 +409,22 @@ class Skills:
     # --- grip ---
 
     def grip(self, how: str, width: float | None = None) -> Result:
-        """open: to `width` (default the demo's OPEN_WIDTH). close: until the jaws stall;
-        data["held"]: they stopped short of closed-empty and the Pi's hold watch saw no drop."""
+        """open: to `width` mm (default the demo's OPEN_WIDTH). close: until the jaws stall;
+        data["held"]: they stopped short of closed-empty and the Pi's hold watch saw no drop.
+        The Pi works in degrees; the jaw opening in mm comes from calibrate_gripper.py."""
         if how == "open":
-            res = self.robot.gripper(prm.OPEN_WIDTH.value if width is None else width).get("result", {})
-            return Result(True, data=res)
+            mm = prm.OPEN_WIDTH.value if width is None else width
+            res = self.robot.gripper(self.geom.gripper_deg(mm)).get("result", {})
+            return Result(True, data={**res, "mm": round(mm, 1)})
         if how != "close":
             return Result(False, f"grip: 'open' or 'close', not {how!r}")
         res = self.robot.gripper(0, speed=prm.CLOSE_SPEED.value).get("result", {})
+        mm = None if res.get("pos") is None else round(self.geom.gripper_mm(res["pos"]), 1)
         held = self.held()
-        self.ev("grip", how="close", held=held, **res)
+        self.ev("grip", how="close", held=held, mm=mm, **res)
         if not held:
-            return Result(False, f"closed to {res.get('pos')} without holding anything", {**res, "held": False})
-        return Result(True, data={**res, "held": True})
+            return Result(False, f"closed to {mm} mm without holding anything", {**res, "mm": mm, "held": False})
+        return Result(True, data={**res, "mm": mm, "held": True})
 
     def held(self) -> bool:
         """The Pi's hold watch has the jaws closed on something (state "holding"; it clears when
@@ -430,4 +433,4 @@ class Skills:
         place-in said "still holding" after opening, with the brick in the cup)."""
         st = self.robot.status()
         hold = st.get("gripper_hold") or {}
-        return hold.get("state") == "holding" and st["joints"]["arm_gripper"] >= prm.GRIPPER_EMPTY_MAX.value
+        return hold.get("state") == "holding" and self.geom.gripper_mm(st["joints"]["arm_gripper"]) >= prm.GRIPPER_EMPTY_MAX.value

@@ -62,5 +62,7 @@
   ]
  },
  "open_width_deg": 32.08007767572999,
- "closed_width_deg": 10.195312546100467
+ "closed_width_deg": 10.195312546100467,
+ "open_width_mm": 44.44463504548014,
+ "closed_width_mm": 16.14261507163902
 }

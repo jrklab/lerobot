@@ -167,5 +167,80 @@
     ],
     "date": "2026-10-27",
     "log": "runs/20261027T181411-teach-grasp"
+  },
+  "gripper_opening": {
+    "value": {
+      "curve": [
+        [
+          1.41,
+          0.0
+        ],
+        [
+          9.93,
+          15.8
+        ],
+        [
+          22.32,
+          31.8
+        ],
+        [
+          34.67,
+          47.8
+        ]
+      ]
+    },
+    "meaning": "jaw opening (mm, at the tips) against the gripper angle (deg open from its recorded closed end): straight between these [deg, mm] points; beyond the last, its last segment's slope",
+    "method": "calibrate_gripper.py: closed at the pick's speed until the stall on nothing and LEGO bricks of known width",
+    "date": "2026-10-29",
+    "points": [
+      {
+        "mm": 0.0,
+        "deg": 1.58,
+        "stalled": false,
+        "what": "nothing between the jaws"
+      },
+      {
+        "mm": 15.8,
+        "deg": 10.02,
+        "stalled": true,
+        "what": "the brick across its short side (2 studs)"
+      },
+      {
+        "mm": 31.8,
+        "deg": 22.32,
+        "stalled": true,
+        "what": "the brick across its long side (4 studs)"
+      },
+      {
+        "mm": 0.0,
+        "deg": 1.23,
+        "stalled": false,
+        "what": "nothing between the jaws"
+      },
+      {
+        "mm": 15.8,
+        "deg": 9.84,
+        "stalled": true,
+        "what": "the brick across its short side (2 studs)"
+      },
+      {
+        "mm": 31.8,
+        "deg": 22.32,
+        "stalled": true,
+        "what": "the brick across its long side (4 studs)"
+      },
+      {
+        "mm": 47.8,
+        "deg": 34.8,
+        "stalled": true,
+        "what": "the 2x6 brick across its long side (6 studs)"
+      },
+      {
+        "mm": 47.8,
+        "deg": 34.54,
+        "stalled": true,
+        "what": "the 2x6 brick across its long side (6 studs)"
+      }
+    ]
   }
 }
