@@ -279,6 +279,24 @@ far away (one approach from 52 cm stopped 5 cm past its target; a pixel of the b
 - **Robot check** after the deploy: 3/3 driven picks (72, 61, 65 s), no move refused or stopped
   by the Pi, every grip square on the brick's 15.8 mm side (15.6-15.7 mm).
 
-Not yet checked on the robot: correcting a joint zero (`apply_joint_offsets.py --write` and
-`--restore`), now with the offset wrap; a test is to write -5 deg on the elbow (wrapping
-2014 -> -1999), check the reading moved and the arm didn't, and restore.
+**The joint-zero correction on the real motors (Oct 30).** With the service stopped and the arm
+folded at rest, a -5 deg elbow correction (`apply_joint_offsets.py --offsets arm_elbow_flex=-5
+--write`), then `--restore` of the backup:
+
+| | before | after the write | after the restore |
+|---|---|---|---|
+| `homing_offset` | 2014 | -2025 (2014 + 57 ticks, past the register's 2047: wrapped by a turn) | 2014 |
+| `range_min` / `range_max` | 914 / 3129 | 857 / 3072 (-57) | 914 / 3129 |
+| elbow reading | 82.71 deg (held) | 89.47 deg | 94.48 deg |
+
+- The motor took the wrapped offset; offset and position limits went to the motors and the
+  file together, read back equal each time (`is_calibrated`), and the service started both
+  times without LeKiwi's calibration prompt.
+- The shift itself, measured on the restore, with the arm limp and unmoved: 89.47 -> 94.48 deg,
+  +5.01 deg for 5. (The write's reading includes the folded arm sagging when its torque went
+  off, to ~94.5 deg as at any restart: 94.5 - 5 = 89.5.)
+- After the restore the calibration file is byte-for-byte the original. Both backups stay on the
+  Pi (`kiwi_sn_0.json.before-zero-fix-*`, named by the Pi's own clock).
+
+Not tested end to end: a capture finding a real zero error, the correction, and a capture
+confirming it (this arm's zeros are within the method's resolution, so nothing is applied).
