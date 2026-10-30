@@ -45,7 +45,7 @@ from common.arm import (
     plan_ee_line,
 )
 from common.robot import RobotError
-from common.vision import colour_matches, measured_angle_of, snap_box
+from common.vision import Look, look_matches, measured_angle_of, sample_look, snap_box
 
 from brain import params as prm
 from brain.geometry import Geometry
@@ -69,13 +69,6 @@ def pi_refused(e: RobotError) -> bool:
     return "HTTP 409" in msg and "busy" not in msg and "not in auto mode" not in msg
 
 
-def has_colour(jpeg: bytes, box, obj: str) -> bool:
-    """The box holds the colour `obj` names (vision.colour_matches), and enough coloured pixels
-    to tell: v1's check passes a box with too few, which let a box on bare floor through."""
-    ok, why = colour_matches(jpeg, box, obj)
-    return ok and not why.startswith("too few")
-
-
 class Skills:
     _last_moved: str | None = None  # "arm" or "base": what moved last, for the settle before a frame
 
@@ -85,6 +78,9 @@ class Skills:
         self.roll = 0.0
         self.seen: dict[str, Detection] = {}  # the last detection of each object, per camera
         self.heights: dict[str, float] = {}  # object heights measured side-on by the front camera
+        # Each object's colour per camera, sampled from the main model's boxes (vision.Look):
+        # the fast model's boxes must match it.
+        self.looks: dict[str, Look | None] = {}
         self._roll_range = None
         # The Arm's whole-arm floor clearance from the measured floor, where the arm works (the
         # reach point): the plane's height at x 0 is off by its tilt there (a few mm), and with the
@@ -337,10 +333,14 @@ class Skills:
 
     def find(self, obj: str, cam: str = "wrist", angle: bool = False, fast_ok: bool = True,
              rim: bool = False) -> Detection | None:
-        """The object's box in a fresh `cam` frame, or None. Tracking an object already seen
-        in this camera, the fast model answers first; its box must have the object's colour
-        (E2B boxes something even when nothing is there), else the main model is asked. The
-        wrist box is snapped to the object's colour blob. angle: also its long-side angle."""
+        """The object's box in a fresh `cam` frame, or None. The main model (26B) chooses: on
+        first sight, and on the front camera within CLOSE_CHOICE_M, where it compares the
+        objects in view (a light green block among a green and a red one); each of its boxes
+        samples the object's colour in this camera (vision.Look). Tracking an object already
+        seen, the fast model answers first; its box must match that sample (E2B boxes
+        something even when nothing is there), else the main model is asked. No colour words
+        are read here: the models judge them. The wrist box is snapped to the object's colour
+        blob. angle: also its long-side angle."""
         jpeg = self.frame(cam)
         if jpeg is None:
             return None
@@ -350,19 +350,21 @@ class Skills:
         # which round_centre and the in-view test don't use, and the place check wants the
         # opening the rim encloses.
         prompt = f"the rim of the {obj}" if rim else f"the {obj} on the floor"
-        tracked = self.seen.get(f"{cam}:{obj}")
+        key = f"{cam}:{obj}"
+        tracked = self.seen.get(key)
+        close = cam == "front" and tracked is not None and self._front_distance(tracked) <= prm.CLOSE_CHOICE_M.value
         a, by = None, ""
-        if tracked is not None and self.fast is not None and fast_ok:
+        if tracked is not None and self.fast is not None and fast_ok and not close:
             a = self.fast.box(jpeg, prompt)
             by = "fast"
-            if a.value is None or not has_colour(jpeg, a.value, obj):
+            if a.value is None or not look_matches(jpeg, a.value, self.looks.get(key))[0]:
                 self.ev("fast_miss", obj=obj, cam=cam, box=a.value)
                 a = None
         if a is None:
             if self.main is None:
                 return None
             a, by = self.main.box(jpeg, prompt), "main"
-        if a.value is None or not has_colour(jpeg, a.value, obj):
+        if a.value is None:
             self.ev("find", obj=obj, cam=cam, found=False, box=a.value, by=by)
             return None
         if cam == "front" and a.value[3] < self.geom.front_horizon_v():
@@ -370,13 +372,24 @@ class Skills:
             # when carried at the hover (Oct 28 check).
             self.ev("find", obj=obj, cam=cam, found=False, box=a.value, by=by, why="above the horizon")
             return None
-        box = snap_box(jpeg, a.value, what=obj)[0] if cam == "wrist" else list(a.value)
+        if by == "main":
+            self.looks[key] = sample_look(jpeg, a.value)
+        look = self.looks.get(key)
+        box = snap_box(jpeg, a.value, look=look)[0] if cam == "wrist" else list(a.value)
         det = Detection(box=[round(float(v), 4) for v in box], jpeg=jpeg, by=by)
         if angle:
-            det.angle_deg, det.angle_how = measured_angle_of(jpeg, box, obj)
+            det.angle_deg, det.angle_how = measured_angle_of(jpeg, box, look)
         self.seen[f"{cam}:{obj}"] = det
         self.ev("find", obj=obj, cam=cam, found=True, box=det.box, by=by, angle=det.angle_deg)
         return det
+
+    def _front_distance(self, det: Detection) -> float:
+        """How far the object of a front-camera box is from the camera along the floor (m);
+        infinite above the horizon."""
+        p = self.geom.front_point(((det.box[0] + det.box[2]) / 2, det.box[3]))
+        if p is None:
+            return float("inf")
+        return float(np.hypot(*(p[:2] - self.geom.cams.T_base_cam[:2, 3])))
 
     # --- servo ---
 

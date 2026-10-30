@@ -85,6 +85,7 @@ PLACE_APPROACH_TOL_M = Param(0.05, "RULE", "the approach to a container is done 
 PLACE_TOL_M = Param(0.002, "RULE", "how centred over a container before lowering: as tight as the grasp servo (SERVO_TOL_M); at 1 cm, measured at the floor, the brick landed in the cup near the rim (the rim is nearer the camera: ~1.5x the error; Oct 27)")
 NEXT_GAP_FRACTION = Param(0.5, "RULE", "gap left beside the reference object, as a share of the held brick's width in the image")
 LOOK_OVERLAP = Param(0.5, "RULE", "look-around: consecutive front views overlap by this share of the view (turn step = the rest of the view's width, from the front camera's calibration)")
+CLOSE_CHOICE_M = Param(0.5, "RULE", "front-camera looks this close to the object go to the main model (26B), whatever is tracked: on Oct 30 it chose the named block among several in all 15 asks at 0.4-0.5 m (red, pink, blue, light blue, green, light green), but 4 of 7 at ~1 m (15-30 px blocks: a wrong block, a miss, a false find)")
 LOOK_BACK_M = Param(0.3, "RULE", "look-around: back up this far once if a full turn didn't find it (it may be too close to the front camera)")
 LAND_SEARCH_M = Param(0.008, "RULE", "how far past its goal a contact-stop move may go: the old floor fit's worst error (8.4 mm)")
 SERVO_TOL_M = Param(0.002, "RULE", "servo position tolerance at the object: under the last descent's landing scatter (2.5 mm), so the servo isn't what limits a grasp")

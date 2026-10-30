@@ -190,7 +190,7 @@ def main() -> None:
     from brain import params as prm  # the values the v2 skills use now, for the comparison
     from brain.geometry import Geometry
     from common.gemma import LlamaCpp
-    from common.vision import brick_angle, snap_box
+    from common.vision import brick_angle, sample_look, snap_box
 
     # Next to the other committed demo data, where brain/params.py reads it (the raw recording
     # under demos/ is git-ignored).
@@ -225,8 +225,9 @@ def main() -> None:
         (out_dir / f"ep{args.episode}_pre_close.jpg").write_bytes(jpeg)
         a = model.box(jpeg, f"the {args.target} on the floor")
         if a.value is not None:
-            box, how = snap_box(jpeg, a.value, what=args.target)
-            ang = brick_angle(jpeg, box)
+            look = sample_look(jpeg, a.value)  # the object's colour in the main model's box
+            box, how = snap_box(jpeg, a.value, look=look)
+            ang = brick_angle(jpeg, box, look=look)
             out["pre_close"] = {"video_frame": k, "box": [round(v, 4) for v in box], "snap": how,
                                 "centre": [round((box[0] + box[2]) / 2, 4), round((box[1] + box[3]) / 2, 4)]}
     if kf.hover is not None:
@@ -236,8 +237,9 @@ def main() -> None:
             (out_dir / f"ep{args.episode}_hover.jpg").write_bytes(jpeg)
             a = model.box(jpeg, f"the {args.target} on the floor")
             if a.value is not None:
-                box, _ = snap_box(jpeg, a.value, what=args.target)
-                ang = brick_angle(jpeg, box)
+                look = sample_look(jpeg, a.value)
+                box, _ = snap_box(jpeg, a.value, look=look)
+                ang = brick_angle(jpeg, box, look=look)
                 roll = calib.to_deg("arm_wrist_roll", joints[kf.hover, 4])
                 out["hover_view"] = {"video_frame": k, "box": [round(v, 4) for v in box],
                                      "brick_angle_deg": None if ang is None else round(ang["angle_deg"], 1), "aspect": None if ang is None else round(ang["aspect"], 2), "roll_deg": round(roll, 1)}

@@ -96,7 +96,7 @@ class FrameRobot:
 
 def finder(jpeg, main, fast):
     sk = Skills.__new__(Skills)
-    sk.robot, sk.log, sk.main, sk.fast, sk.seen = FrameRobot(jpeg), None, main, fast, {}
+    sk.robot, sk.log, sk.main, sk.fast, sk.seen, sk.looks = FrameRobot(jpeg), None, main, fast, {}, {}
     return sk
 
 class SimServo:

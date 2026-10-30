@@ -52,3 +52,44 @@ def test_brick_apart_from_the_jaws_is_not_a_jaw():
     fixed = {"fixed_tip_v": 362 / H, "fixed_inner_u": 360 / W}
     g = jaw_geometry(frame(moving_right=140, brick=(200, 250, 280, 300)), fixed)
     assert abs(g["moving_inner_u"] - 140 / W) < 0.005
+
+
+# --- an object's colour, sampled from the main model's box: no hue table ---
+
+from common.vision import look_matches, measured_angle_of, sample_look  # noqa: E402
+
+FLOOR_BGR = (165, 185, 200)  # the beige floor
+LIME_BGR = (120, 215, 175)  # a pale lime brick: low saturation, Oct 30's failing one
+RED_BGR = (40, 40, 210)
+
+
+def _floor_with(bricks) -> bytes:
+    img = np.full((H, W, 3), FLOOR_BGR, np.uint8)
+    for (cx, cy), angle, colour in bricks:  # a 2x4 brick seen from above: 60 x 120 px
+        box = cv2.boxPoints(((cx, cy), (60, 120), angle)).astype(np.int32)
+        cv2.fillPoly(img, [box], colour)
+    # A camera's pixel noise (~3 levels): what an object's colour scatter is measured against.
+    noise = np.random.default_rng(0).normal(0, 3, img.shape)
+    return cv2.imencode(".jpg", np.clip(img + noise, 0, 255).astype(np.uint8))[1].tobytes()
+
+
+def test_a_pale_brick_gets_its_angle_and_only_its_own_box_matches():
+    jpeg = _floor_with([((200, 220), 30.0, LIME_BGR), ((470, 220), 0.0, RED_BGR)])
+    # boxes as tight as the model's: the 30 deg brick spans x 144-256, y 153-287 px
+    lime_box, red_box, floor_box = [0.22, 0.31, 0.41, 0.61], [0.68, 0.33, 0.79, 0.59], [0.3, 0.75, 0.5, 0.95]
+    look = sample_look(jpeg, lime_box)
+    assert look is not None and look.distinct()
+    angle, how = measured_angle_of(jpeg, lime_box, look)
+    assert how == "fit" and abs(abs(angle) - 30.0) < 4.0, angle  # the old hue-table mask: no angle
+    assert look_matches(jpeg, lime_box, look)[0]
+    assert not look_matches(jpeg, red_box, look)[0]
+    assert not look_matches(jpeg, floor_box, look)[0]
+
+
+def test_an_object_colour_cannot_tell_from_the_floor_passes():
+    # The limiting case: a "sample" of bare floor (an object of the floor's very colour). Colour
+    # can't decide, so it doesn't: the main model's box stands.
+    jpeg = _floor_with([])
+    look = sample_look(jpeg, [0.4, 0.37, 0.6, 0.63])
+    assert look is None or not look.distinct()
+    assert look_matches(jpeg, [0.1, 0.1, 0.3, 0.3], look)[0]

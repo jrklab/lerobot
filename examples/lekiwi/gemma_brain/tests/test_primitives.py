@@ -69,7 +69,6 @@ def test_a_front_box_ending_above_the_horizon_is_not_on_the_floor(monkeypatch):
     for box, found in ((high, False), (low, True)):
         sk = finder(red_frame(box), FakeModel([box]), None)
         sk.geom = geom(-0.11)
-        sk.geom.front = {"range_horizon_v": 0.335}
         assert (sk.find("red block", "front") is not None) == found
 
 def test_a_measured_move_takes_up_the_arms_play():
@@ -320,3 +319,18 @@ def test_a_base_turn_over_the_pis_limit_goes_in_two():
     assert sk.move("base", roll=-180.0).ok
     stop = prm.BASE_TURN_STOP_SHORT_DEG.value
     assert sent == [-90.0 - stop, -90.0 - stop] and all(abs(t) <= prm.BASE_TURN_MAX_DEG.value for t in sent)
+
+
+def test_close_up_front_looks_go_to_the_main_model(monkeypatch):
+    # Oct 30: the 26B chose the named block among several in 15 of 15 asks at 0.4-0.5 m, 4 of 7
+    # at ~1 m: within CLOSE_CHOICE_M the front camera's looks are its, not the fast model's.
+    import brain.primitives as primitives
+
+    monkeypatch.setattr(primitives.time, "sleep", lambda s: None)
+    near, far = [0.45, 0.62, 0.55, 0.72], [0.45, 0.40, 0.50, 0.45]  # box bottoms ~0.3 m and ~1 m out
+    for box, main_calls in ((near, 2), (far, 1)):
+        main, fast = FakeModel([box, box]), FakeModel([box])
+        sk = finder(red_frame(box), main, fast)
+        sk.geom = geom(-0.11)
+        assert sk.find("red block", "front") is not None and sk.find("red block", "front") is not None
+        assert main.calls == main_calls, (box, main.calls, fast.calls)
