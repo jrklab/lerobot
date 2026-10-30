@@ -86,8 +86,10 @@ llama-server -m ~/models/gguf/gemma-4-E2B_gemma-4-E2B-it-Q4_K_M.gguf \
   -ngl 99 --jinja -np 1 -c 4096 --swa-full --cache-ram 0 --image-min-tokens 70 --image-max-tokens 70
 ```
 
-26B plans and boxes objects it hasn't seen yet; E2B answers the repeat looks at an object
-already found (its box must have the object's colour, else 26B is asked). Check both are up:
+26B plans, boxes objects it hasn't seen yet in a camera, and answers every front look within
+0.5 m (`CLOSE_CHOICE_M`): it picks the named object ("the light green block") by comparing what's
+in view. E2B answers the other repeat looks; its box must match the object's colour as sampled
+from 26B's box (`common/vision.py` Look: no colour tables), else 26B is asked. Check both are up:
 `curl -s http://127.0.0.1:8081/health; curl -s http://127.0.0.1:8082/health` (each prints
 `{"status":"ok"}`).
 
@@ -172,13 +174,20 @@ uv run pytest tests/test_goals.py
 Scripts that move the robot are never named `*_test.py` (pytest would run them);
 `runs/` and `demos/` are not collected.
 
-## Known limits (2026-10-29)
+## Known limits (2026-10-30)
 
 - Driven picks 5/5 in the last four batches (63-69 s each); the cup and next-to tasks work end
   to end (cup: 67.5 s). Small samples, not success rates.
 - Place relations other than "in" and "next to" (on, left_of, ...) are refused by the plan
   check before anything moves.
 - The fast model's box at 3 cm sometimes changes height between looks and the servo chases it.
+- Choosing among several blocks by colour: the 26B chose the named one in 15 of 15 asks at
+  0.4-0.5 m, 4 of 7 at ~1 m (hence the close-up looks). Touching blocks come back as one box (6
+  of 6 asks), and close shades side by side (light and dark green) can't be told apart by the
+  sampled colour after the choice. Keep blocks apart.
+- The robot's web page streams both cameras at 15 frames/s (~1.4 MB/s, ~11 Mbit/s) while it's
+  open; the brain itself moves ~40 kB/s from the Pi and ~11 kB/s to it during a task (status
+  polls ~28 kB/s, frames 47 kB a look). Close the page during brain runs over Wi-Fi.
 - The arm has 2-3 mm of play in its reach; servo steps correct it from the encoders.
 - The place-in check is one front-camera look for the object on the floor: a miss hidden behind
   the container passes as placed.
