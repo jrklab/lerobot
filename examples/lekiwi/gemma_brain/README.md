@@ -145,6 +145,7 @@ A failed step folds the arm and the planner replans from what's done and why it 
 | front camera (turn, range, reach row) | `calibration/calibrate_front.py`: one brick 0.6-1 m ahead, clear floor | front camera moved |
 | grasp target | `calibration/teach_grasp.py` (the owner's midpoint teach) | gripper or wrist camera changed |
 | demo values (open width, lift, release, place view) | `calibration/demo_extract.py` on a teleop demo (writes `data/demos/`) | new demo |
+| cameras (lenses, wrist mount, front pose, joint zeros) | `calibration/capture_cameras.py` + `solve_cameras.py` with the ChArUco boards: [setup](calibration/CAMERA_CALIBRATION.md) | a camera moved, or an arm recalibration |
 
 The arm's joint angles are (ticks - 2047) x 2pi/4096 from the homing tick (fixed Oct 27).
 
