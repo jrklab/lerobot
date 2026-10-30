@@ -20,8 +20,12 @@
 """Solve the cameras from the ChArUco captures (calibration/capture_cameras.py) into calib.json
 "cameras". No robot motion.
 
-    .venv/bin/python calibration/solve_cameras.py --lens-wrist runs/<t>-lens-wrist \\
-        --lens-front runs/<t>-lens-front --scene runs/<t>-scene [--write]
+    .venv/bin/python calibration/solve_cameras.py --scene runs/<t>-scene \\
+        [--lens-wrist runs/<t>-lens-wrist] [--lens-front runs/<t>-lens-front] [--write]
+
+The hand-held lens captures are optional: the scene's own views are always used, and on Oct 29
+they pinned the wrist lens alone (focal length +/-2 px, centre +/-1 px) but not the front one
+(its centre moved 48 px between lens models: all its views come from one robot position).
 
 1. Each lens (focal length, optical centre, distortion): OpenCV's calibrateCamera over every
    view of a board, the hand-held ones and the scene's.
@@ -57,6 +61,7 @@ from common.arm import IK_ARM_JOINTS, kin
 from calibration import boards
 
 CALIB = ROOT / "data" / "calib.json"
+IMAGE_SIZE = (640, 480)  # both cameras' frames from the Pi (/auto/frame)
 # The joints whose zero offsets the scene can tell: they tilt the gripper.
 OFFSET_JOINTS = ["arm_shoulder_lift", "arm_elbow_flex", "arm_wrist_flex"]
 
@@ -252,17 +257,21 @@ def _load(folder: Path, key: str) -> dict:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--lens-wrist", type=Path, required=True)
-    ap.add_argument("--lens-front", type=Path, required=True)
+    ap.add_argument("--lens-wrist", type=Path, help="a hand-held lens capture (optional)")
+    ap.add_argument("--lens-front", type=Path, help="a hand-held lens capture (optional)")
     ap.add_argument("--scene", type=Path, required=True)
     ap.add_argument("--write", action="store_true")
     args = ap.parse_args()
 
-    lw, lf, sc = _load(args.lens_wrist, "views"), _load(args.lens_front, "views"), _load(args.scene, "scene")
-    wrist_views = [v["boards"] for v in lw["views"]] + [r["boards"] for r in sc["wrist"]]
-    front_views = [v["boards"] for v in lf["views"]] + [f["boards"] for f in sc["front"]]
-    wl = lens(wrist_views, lw["image_size"])
-    fl = lens(front_views, lf["image_size"])
+    sc = _load(args.scene, "scene")
+    held = {
+        cam: _load(d, "views")["views"] if d else []
+        for cam, d in (("wrist", args.lens_wrist), ("front", args.lens_front))
+    }
+    wrist_views = [v["boards"] for v in held["wrist"]] + [r["boards"] for r in sc["wrist"]]
+    front_views = [v["boards"] for v in held["front"]] + [f["boards"] for f in sc["front"]]
+    wl = lens(wrist_views, IMAGE_SIZE)
+    fl = lens(front_views, IMAGE_SIZE)
     print(
         f"wrist lens: rms {wl['rms_px']:.2f} px over {wl['views']} views; front lens: rms {fl['rms_px']:.2f} px over {fl['views']}"
     )
@@ -299,7 +308,11 @@ def main() -> None:
             "measured angle)",
             "method": "solve_cameras.py: calibrateCamera; Park-Martin hand-eye refined with every corner's reprojection",
             "date": datetime.date.today().isoformat(),
-            "log": [str(p.relative_to(ROOT)) for p in (args.lens_wrist, args.lens_front, args.scene)],
+            "log": [
+                str(p.resolve().relative_to(ROOT))
+                for p in (args.lens_wrist, args.lens_front, args.scene)
+                if p
+            ],
             "rms_px": {"wrist_lens": wl["rms_px"], "front_lens": fl["rms_px"], "wrist_scene": w["rms_px"]},
         }
         CALIB.write_text(json.dumps(calib, indent=2) + "\n")

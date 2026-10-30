@@ -174,6 +174,12 @@ def _still(a: dict, b: dict) -> bool:
     return max(np.hypot(pa[i][0] - pb[i][0], pa[i][1] - pb[i][1]) for i in common) < STILL_PX
 
 
+def _write_views(out: Path, cam: str, size, views: list[dict]) -> None:
+    (out / "views.json").write_text(
+        json.dumps({"camera": cam, "image_size": size, "views": views}, indent=1) + "\n"
+    )
+
+
 def capture_lens(robot, cam: str, n_views: int) -> Path:
     out = _out(f"lens-{cam}")
     views, kept, prev, size = [], {}, {}, None
@@ -197,15 +203,14 @@ def capture_lens(robot, cam: str, n_views: int) -> Path:
             views.append({"frame": f"{k:03d}.jpg", "boards": new})
             for n, d in new.items():
                 kept.setdefault(n, []).append(d)
+            _write_views(out, cam, size, views)  # after every view: however the capture ends, they're kept
             print(
                 f"  view {k + 1}/{n_views}: "
                 + ", ".join(f"{n} ({len(d['ids'])} corners)" for n, d in new.items())
             )
     except KeyboardInterrupt:
         print("\nended early")
-    (out / "views.json").write_text(
-        json.dumps({"camera": cam, "image_size": size, "views": views}, indent=1) + "\n"
-    )
+    _write_views(out, cam, size, views)
     print(f"{len(views)} views in {out}")
     return out
 
