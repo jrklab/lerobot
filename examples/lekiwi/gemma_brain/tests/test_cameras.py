@@ -19,6 +19,7 @@ from pathlib import Path
 
 import numpy as np
 from brain.cameras import Cameras, on_plane, to_image
+from common.arm import tool_orientation
 
 CAMS = Cameras.from_calib(json.loads((Path(__file__).parents[1] / "data" / "calib.json").read_text())["cameras"]["value"])
 FLOOR = -0.112  # the floor surface in the arm's frame (Oct 29)
@@ -38,7 +39,7 @@ def test_above_the_horizon_nothing_meets_the_floor_and_behind_nothing_is_seen():
 
 def test_the_wrist_camera_rides_the_tcp():
     tcp = np.eye(4)
-    tcp[:3, :3] = [[0, 0, 1], [0, 1, 0], [-1, 0, 0]]  # pointing down
+    tcp[:3, :3] = tool_orientation(0.25, 0.0, 90.0, 0.0)  # pointing down
     tcp[:3, 3] = [0.25, 0.0, FLOOR + 0.12]
     cam = CAMS.wrist_pose(tcp)
     uv = to_image(CAMS.wrist, cam, [0.25, 0.0, FLOOR])  # the floor under the TCP

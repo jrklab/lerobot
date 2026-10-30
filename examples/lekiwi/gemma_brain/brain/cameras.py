@@ -35,6 +35,19 @@ import cv2
 import numpy as np
 
 IMAGE_PX = np.array([640.0, 480.0])  # convention: the cameras' 640x480 frames
+UNDISTORT_CRITERIA = (
+    cv2.TERM_CRITERIA_COUNT | cv2.TERM_CRITERIA_EPS,
+    50,
+    1e-10,
+)  # convention: to convergence
+
+
+def _undistort(px: np.ndarray, K: np.ndarray, dist: np.ndarray) -> np.ndarray:
+    """Normalized image coordinates, iterated to UNDISTORT_CRITERIA: OpenCV 4 has it as
+    undistortPointsIter, OpenCV 5 (the brain's .venv) as undistortPoints' criteria."""
+    if hasattr(cv2, "undistortPointsIter"):
+        return cv2.undistortPointsIter(px, K, dist, None, None, UNDISTORT_CRITERIA)
+    return cv2.undistortPoints(px, K, dist, criteria=UNDISTORT_CRITERIA)
 
 
 @dataclass
@@ -45,7 +58,9 @@ class Lens:
     def ray(self, uv) -> np.ndarray:
         """The unit direction, in the camera's frame (x right, y down, z forward), of the image point uv."""
         px = (np.asarray(uv, float) * IMAGE_PX).reshape(1, 1, 2)
-        x, y = cv2.undistortPoints(px, self.K, self.dist).ravel()
+        # Iterated to convergence: OpenCV's default few iterations leave 0.1 px near the corners
+        # of these strongly barrel-distorted lenses (k1 ~ -0.43).
+        x, y = _undistort(px, self.K, self.dist).ravel()
         d = np.array([x, y, 1.0])
         return d / np.linalg.norm(d)
 
