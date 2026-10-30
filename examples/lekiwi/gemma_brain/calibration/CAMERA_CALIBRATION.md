@@ -121,6 +121,31 @@ started; `capture_cameras.py closeup` runs only the close-up (frames under `runs
 for the solve's `--closeup`). The hand-held lens capture (`capture_cameras.py lens --cam
 wrist|front`) is only a fallback for a camera the robot can't point at the boards.
 
+## Correcting the arm's joint zeros
+
+For an arm whose zeros were set less carefully (this one's are within the method's resolution,
+see Results). The capture is the same; the solve fits the shoulder lift, elbow and wrist flex
+zero offsets too and names those larger than their spread over the arm shapes:
+
+    .venv/bin/python calibration/solve_cameras.py --scene runs/<t1>-scene runs/<t2>-scene --fit-offsets
+
+    "to apply (larger than their spread): {'arm_elbow_flex': -9.0}"
+
+Then, on the Pi, write them into the robot's own calibration, so teleop, the Pi and the planner
+all read the corrected zeros:
+
+    sudo systemctl stop lekiwi-web
+    .venv/bin/python examples/lekiwi/web_server/apply_joint_offsets.py \
+        --port-name /dev/serial/by-id/usb-1a86_USB_Serial-if00-port0 --offsets arm_elbow_flex=-9.0
+    # the same with --write, once the printed change looks right: the arm goes limp, fold it first
+    sudo systemctl start lekiwi-web
+
+It moves each motor's Homing_Offset and position limits by the same ticks, in the motors and the
+calibration file together (LeKiwi refuses to start quietly when they differ), after backing the
+file up; `--restore <backup> --write` undoes it. Then capture and solve again: the offsets
+should come out within their spread. Pan and wrist roll can't be corrected this way (the boards
+can't tell their zeros).
+
 ## The arm poses
 
 38 poses in joint space around six anchors. Each anchor is a TCP pose solved once; each pose
@@ -176,7 +201,7 @@ repeatable run to run within ~0.5 deg, but moved up to 2.7 deg when one arm shap
 the play above, which the offsets can't remove. Fitting them lowered the error only from 4.0 to
 3.3 px. So the by-eye zeros are as good as this method can tell. For an arm whose zeros are set
 less carefully the fit does catch them: adding 5-10 deg errors to the recorded readings of a run,
-the solve found each again within 0.01 deg (`--fit-offsets` reports them and their spread).
+the solve found each again within 0.01 deg (see Correcting the arm's joint zeros).
 
 **The base.** The sweep's turns came out 3-8% short, more so turning left than right: wheel
 slip or friction more than a wrong base radius (5.0 cm wheels and 12.5 cm base radius are
