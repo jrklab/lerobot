@@ -30,6 +30,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -41,7 +42,7 @@ from auto_control import (  # noqa: E402
     AutoController,
     CommandRefused,
 )
-from joint_angles import JointAngles  # noqa: E402
+from joint_angles import JointAngles, shifted_calibration  # noqa: E402
 
 PERIOD = 1 / 30
 READY = dict.fromkeys(IK_ARM_JOINTS, 0.0)
@@ -50,8 +51,10 @@ READY = dict.fromkeys(IK_ARM_JOINTS, 0.0)
 # 0..100 deg open. Limits: that range clipped to the URDF's (the elbow to +/-96.8, the wrist
 # flex to +/-95).
 TICKS_PER_DEG = 4096 / 360
-SIM_CALIBRATION = {j: {"range_min": 2047 - 100 * TICKS_PER_DEG, "range_max": 2047 + 100 * TICKS_PER_DEG, "drive_mode": 0}
-                   for j in IK_ARM_JOINTS}
+SIM_CALIBRATION = {
+    j: {"range_min": 2047 - 100 * TICKS_PER_DEG, "range_max": 2047 + 100 * TICKS_PER_DEG, "drive_mode": 0}
+    for j in IK_ARM_JOINTS
+}
 SIM_CALIBRATION[GRIPPER] = {"range_min": 0.0, "range_max": 100 * TICKS_PER_DEG, "drive_mode": 0}
 SIM_ANGLES = JointAngles(SIM_CALIBRATION)
 
@@ -78,8 +81,15 @@ class Sim:
         state = {}
         for j, p in self.pos.items():
             lo, hi = self.walls.get(j, (-1e9, 1e9))
-            blocked = (self.targets[j] < lo - 1 and p <= lo + 0.5) or (self.targets[j] > hi + 1 and p >= hi - 0.5)
-            state[j] = {"pos": p, "load": 900.0 if blocked else 50.0, "speed": 0.0, "severity": 0.8 if blocked else 0.0}
+            blocked = (self.targets[j] < lo - 1 and p <= lo + 0.5) or (
+                self.targets[j] > hi + 1 and p >= hi - 0.5
+            )
+            state[j] = {
+                "pos": p,
+                "load": 900.0 if blocked else 50.0,
+                "speed": 0.0,
+                "severity": 0.8 if blocked else 0.0,
+            }
             state[j].update(self.extra.get(j, {}))
         return state
 
@@ -141,12 +151,16 @@ def test_trajectory_plays_back():
 
 def test_trajectory_too_fast_refused():
     sim = Sim()
-    refused(sim, {"cmd": "trajectory", "waypoints": [{"arm_shoulder_pan": 50.0}], "durations": [0.2]}, "deg/s")
+    refused(
+        sim, {"cmd": "trajectory", "waypoints": [{"arm_shoulder_pan": 50.0}], "durations": [0.2]}, "deg/s"
+    )
 
 
 def test_trajectory_out_of_range_refused():
     sim = Sim()
-    refused(sim, {"cmd": "trajectory", "waypoints": [{"arm_elbow_flex": 140.0}], "durations": [5.0]}, "outside")
+    refused(
+        sim, {"cmd": "trajectory", "waypoints": [{"arm_elbow_flex": 140.0}], "durations": [5.0]}, "outside"
+    )
 
 
 def test_trajectory_below_floor_refused():
@@ -212,7 +226,9 @@ def _watch(cmd_z, meas_z):
     for i, (zc, zm) in enumerate(zip(cmd_z, meas_z, strict=True)):
         # the targets carry a marker; the measured pose is rebuilt from joint_state without it
         auto._tcp_z = lambda js, zc=zc, zm=zm: zc if "commanded" in js else zm
-        how = auto._watch_contact(cmd, i * PERIOD, {**READY, "commanded": 0.0}, {j: {"pos": 0.0} for j in IK_ARM_JOINTS})
+        how = auto._watch_contact(
+            cmd, i * PERIOD, {**READY, "commanded": 0.0}, {j: {"pos": 0.0} for j in IK_ARM_JOINTS}
+        )
         if how:
             return how
     return ""
@@ -364,9 +380,11 @@ def test_joint_commands_must_be_in_degrees():
     # units would have its numbers read as degrees, so it's refused instead.
     sim = Sim()
     sim.auto.heartbeat()
-    for cmd in ({"cmd": "trajectory", "waypoints": [{"arm_shoulder_pan": 5.0}], "durations": [1.0]},
-                {"cmd": "joints", "targets": {"arm_shoulder_pan": 5.0}},
-                {"cmd": "gripper", "pos": 10}):
+    for cmd in (
+        {"cmd": "trajectory", "waypoints": [{"arm_shoulder_pan": 5.0}], "durations": [1.0]},
+        {"cmd": "joints", "targets": {"arm_shoulder_pan": 5.0}},
+        {"cmd": "gripper", "pos": 10},
+    ):
         try:
             sim.auto.submit(cmd)
         except CommandRefused as e:
@@ -381,7 +399,11 @@ def test_status_and_targets_are_degrees_the_bridge_keeps_units():
     # A real calibration (this arm's, Oct 28): 1 unit is 0.88-1.52 deg depending on the joint.
     import json
 
-    cal = json.loads((Path(__file__).parents[1] / "gemma_brain" / "tests" / "fixtures" / "arm_calibration.json").read_text())
+    cal = json.loads(
+        (
+            Path(__file__).parents[1] / "gemma_brain" / "tests" / "fixtures" / "arm_calibration.json"
+        ).read_text()
+    )
     angles = JointAngles(cal["joints"], cal["motor_resolution"])
     auto = AutoController(lambda: angles, clock=lambda: 0.0)
     units = dict.fromkeys(IK_ARM_JOINTS, 10.0) | {GRIPPER: 20.0}
@@ -437,3 +459,33 @@ def run_tests(namespace: dict) -> int:
 
 if __name__ == "__main__":
     sys.exit(run_tests(globals()))
+
+
+def _deg_at(joints: dict, joint: str, actual_ticks: int) -> float:
+    """The degrees the planner reads for a raw encoder position: Present_Position = actual -
+    Homing_Offset, normalized over the recorded range as LeRobot's bus does, then to degrees."""
+    c = joints[joint]
+    units = (actual_ticks - c["homing_offset"] - c["range_min"]) / (
+        c["range_max"] - c["range_min"]
+    ) * 200 - 100
+    return JointAngles(joints).to_deg(joint, units)
+
+
+def test_a_shifted_zero_reads_the_true_angle():
+    joints = {  # as the robot's calibration file has them (drive_mode 1: a reversed motor)
+        "arm_elbow_flex": {"drive_mode": 0, "homing_offset": 2014, "range_min": 914, "range_max": 3129},
+        "arm_wrist_flex": {"drive_mode": 1, "homing_offset": -1993, "range_min": 859, "range_max": 3171},
+    }
+    offsets = {"arm_elbow_flex": -8.0, "arm_wrist_flex": 5.0}
+    fixed = shifted_calibration(joints, offsets)
+    for joint, d in offsets.items():
+        for actual in (1200, 1700, 2600):  # physical positions, raw encoder ticks
+            assert abs(_deg_at(fixed, joint, actual) - _deg_at(joints, joint, actual) - d) < 0.1, joint
+        assert (
+            fixed[joint]["range_max"] - fixed[joint]["range_min"]
+            == joints[joint]["range_max"] - joints[joint]["range_min"]
+        )
+    with pytest.raises(ValueError):
+        shifted_calibration(joints, {"arm_gripper": 1.0})
+    with pytest.raises(ValueError):
+        shifted_calibration(joints, {"arm_elbow_flex": 90.0})  # range_max 3129 + 1024 > 4095

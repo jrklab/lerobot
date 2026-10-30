@@ -266,6 +266,14 @@ def offset_spread(records: list[dict], K, dist) -> dict | None:
     }
 
 
+def offsets_to_apply(offsets_deg: dict[str, float], spread_deg: dict[str, float]) -> dict[str, float]:
+    """The joint zero offsets worth writing into the robot: those larger than their spread over
+    the arm shapes left out in turn, i.e. larger than this method can resolve on this arm (Oct 29,
+    zeros set by eye: offsets <= 1.1 deg, spreads 1.1-2.7 deg, none applied; a zero set 5-10 deg
+    off is found within 0.01 deg and applied)."""
+    return {j: v for j, v in offsets_deg.items() if abs(v) > spread_deg[j]}
+
+
 # --- 3. the front camera ---
 
 
@@ -353,6 +361,12 @@ def main() -> None:
             for anchor, off in spread["without"].items():
                 print(f"    without {anchor:12s}", {j: round(v, 2) for j, v in off.items()})
             print("  spread (max - min, deg):", {j: round(v, 2) for j, v in spread["spread_deg"].items()})
+            apply = offsets_to_apply(w["joint_offsets_deg"], spread["spread_deg"])
+            print(
+                "  to apply (larger than their spread):",
+                {j: round(v, 2) for j, v in apply.items()}
+                or "none: the arm's zeros are as good as this can tell",
+            )
     # The front camera: one estimate per scene, through that scene's floor board, then their mean.
     fronts = [
         solve_front(
@@ -408,6 +422,9 @@ def main() -> None:
             ],
             "rms_px": {"wrist_lens": wl["rms_px"], "front_lens": fl["rms_px"], "wrist_scene": w["rms_px"]},
             "offset_spread_deg": spread["spread_deg"] if spread else None,
+            "offsets_to_apply_deg": offsets_to_apply(w["joint_offsets_deg"], spread["spread_deg"])
+            if spread
+            else {},
         }
         CALIB.write_text(json.dumps(calib, indent=2) + "\n")
         print(f"wrote {CALIB}")

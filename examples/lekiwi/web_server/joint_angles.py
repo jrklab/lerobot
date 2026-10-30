@@ -46,7 +46,9 @@ import so101_kinematics as kin
 
 GRIPPER = "arm_gripper"
 IK_ARM_JOINTS = [f"arm_{name}" for name in kin.JOINT_NAMES]
-URDF_LIMITS_DEG = {f"arm_{n}": (math.degrees(lo), math.degrees(hi)) for n, (lo, hi) in kin.JOINT_LIMITS.items()}
+URDF_LIMITS_DEG = {
+    f"arm_{n}": (math.degrees(lo), math.degrees(hi)) for n, (lo, hi) in kin.JOINT_LIMITS.items()
+}
 UNCALIBRATED_DEG_PER_UNIT = 1.8  # +/-100 units = +/-180 deg
 
 
@@ -90,3 +92,26 @@ class JointAngles:
         lo, hi = sorted((self.to_deg(joint, -100.0), self.to_deg(joint, 100.0)))
         ulo, uhi = URDF_LIMITS_DEG.get(joint, (-math.inf, math.inf))
         return max(lo, ulo), min(hi, uhi)
+
+
+def shifted_calibration(
+    joints: dict[str, dict], offsets_deg: dict[str, float], resolution: int = 4096
+) -> dict:
+    """The motor calibration with these joints' zeros corrected: a joint read d degrees short of
+    its true angle (offset +d, as solve_cameras.py --fit-offsets measures it) gets readings d
+    degrees higher. A Feetech motor reports Present_Position = Actual_Position - Homing_Offset,
+    and its recorded range and position limits are in those reported ticks, so all three move
+    by the same number of ticks (the sign flipped for a reversed drive_mode). Refuses the
+    gripper (not in the arm model) and a range pushed outside 0..resolution-1."""
+    out = {j: dict(c) for j, c in joints.items()}
+    for joint, d in offsets_deg.items():
+        if joint == GRIPPER or joint not in out:
+            raise ValueError(f"no zero to correct for {joint!r}")
+        c = out[joint]
+        ticks = round((-d if c["drive_mode"] else d) * resolution / 360.0)
+        c["homing_offset"] -= ticks
+        c["range_min"] += ticks
+        c["range_max"] += ticks
+        if c["range_min"] < 0 or c["range_max"] > resolution - 1:
+            raise ValueError(f"{joint}: shifting by {ticks} ticks puts its range outside 0..{resolution - 1}")
+    return out

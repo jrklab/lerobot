@@ -329,3 +329,11 @@ def test_the_closeup_is_skipped_without_a_side_board(tmp_path, monkeypatch):
     world.board = None
     monkeypatch.setattr(capture_cameras, "board_ahead", world.ahead)
     assert capture_cameras.capture_closeup(world, tmp_path, cams={}) == ([], None)
+
+
+def test_only_offsets_larger_than_their_spread_are_applied():
+    spread = {"arm_shoulder_lift": 1.1, "arm_elbow_flex": 2.7, "arm_wrist_flex": 2.5}  # Oct 29
+    by_eye = {"arm_shoulder_lift": 0.9, "arm_elbow_flex": -1.0, "arm_wrist_flex": -1.1}
+    assert sc.offsets_to_apply(by_eye, spread) == {}
+    sloppy = {"arm_shoulder_lift": 0.9, "arm_elbow_flex": -9.0, "arm_wrist_flex": 6.0}
+    assert sc.offsets_to_apply(sloppy, spread) == {"arm_elbow_flex": -9.0, "arm_wrist_flex": 6.0}
