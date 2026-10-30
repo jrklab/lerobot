@@ -34,7 +34,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -183,8 +182,8 @@ def main() -> None:
     df = load_episode(args.dataset, args.episode)
     c = json.loads(args.calibration.read_text())
     calib = Calibration(c["joints"], c.get("motor_resolution", 4096))
-    joints = df[[f"{j}.pos" for j in JOINTS]].values
-    tcp = np.stack([calib.fk(dict(zip(JOINTS, row, strict=True))) for row in joints])
+    joints = df[[f"{j}.pos" for j in JOINTS]].values  # LeRobot's normalized units, as recorded
+    tcp = np.stack([calib.fk(calib.from_units(dict(zip(JOINTS, row, strict=True)))) for row in joints])
     z = tcp[:, 2, 3]
     kf = find_keyframes(joints, z)
 
@@ -204,7 +203,11 @@ def main() -> None:
     out["floor_z_m_est"] = float(z[kf.close_end] - prm.GRASP_LIFT_M.value)  # the demo closes near the floor
     out["descend_m"] = float(z[kf.hover] - z[kf.close_end]) if kf.hover is not None else None
     out["lift_m"] = float(z[kf.lift] - z[kf.close_end]) if kf.lift is not None else None
-    out["roll_deg_at_close"] = math.degrees(calib.to_rad("arm_wrist_roll", joints[kf.close_end, 4]))
+    out["roll_deg_at_close"] = calib.to_deg("arm_wrist_roll", joints[kf.close_end, 4])
+    # The gripper in degrees open from closed, as the robot is commanded since Oct 29 (the
+    # unit values above stay for the record).
+    out["open_width_deg"] = calib.to_deg("arm_gripper", out["open_width"])
+    out["closed_width_deg"] = calib.to_deg("arm_gripper", out["closed_width"])
     base = np.abs(df[["x.vel", "y.vel"]].values).max(axis=1) > 0.005
     out["base_moved_between_close_and_release"] = bool(base[kf.close_end : kf.pre_release or len(df)].any())
     if kf.pre_release is not None:
@@ -230,7 +233,7 @@ def main() -> None:
             if a.value is not None:
                 box, _ = snap_box(jpeg, a.value, what=args.target)
                 ang = brick_angle(jpeg, box)
-                roll = math.degrees(calib.to_rad("arm_wrist_roll", joints[kf.hover, 4]))
+                roll = calib.to_deg("arm_wrist_roll", joints[kf.hover, 4])
                 out["hover_view"] = {"video_frame": k, "box": [round(v, 4) for v in box],
                                      "brick_angle_deg": None if ang is None else round(ang["angle_deg"], 1), "aspect": None if ang is None else round(ang["aspect"], 2), "roll_deg": round(roll, 1)}
                 if ang:

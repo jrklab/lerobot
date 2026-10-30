@@ -57,7 +57,7 @@ def demo_place_view() -> tuple[list[float], float] | None:
 
 
 # --- DEMO (the owner's Oct 27 pick_cup demo; re-extract after the joint-zero fix for heights) ---
-OPEN_WIDTH = Param(_demo("open_width", 25.0), "DEMO", "gripper opening before a grasp (demo opened to 24.6)")
+OPEN_WIDTH = Param(_demo("open_width_deg", 32.1), "DEMO", "gripper opening before a grasp, deg open from closed (demo: 32.1; 24.6 normalized units until Oct 29)")
 LIFT_M = Param(_demo("lift_m", 0.09), "DEMO", "lift after the grasp (demo: 9.5 cm)")
 RELEASE_ABOVE_FLOOR_M = Param(_demo("release_z_above_floor_m", 0.06), "DEMO",
                               "TCP height above the floor at release inside a cup (demo: 5.9 cm)")
@@ -72,7 +72,7 @@ BASE_STOP_SHORT_M = Param(0.01, "SPEC", "the Pi ends a base drive within this of
 BASE_TURN_MAX_DEG = Param(180.0, "SPEC", "the Pi refuses a base turn over this in one command (auto_control: 1 m per axis, 180 deg)")
 BASE_TURN_STOP_SHORT_DEG = Param(2.0, "SPEC", "the Pi ends a base turn within this of its goal (auto_control.BASE_THETA_TOL_DEG): turns stopped ~2 deg short")
 CONTROL_PERIOD_S = Param(1 / 30, "SPEC", "the Pi reads the joints once per control tick (web_server/robot_bridge.py FPS 30): status reads closer together can return the same sample")
-GRIPPER_EMPTY_MAX = Param(3.5, "SPEC", "closed on nothing reads 1.3-2.1; on the brick's 16 mm side 6.7-7.0")
+GRIPPER_EMPTY_MAX = Param(4.6, "SPEC", "deg open: closed on nothing reads 1.7-2.7; on the brick's 16 mm side 8.7-9.1 (3.5, 1.3-2.1 and 6.7-7.0 normalized units until Oct 29)")
 
 # --- RULE ---
 GRASP_LIFT_M = Param(0.004, "RULE", "jaw tips above the floor when closing: inside the brick's lower half")
@@ -94,7 +94,7 @@ ROLL_FROM_REST_DEG = Param(90.0, "RULE", "the wrist-roll joint stays within this
 SERVO_MAX_LOOKS = Param(8, "RULE", "looks per servo before giving up")
 MIN_BASE_TURN_DEG = Param(3.0, "RULE", "smallest base turn that moves: the Pi finishes turns under 2 deg without moving")
 LOW_MOVE_GUARD_M = Param(0.002, "RULE", "below a low move's lowest point the Pi's z_min sits this much lower: room for servo jitter, not for the jaws")
-CLOSE_SPEED = Param(30.0, "RULE", "gripper closing speed (units/s): slow enough for the Pi's stall detection to stop on the brick")
+CLOSE_SPEED = Param(39.0, "RULE", "gripper closing speed (deg/s; 30 units/s until Oct 29): slow enough for the Pi's stall detection to stop on the brick")
 LOOK_SETTLE_S = Param(0.3, "RULE", "longest wait after a move before a frame (servo settling); after an arm move it ends once the measured TCP stops (skills._settle)")
 PICK_TRIES = Param(3, "RULE", "a pick step retries this many times in code before the planner replans (owner's choice, Oct 24)")
 MAX_REPLANS = Param(2, "RULE", "replans per task before giving up")

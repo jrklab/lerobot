@@ -161,15 +161,24 @@ def test_container_looks_ask_for_its_rim(monkeypatch):
 def test_the_roll_ranges_ends_are_moves_the_planner_accepts():
     # Oct 28 full task: a brick at 15 deg, the range ending at ~14: the roll clamped to the end
     # was refused six times (the joint at 100.4, the planner's limit 99).
-    # The robot's own calibration (the sim's uncalibrated one gives a different range):
+    # The robot's own calibration, on both sides (the planner's limits and the simulated Pi's).
+    # Oct 29 trial 2: at the range's end, a centring step 1.4 cm further out was refused (the
+    # same roll needs a slightly different joint there): both ends must also hold within the
+    # line-up's tolerance of the reach point.
+    from brain import params as prm
 
     cal = Calibration(*_real_cal())
-    sim = Sim(floor_z=-0.12)
-    sk = Skills(SimRobot(sim), Arm(SimRobot(sim), cal, body_check=False), geom(-0.12))
-    assert actions.hover(sk).ok
-    for end in sk.roll_range:
+    for end_i in (0, 1):
+        sim = Sim(floor_z=-0.12, angles=cal)
+        sk = Skills(SimRobot(sim), Arm(SimRobot(sim), cal, body_check=False), geom(-0.12))
+        assert actions.hover(sk).ok
+        end = sk.roll_range[end_i]
         r = sk.move("arm", delta=(0.0, 0.0, 0.0), roll=end)
         assert r.ok, (end, r.reason)
+        tol = prm.REACH_TOL_M.value
+        for dx in (tol, -2 * tol):  # out to the tolerance, then back in past the reach point by it
+            r = sk.move("arm", delta=(dx, 0.0, 0.0))
+            assert r.ok, (end, dx, r.reason)
 
 def test_only_the_pis_check_refusals_count_as_refused():
     from brain.primitives import pi_refused

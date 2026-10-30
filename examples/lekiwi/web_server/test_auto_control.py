@@ -20,8 +20,9 @@
 
 The simulation (Sim, also used by gemma_brain/tests/test_arm.py): each joint moves toward its
 target at a capped speed, or is blocked at a "wall" (which then reports a stall); the base's
-measured velocity is its command. Joint units map to radians as +/-100 units = +/-180 deg,
-RobotBridge's uncalibrated fallback.
+measured velocity is its command. It stands in for RobotBridge, so it works in normalized
+units, under SIM_CALIBRATION: one unit is exactly one degree, so its positions and the
+controller's degrees read the same here, while every value still goes through joint_angles.
 """
 
 import math
@@ -33,18 +34,35 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).parent))
 
 import so101_kinematics as kin  # noqa: E402
-from auto_control import GRIPPER, HEARTBEAT_TIMEOUT_S, IK_ARM_JOINTS, AutoController, CommandRefused  # noqa: E402
+from auto_control import (  # noqa: E402
+    GRIPPER,
+    HEARTBEAT_TIMEOUT_S,
+    IK_ARM_JOINTS,
+    AutoController,
+    CommandRefused,
+)
+from joint_angles import JointAngles  # noqa: E402
 
 PERIOD = 1 / 30
 READY = dict.fromkeys(IK_ARM_JOINTS, 0.0)
 
+# Arm joints: -100..100 units = -100..100 deg about the homing tick; gripper: 0..100 units =
+# 0..100 deg open. Limits: that range clipped to the URDF's (the elbow to +/-96.8, the wrist
+# flex to +/-95).
+TICKS_PER_DEG = 4096 / 360
+SIM_CALIBRATION = {j: {"range_min": 2047 - 100 * TICKS_PER_DEG, "range_max": 2047 + 100 * TICKS_PER_DEG, "drive_mode": 0}
+                   for j in IK_ARM_JOINTS}
+SIM_CALIBRATION[GRIPPER] = {"range_min": 0.0, "range_max": 100 * TICKS_PER_DEG, "drive_mode": 0}
+SIM_ANGLES = JointAngles(SIM_CALIBRATION)
+
 
 def norm_to_rad(joint, norm):
-    return math.radians(norm / 100.0 * 180.0)
+    return math.radians(SIM_ANGLES.to_deg(joint, norm))
 
 
 class Sim:
-    def __init__(self, start=None, floor_z=None):
+    def __init__(self, start=None, floor_z=None, angles=None):
+        """angles: the calibration the simulated bridge's units follow (SIM_ANGLES: 1 unit = 1 deg)."""
         self.floor_z = floor_z  # if set, the TCP can't go below it (the arm stops, like on a floor)
         self.pos = dict(start or {**READY, GRIPPER: 50.0})
         self.targets = dict(self.pos)
@@ -52,7 +70,8 @@ class Sim:
         self.extra = {}  # joint -> extra joint_state readings, e.g. the gripper's temperature
         self.base_cmd = {"x.vel": 0.0, "y.vel": 0.0, "theta.vel": 0.0}
         self.t = 0.0
-        self.auto = AutoController(norm_to_rad, clock=lambda: self.t)
+        self.angles = angles or SIM_ANGLES
+        self.auto = AutoController(lambda: self.angles, clock=lambda: self.t)
         self.run(0.1)  # a few ticks so the controller has seen the arm's targets
 
     def joint_state(self):
@@ -88,8 +107,9 @@ class Sim:
         raise AssertionError("command never finished")
 
     def submit(self, cmd):
+        """A planner on this version: joint positions in degrees."""
         self.auto.heartbeat()
-        return self.auto.submit(cmd)
+        return self.auto.submit({"units": "deg", **cmd})
 
     def command(self):
         return self.auto.status(dict(self.pos))["command"]
@@ -121,7 +141,7 @@ def test_trajectory_plays_back():
 
 def test_trajectory_too_fast_refused():
     sim = Sim()
-    refused(sim, {"cmd": "trajectory", "waypoints": [{"arm_shoulder_pan": 50.0}], "durations": [0.2]}, "units/s")
+    refused(sim, {"cmd": "trajectory", "waypoints": [{"arm_shoulder_pan": 50.0}], "durations": [0.2]}, "deg/s")
 
 
 def test_trajectory_out_of_range_refused():
@@ -131,9 +151,9 @@ def test_trajectory_out_of_range_refused():
 
 def test_trajectory_below_floor_refused():
     sim = Sim()
-    # Wrist flexed 50 units (90 deg) points the TCP down from the ready pose, to z ~0.075;
-    # with z_min above that the Pi's FK check must refuse it.
-    cmd = {"cmd": "trajectory", "waypoints": [{"arm_wrist_flex": 50.0}], "durations": [2.0], "z_min": 0.1}
+    # Wrist flexed 90 deg points the TCP down from the ready pose, to z ~0.075; with z_min
+    # above that the Pi's FK check must refuse it.
+    cmd = {"cmd": "trajectory", "waypoints": [{"arm_wrist_flex": 90.0}], "durations": [2.0], "z_min": 0.1}
     refused(sim, cmd, "below z_min")
 
 
@@ -147,7 +167,7 @@ def test_floor_checked_between_waypoints():
 
 def test_done_reports_settle_error():
     sim = Sim()
-    sim.walls["arm_shoulder_pan"] = (-1e9, 6.0)  # sags 4 units short of 10, no stall reported
+    sim.walls["arm_shoulder_pan"] = (-1e9, 6.0)  # sags 4 deg short of 10, no stall reported
     orig = sim.joint_state
 
     def no_stall():
@@ -178,7 +198,7 @@ def test_joints_move_is_smooth_and_capped():
 def test_contact_stops_and_holds_measured_pose():
     sim = Sim()
     lift = "arm_shoulder_lift"
-    sim.walls[lift] = (-1e9, sim.pos[lift] + 5.0)  # the arm can only move 5 units further
+    sim.walls[lift] = (-1e9, sim.pos[lift] + 5.0)  # the arm can only move 5 deg further
     sim.submit({"cmd": "joints", "targets": {lift: sim.pos[lift] + 40.0}, "speed": 30, "z_min": -1.0})
     st = sim.run_until_done()
     assert st["state"] == "failed" and ("stall" in st["reason"] or "tracking" in st["reason"]), st
@@ -187,7 +207,7 @@ def test_contact_stops_and_holds_measured_pose():
 
 def _watch(cmd_z, meas_z):
     """Run AutoController._watch_contact over two height tracks (one per tick)."""
-    auto = AutoController(norm_to_rad, clock=lambda: 0.0)
+    auto = AutoController(lambda: SIM_ANGLES, clock=lambda: 0.0)
     cmd = {"watch": [], "contact_gap_m": 0.0015}
     for i, (zc, zm) in enumerate(zip(cmd_z, meas_z, strict=True)):
         # the targets carry a marker; the measured pose is rebuilt from joint_state without it
@@ -257,7 +277,7 @@ def test_heartbeat_required_to_start():
     sim = Sim()
     sim.t += 5.0  # no heartbeat for 5 s
     try:
-        sim.auto.submit({"cmd": "gripper", "pos": 10})
+        sim.auto.submit({"cmd": "gripper", "pos": 10, "units": "deg"})
     except CommandRefused as e:
         assert "heartbeat" in str(e)
     else:
@@ -273,7 +293,7 @@ def test_busy_refused():
 
 def test_gripper_stalls_on_object():
     sim = Sim()
-    sim.walls[GRIPPER] = (22.0, 1e9)  # a block 22 units wide
+    sim.walls[GRIPPER] = (22.0, 1e9)  # a block the jaws meet 22 deg open
     sim.submit({"cmd": "gripper", "pos": 0, "speed": 50})
     st = sim.run_until_done()
     assert st["state"] == "done" and st["result"]["stalled"], st
@@ -288,7 +308,7 @@ def test_gripper_closes_empty():
 
 
 def holding_sim(temp=40.0):
-    """A sim whose gripper has just closed and stalled on a block 22 units wide."""
+    """A sim whose gripper has just closed and stalled on a block, 22 deg open."""
     sim = Sim()
     sim.walls[GRIPPER] = (22.0, 1e9)
     sim.extra[GRIPPER] = {"temp": temp}
@@ -306,7 +326,7 @@ def test_hold_stays_holding_while_the_block_is_there():
     sim = holding_sim()
     sim.run(3.0)
     h = hold(sim)
-    assert h["state"] == "holding" and h["squeeze"] == 4.0 and 21.0 <= h["pos"] <= 23.0, h
+    assert h["state"] == "holding" and h["squeeze"] == 5.0 and 21.0 <= h["pos"] <= 23.0, h
     assert h["events"] == [], h
 
 
@@ -322,7 +342,7 @@ def test_hold_spots_a_drop():
 def test_temperature_eases_then_stops_the_squeeze():
     sim = holding_sim(temp=56.0)
     sim.run(0.2)
-    assert hold(sim)["squeeze"] == 2.0, hold(sim)
+    assert hold(sim)["squeeze"] == 2.6, hold(sim)
     sim.extra[GRIPPER]["temp"] = 63.0
     sim.run(0.2)
     h = hold(sim)
@@ -337,6 +357,41 @@ def test_a_new_gripper_command_ends_the_hold():
     sim.walls.pop(GRIPPER)
     st = sim.run_until_done()
     assert st["state"] == "done" and hold(sim) is None, (st, hold(sim))
+
+
+def test_joint_commands_must_be_in_degrees():
+    # Oct 29: the interface moved from normalized units to degrees; a planner still sending
+    # units would have its numbers read as degrees, so it's refused instead.
+    sim = Sim()
+    sim.auto.heartbeat()
+    for cmd in ({"cmd": "trajectory", "waypoints": [{"arm_shoulder_pan": 5.0}], "durations": [1.0]},
+                {"cmd": "joints", "targets": {"arm_shoulder_pan": 5.0}},
+                {"cmd": "gripper", "pos": 10}):
+        try:
+            sim.auto.submit(cmd)
+        except CommandRefused as e:
+            assert "degrees" in str(e), e
+        else:
+            raise AssertionError(f"accepted {cmd} without units")
+    st = sim.auto.status(dict(sim.pos))
+    assert st["joint_units"] == "deg"
+
+
+def test_status_and_targets_are_degrees_the_bridge_keeps_units():
+    # A real calibration (this arm's, Oct 28): 1 unit is 0.88-1.52 deg depending on the joint.
+    import json
+
+    cal = json.loads((Path(__file__).parents[1] / "gemma_brain" / "tests" / "fixtures" / "arm_calibration.json").read_text())
+    angles = JointAngles(cal["joints"], cal["motor_resolution"])
+    auto = AutoController(lambda: angles, clock=lambda: 0.0)
+    units = dict.fromkeys(IK_ARM_JOINTS, 10.0) | {GRIPPER: 20.0}
+    targets = dict(units)
+    auto.step(0.0, targets, {j: {"pos": v} for j, v in units.items()}, {})
+    assert all(abs(targets[j] - units[j]) < 1e-9 for j in units)  # no command: the bridge's units untouched
+    st = auto.status(units)
+    for j in units:
+        assert abs(st["joints"][j] - angles.to_deg(j, units[j])) < 1e-9
+    assert abs(st["joints"]["arm_elbow_flex"] - 10.0 * 0.980) > 5  # degrees, not the units
 
 
 def test_base_move_relative():

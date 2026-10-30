@@ -16,9 +16,10 @@
 
 """Arm planning on the Mac: IK, straight-line end-effector paths, named poses, arm reset.
 
-Plans become joint-space trajectories (normalized joint units, the same calibration
-conversion the Pi uses, fetched from /auto/calibration) that the Pi only validates and
-plays back (web_server/auto_control.py).
+Plans become joint-space trajectories in degrees (web_server/joint_angles.py: arm joints from
+the homing tick, the URDF's zero; the gripper's opening from closed), checked against the same
+joint limits as the Pi (the robot's recorded range clipped to the URDF's, from
+/auto/calibration), that the Pi only validates and plays back (web_server/auto_control.py).
 
 Frames: the arm base frame of so101_kinematics, metres: +X forward, +Y left, +Z up. The
 TCP's local +Z is the gripper's approach direction.
@@ -35,23 +36,32 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "web_server"))
 
 import so101_kinematics as kin  # noqa: E402
-from auto_control import JOINT_RANGE, MAX_JOINT_SPEED  # noqa: E402
+from auto_control import MAX_JOINT_SPEED  # noqa: E402
+from joint_angles import JointAngles  # noqa: E402
 
 IK_ARM_JOINTS = [f"arm_{name}" for name in kin.JOINT_NAMES]
 GRIPPER = "arm_gripper"
 
-# Named poses (normalized units). "rest" is the folded stow pose (RobotBridge's
-# ARM_NEUTRAL_POS, what the gamepad's reset button uses); "ready" is all zeros: reaching
-# forward and slightly up, clear of every joint limit.
+# Named poses, degrees. "rest" is the folded stow pose (RobotBridge's ARM_NEUTRAL_POS, what the
+# gamepad's reset button uses); "ready" reaches forward and slightly up, clear of every joint
+# limit. Until Oct 29 they were in normalized units (rest: 0, -98, 99, 75, 52; ready: all 0);
+# these are the same physical poses, converted with the Oct 28 calibration, so they stay put
+# when a joint's range is recalibrated.
 NAMED_POSES: dict[str, dict[str, float]] = {
     "rest": {
-        "arm_shoulder_pan": 0.0,
-        "arm_shoulder_lift": -98.0,
-        "arm_elbow_flex": 99.0,
-        "arm_wrist_flex": 75.0,
-        "arm_wrist_roll": 52.0,
+        "arm_shoulder_pan": -1.23,
+        "arm_shoulder_lift": -99.77,
+        "arm_elbow_flex": 81.29,
+        "arm_wrist_flex": 52.65,
+        "arm_wrist_roll": 88.25,
     },
-    "ready": dict.fromkeys(IK_ARM_JOINTS, 0.0),
+    "ready": {
+        "arm_shoulder_pan": -1.23,
+        "arm_shoulder_lift": 2.81,
+        "arm_elbow_flex": -15.69,
+        "arm_wrist_flex": -13.27,
+        "arm_wrist_roll": 9.14,
+    },
 }
 
 # Waypoint spacing along a straight-line move. Joint-space interpolation between waypoints
@@ -66,9 +76,9 @@ IK_POS_TOL_M = 0.005
 IK_ROT_TOL_DEG = 6.0
 DEFAULT_EE_SPEED = 0.04  # m/s
 EE_ACCEL_MPS2 = 0.15  # straight-line moves speed up and slow down at this rate
-# Joint-space moves through free space (direct pose changes, reset): ~53 deg/s, under the
-# Pi's 60 units/s cap with room for its smoothstep (1.5x peak over average: the Pi caps the
-# average at 40). Was 15-20 units/s.
+# Joint-space moves through free space (direct pose changes, reset), deg/s: under the Pi's
+# 60 deg/s cap with room for its smoothstep (1.5x peak over average: the Pi caps the average
+# at 40). Was 35 units/s (31-53 deg/s).
 FREE_JOINT_SPEED = 35.0
 # A body keep-out for the clearance check: arm points past the elbow may not come back over
 # the robot (x below BODY_FRONT_X in the arm base frame) lower than BODY_TOP_Z.
@@ -78,8 +88,8 @@ MAX_EE_SPEED = 0.08
 # Joint speed budget for planned paths, below the Pi's hard cap so a plan is never refused
 # for a rounding-level overshoot.
 PLAN_JOINT_SPEED = 0.9 * MAX_JOINT_SPEED
-# Within this (normalized units, every joint) of a named pose counts as being at it.
-AT_POSE_UNITS = 3.0
+# Within this (degrees, every joint) of a named pose counts as being at it.
+AT_POSE_DEG = 3.0
 # Height the TCP is lifted to before reset() swings the arm home.
 RESET_SAFE_Z_M = 0.10
 # Floor height (jaw tips at contact) in the arm base frame. Measured again with the homing-tick joint zero (Oct 27): the vertical floor probes put the
@@ -93,54 +103,36 @@ FLOOR_CLEARANCE_M = 0.02
 # probe: contact at TCP z -0.113 against a floor at -0.100).
 JAW_TIP_OFFSET_M = 0.015
 CLEARANCE_SAMPLES = 40
-# A planned joint stays this far (joint units) inside its range.
-JOINT_LIMIT_MARGIN = 1.0
+# A planned joint stays this far (degrees) inside its limits (was 1 unit: 0.9-1.5 deg); the Pi
+# accepts up to the limits themselves.
+JOINT_LIMIT_MARGIN_DEG = 1.5
 
 
 class PlanError(ValueError):
     """No safe plan; nothing was sent to the robot."""
 
 
-class Calibration:
-    """Normalized joint units <-> radians, the same conversion as RobotBridge's
-    _joint_norm_to_rad(). Zero is the homing tick, half a turn (2047 of 4096): LeRobot's
-    calibration writes each motor's Homing_Offset so the pose held at "middle of its range"
-    reads that tick (set_half_turn_homings), and that pose is so101_new_calib.urdf's zero.
-    Until Oct 27 zero was the recorded range's midpoint, which on this arm is 15.7 deg off on
-    the elbow and 13.3 on the wrist (the ranges aren't centred on the homing pose): the model's
-    "straight down" leaned ~26-30 deg (owner's vertical teach poses read 58.7 and 62.4 deg)."""
-
-    def __init__(self, joints: dict[str, dict] | None = None, motor_resolution: int = 4096):
-        self.joints = joints or {}
-        self.resolution = motor_resolution
-        self.zero_tick = (motor_resolution - 1) // 2  # the half-turn homing tick
+class Calibration(JointAngles):
+    """This robot's joint calibration (the Pi's /auto/calibration) as web_server/joint_angles.py
+    reads it: degrees from the homing tick (the URDF's zero; the recorded range's midpoint, used
+    until Oct 27, leaned the model's "straight down" ~26-30 deg), the joint limits, and, for
+    data recorded in LeRobot's normalized units (teleop demos), to_deg()."""
 
     @classmethod
     def from_robot(cls, robot) -> Calibration:
         c = robot.calibration()
         return cls(c.get("joints"), c.get("motor_resolution", 4096))
 
-    def to_rad(self, joint: str, norm: float) -> float:
-        c = self.joints.get(joint)
-        if not c:
-            return math.radians(norm / 100.0 * 180.0)
-        ticks = c["range_min"] + (norm + 100.0) / 200.0 * (c["range_max"] - c["range_min"])
-        rad = (ticks - self.zero_tick) * (2.0 * math.pi / self.resolution)
-        return -rad if c["drive_mode"] else rad
+    def q(self, joints_deg: dict[str, float]) -> np.ndarray:
+        """Joint angles (radians, the arm model's order) from joints in degrees."""
+        return np.radians([joints_deg[j] for j in IK_ARM_JOINTS])
 
-    def to_norm(self, joint: str, rad: float) -> float:
-        c = self.joints.get(joint)
-        if not c:
-            return math.degrees(rad) / 180.0 * 100.0
-        rad = -rad if c["drive_mode"] else rad
-        ticks = rad / (2.0 * math.pi / self.resolution) + self.zero_tick
-        return (ticks - c["range_min"]) / (c["range_max"] - c["range_min"]) * 200.0 - 100.0
+    def fk(self, joints_deg: dict[str, float]) -> np.ndarray:
+        return kin.forward_kinematics(self.q(joints_deg))
 
-    def q(self, joints: dict[str, float]) -> np.ndarray:
-        return np.array([self.to_rad(j, joints[j]) for j in IK_ARM_JOINTS])
-
-    def fk(self, joints: dict[str, float]) -> np.ndarray:
-        return kin.forward_kinematics(self.q(joints))
+    def from_units(self, joints_units: dict[str, float]) -> dict[str, float]:
+        """Joints recorded in normalized units (a LeRobot dataset) in degrees."""
+        return {j: self.to_deg(j, v) for j, v in joints_units.items()}
 
 
 def arm_points(q: np.ndarray) -> np.ndarray:
@@ -206,7 +198,7 @@ def plan_ee_line(
     speed: float = DEFAULT_EE_SPEED,
     z_min: float = -0.05,
 ) -> tuple[list[dict[str, float]], list[float]]:
-    """A straight TCP line from the pose of `start` (normalized joints) to goal_xyz, as a
+    """A straight TCP line from the pose of `start` (joints in degrees) to goal_xyz, as a
     trajectory: (waypoints, durations). Every waypoint is solved by IK and checked (position
     error, joint limits, z_min). With pitch_deg, the orientation is interpolated in pitch and
     roll toward it (each waypoint facing its own azimuth), never by a free rotation blend,
@@ -257,11 +249,11 @@ def plan_ee_line(
                 raise PlanError(f"goal orientation unreachable (off by {rerr:.1f} deg)")
         wp = {}
         for j, rad in zip(IK_ARM_JOINTS, q, strict=True):
-            norm = calib.to_norm(j, float(rad))
-            lo, hi = JOINT_RANGE[j]
-            if not lo + JOINT_LIMIT_MARGIN <= norm <= hi - JOINT_LIMIT_MARGIN:
-                raise PlanError(f"{j} would hit its limit ({norm:.1f}) {where}")
-            wp[j] = norm
+            deg = math.degrees(float(rad))
+            lo, hi = calib.limits(j)
+            if not lo + JOINT_LIMIT_MARGIN_DEG <= deg <= hi - JOINT_LIMIT_MARGIN_DEG:
+                raise PlanError(f"{j} would hit its limit ({deg:.1f} deg, limits {lo:.1f}..{hi:.1f}) {where}")
+            wp[j] = deg
         spans.append(max(abs(wp[j] - prev[j]) for j in IK_ARM_JOINTS))
         waypoints.append(wp)
         prev = wp
@@ -394,7 +386,7 @@ class Arm:
         if to not in ("rest", "ready"):
             raise PlanError("reset: 'to' must be 'rest' or 'ready'")
         cur = self.targets()
-        if all(abs(cur[j] - v) < AT_POSE_UNITS for j, v in NAMED_POSES[to].items()):
+        if all(abs(cur[j] - v) < AT_POSE_DEG for j, v in NAMED_POSES[to].items()):
             return  # already there: no lift-and-swing (it used to unfold and refold the arm)
         try:
             # Straight there in one joint move when that sweep clears the floor and the body

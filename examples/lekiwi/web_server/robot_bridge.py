@@ -34,6 +34,7 @@ import numpy as np
 
 import so101_kinematics as kin
 from auto_control import AutoController
+from joint_angles import JointAngles
 from episode_recorder import EpisodeRecorder
 
 logger = logging.getLogger(__name__)
@@ -308,7 +309,8 @@ class RobotBridge:
         # a frame taken after a motion finished (see get_jpeg_frame_after()).
         self._latest_jpeg_time: dict[str, float] = {}
         self._latest_base_vel = {"x.vel": 0.0, "y.vel": 0.0, "theta.vel": 0.0}
-        self._auto = AutoController(self._joint_norm_to_rad)
+        # The auto interface works in degrees (joint_angles.py) from this robot's calibration.
+        self._auto = AutoController(lambda: JointAngles(self.get_arm_calibration(), MOTOR_RESOLUTION))
 
         # Leader-arm mirroring ramps in over LEADER_CATCHUP_S on entry to "leader_keyboard"
         # instead of snapping straight to the leader's (possibly very different) live pose --

@@ -38,8 +38,7 @@ import numpy as np
 from common.arm import (
     FLOOR_CLEARANCE_M,
     JAW_TIP_OFFSET_M,
-    JOINT_LIMIT_MARGIN,
-    JOINT_RANGE,
+    JOINT_LIMIT_MARGIN_DEG,
     NAMED_POSES,
     Arm,
     PlanError,
@@ -235,46 +234,55 @@ class Skills:
     @property
     def roll_range(self) -> tuple[float, float]:
         """(min, max) wrist roll keeping the roll joint within ROLL_FROM_REST_DEG of its rest
-        angle and inside its recorded range (owner's rule, Oct 27), from the calibration."""
+        angle and inside its limits (owner's rule, Oct 27), wherever the gripper may be after
+        the line-up: within REACH_TOL_M of the reach point (Oct 29 trial 2: computed over the
+        reach point only, the range's end was refused 1.4 cm further out, where the same roll
+        needs a slightly different joint angle: \"arm_wrist_roll would hit its limit\")."""
         if self._roll_range is None:
-            cal, joint = self.arm.calib, "arm_wrist_roll"
-
-            def deg(norm):
-                return math.degrees(cal.to_rad(joint, norm))
-
-            def joint_at(roll):
-                x = prm.REACH_POINT_X_M.value  # where the roll is used: over the reach point
-                wps, _ = plan_ee_line(cal, dict(NAMED_POSES["ready"]), [x, 0.0, self.geom.floor(x, 0.0) + prm.HOVER_HEIGHT_M.value],
-                                      VERTICAL, roll, prm.FREE_SPEED_MPS.value, -1.0)
-                return deg(wps[-1][joint])
-
-            j0 = joint_at(0.0)
-            toward_less = joint_at(-90.0) < j0  # convention: a quarter turn shows which way the joint goes
-
-            def roll_for(target):
-                """The roll whose joint angle is `target`, found by halving along the planner's own
-                IK: the joint isn't linear in the roll (a two-point slope put a -160 deg roll at
-                98.5 joint units, the planner at 100.5: refused, Oct 28 full task). It returns
-                the inner side, a roll the planner accepts."""
-                inner, outer = 0.0, -180.0 if (target < j0) == toward_less else 180.0  # convention: half a turn either way
-                for _ in range(12):  # convention: halvings: 180 deg / 2^12, under 0.05 deg
-                    mid = (inner + outer) / 2
-                    try:
-                        reached = (joint_at(mid) - target) * (target - j0) >= 0
-                    except PlanError:  # past the joint's limit
-                        reached = True
-                    inner, outer = (inner, mid) if reached else (mid, outer)
-                return inner
-
-            rest = deg(NAMED_POSES["rest"][joint])
-            # The ends the planner accepts: its joint range, JOINT_LIMIT_MARGIN inside (Oct 28: the
-            # full -100..100 ends made a roll clamped to the range's end a refused move).
-            jlo, jhi = JOINT_RANGE[joint]
-            lo, hi = sorted((deg(jlo + JOINT_LIMIT_MARGIN), deg(jhi - JOINT_LIMIT_MARGIN)))
-            span = prm.ROLL_FROM_REST_DEG.value
-            jmin, jmax = max(rest - span, lo), min(rest + span, hi)
-            self._roll_range = tuple(sorted((roll_for(jmin), roll_for(jmax))))
+            joint = "arm_wrist_roll"
+            x0, tol = prm.REACH_POINT_X_M.value, prm.REACH_TOL_M.value
+            # Along x: the roll is set relative to the gripper's azimuth, so sideways moves leave
+            # the joint as it is; reaching in or out changes it (the trial 2 refusal was outward).
+            spots = [(x0 - tol, 0.0), (x0, 0.0), (x0 + tol, 0.0)]
+            lo, hi = self.arm.calib.limits(joint)
+            rest, span = NAMED_POSES["rest"][joint], prm.ROLL_FROM_REST_DEG.value
+            jmin = max(rest - span, lo + JOINT_LIMIT_MARGIN_DEG)
+            jmax = min(rest + span, hi - JOINT_LIMIT_MARGIN_DEG)
+            ranges = [self._roll_range_at(x, y, jmin, jmax) for x, y in spots]
+            self._roll_range = (max(r[0] for r in ranges), min(r[1] for r in ranges))
         return self._roll_range
+
+    def _roll_range_at(self, x: float, y: float, jmin: float, jmax: float) -> tuple[float, float]:
+        """The rolls whose wrist-roll joint angle (deg) stays within jmin..jmax with the vertical
+        gripper over (x, y) at the hover height: each roll planned as align does it, a turn in
+        place from the hover pose at roll 0 (one IK step, not a line from "ready")."""
+        cal, joint = self.arm.calib, "arm_wrist_roll"
+        at = [x, y, self.geom.floor(x, y) + prm.HOVER_HEIGHT_M.value]
+        hover0 = plan_ee_line(cal, dict(NAMED_POSES["ready"]), at, VERTICAL, 0.0, prm.FREE_SPEED_MPS.value, -1.0)[0][-1]
+
+        def joint_at(roll):
+            wps, _ = plan_ee_line(cal, hover0, at, VERTICAL, roll, prm.FREE_SPEED_MPS.value, -1.0)
+            return wps[-1][joint]
+
+        j0 = joint_at(0.0)
+        toward_less = joint_at(-90.0) < j0  # convention: a quarter turn shows which way the joint goes
+
+        def roll_for(target):
+            """The roll whose joint angle is `target`, found by halving along the planner's own
+            IK: the joint isn't linear in the roll (a two-point slope put a -160 deg roll at
+            98.5 joint units, the planner at 100.5: refused, Oct 28 full task). It returns the
+            inner side, a roll the planner accepts."""
+            inner, outer = 0.0, -180.0 if (target < j0) == toward_less else 180.0  # convention: half a turn either way
+            for _ in range(10):  # convention: halvings: 180 deg / 2^10, under 0.2 deg
+                mid = (inner + outer) / 2
+                try:
+                    reached = (joint_at(mid) - target) * (target - j0) >= 0
+                except PlanError:  # past the joint's limit
+                    reached = True
+                inner, outer = (inner, mid) if reached else (mid, outer)
+            return inner
+
+        return tuple(sorted((roll_for(jmin), roll_for(jmax))))
 
     def _settle(self) -> None:
         """Wait before a frame until the arm has stopped, at most LOOK_SETTLE_S: stopped when the

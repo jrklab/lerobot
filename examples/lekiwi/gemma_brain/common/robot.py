@@ -52,6 +52,8 @@ def find_url(candidates=CANDIDATE_URLS, timeout: float = 1.5) -> str:
     raise RobotError(f"no LeKiwi web service answered at {', '.join(candidates)}")
 # Heartbeats every 0.1 s on one kept-open connection (no TCP handshake per beat over a laggy
 # Wi-Fi link): a single late reply no longer comes near the Pi's 1.5 s timeout.
+# The auto interface's joint positions (web_server/joint_angles.py): degrees, since Oct 29.
+JOINT_UNITS = "deg"
 HEARTBEAT_PERIOD_S = 0.1
 HEARTBEAT_TIMEOUT_S = 1.0
 
@@ -112,7 +114,13 @@ class Robot:
     # --- session ---
 
     def enable(self) -> None:
-        """Switch the robot into auto mode and start heartbeats."""
+        """Switch the robot into auto mode and start heartbeats. Refused, before anything
+        changes, when the Pi's auto interface isn't in degrees (JOINT_UNITS): one on the version
+        before Oct 29 would read this planner's degrees as its normalized units."""
+        units = self._json("GET", "/auto/status").get("joint_units")
+        if units != JOINT_UNITS:
+            raise RobotError(f"the Pi's auto interface reports joint units {units!r}, this planner sends "
+                             f"{JOINT_UNITS!r}: deploy web_server to the Pi first")
         self._json("POST", "/auto/enable")
         self._hb_stop.clear()
         self._hb_thread = threading.Thread(target=self._heartbeat_loop, name="heartbeat", daemon=True)
@@ -212,16 +220,18 @@ class Robot:
         """contact_stop: the Pi stops the move itself where the TCP meets something (it watches
         measured vs commanded TCP height every tick) and reports where (result["contact"])."""
         total = sum(durations)
-        cmd = {"cmd": "trajectory", "waypoints": waypoints, "durations": durations, "z_min": z_min}
+        cmd = {"cmd": "trajectory", "waypoints": waypoints, "durations": durations, "z_min": z_min, "units": JOINT_UNITS}
         if contact_stop:
             cmd["contact_stop"] = True
         return self.run(cmd, timeout=total + 15.0)
 
     def joints(self, targets: dict[str, float], speed: float | None = None, z_min: float | None = None) -> dict:
-        return self.run({"cmd": "joints", "targets": targets, "speed": speed, "z_min": z_min})
+        """targets in degrees (common/arm.py), speed in deg/s."""
+        return self.run({"cmd": "joints", "targets": targets, "speed": speed, "z_min": z_min, "units": JOINT_UNITS})
 
     def gripper(self, pos: float, speed: float | None = None) -> dict:
-        return self.run({"cmd": "gripper", "pos": pos, "speed": speed})
+        """pos: degrees open from closed (0), speed in deg/s."""
+        return self.run({"cmd": "gripper", "pos": pos, "speed": speed, "units": JOINT_UNITS})
 
     def base(self, dx: float = 0.0, dy: float = 0.0, dtheta_deg: float = 0.0, speed: float | None = None) -> dict:
         if not self.base_enabled:

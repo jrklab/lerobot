@@ -19,7 +19,7 @@
 Gemma brain, examples/lekiwi/gemma_brain/) submits over HTTP, one at a time.
 
 The split: the planner does the heavy compute (IK, path planning, perception) and sends
-joint-space trajectories -- normalized joint targets with a duration per segment -- and
+joint-space trajectories -- joint targets in degrees with a duration per segment -- and
 relative base moves. This module only validates and executes them from RobotBridge's 30Hz
 control loop (step()): trajectory playback, a gripper close with stall detection, and a
 relative base move closed on wheel odometry. A Pi 4 can't afford planner-sized numerics
@@ -29,14 +29,21 @@ motors, independent of planner/network latency (seconds, for a VLM).
 
 Safety, enforced here rather than trusted to the planner:
 - A command runs only while the planner keeps sending heartbeats (HEARTBEAT_TIMEOUT_S).
-- Every trajectory segment respects MAX_JOINT_SPEED and the joint ranges, and the TCP and
-  the jaw tips stay above z_min all along it (forward kinematics only, sampled at least every
-  CLEARANCE_SAMPLE_UNITS of joint motion; ~1 ms per sample on a Pi 4).
+- Every trajectory segment respects MAX_JOINT_SPEED and the joint limits (the recorded range
+  clipped to the URDF's, joint_angles.py), and the TCP and the jaw tips stay above z_min all
+  along it (forward kinematics only, sampled at least every CLEARANCE_SAMPLE_DEG of joint
+  motion; ~1 ms per sample on a Pi 4).
 - Arm moves abort on a stalled joint or a large tracking error (the arm hit something),
   and then hold the *measured* pose instead of pushing on toward the commanded one.
 - Base speed and distance per move are capped, with a timeout.
 - Any gamepad input, e-stop or arm reset leaves auto mode (see RobotBridge); leaving it
   aborts the running command.
+
+Units: the planner's interface (commands, status) is in degrees (joint_angles.py: arm joints
+from the homing tick, the URDF's zero; the gripper's opening from its closed end). RobotBridge
+keeps LeRobot's normalized units; step() converts at its edge. Commands that move joints must
+say "units": "deg", and status() says "joint_units": "deg", so a planner and a Pi on different
+versions refuse each other instead of reading degrees as units (Oct 29).
 """
 
 from __future__ import annotations
@@ -48,8 +55,8 @@ import time
 from collections.abc import Callable
 
 import numpy as np
-
 import so101_kinematics as kin
+from joint_angles import JointAngles
 
 logger = logging.getLogger(__name__)
 
@@ -63,13 +70,14 @@ ARM_JOINTS = [*IK_ARM_JOINTS, GRIPPER]
 # speeds), the base up to ~0.2 m at its 0.15 m/s cap.
 HEARTBEAT_TIMEOUT_S = 1.5
 
-# Joint units are LeKiwi's normalized -100..100 (gripper 0..100).
-JOINT_RANGE = dict.fromkeys(IK_ARM_JOINTS, (-100.0, 100.0))
-JOINT_RANGE[GRIPPER] = (0.0, 100.0)
-MAX_JOINT_SPEED = 60.0  # units/s, on any joint in any segment
-DEFAULT_JOINT_SPEED = 35.0
+# Degrees throughout (see Units above). Values that were in normalized units until Oct 29 are
+# the nearest round degrees (one unit was 0.88-1.52 deg on this arm's joints, 1.30 on the
+# gripper).
+JOINT_UNITS = "deg"
+MAX_JOINT_SPEED = 60.0  # deg/s, on any joint in any segment (was 60 units/s: 53-91 deg/s)
+DEFAULT_JOINT_SPEED = 35.0  # deg/s
 MAX_WAYPOINTS = 600
-CLEARANCE_SAMPLE_UNITS = 5.0
+CLEARANCE_SAMPLE_DEG = 5.0
 # The jaw tips extend this far past the TCP along its approach axis (gemma_brain/common/arm.py's
 # JAW_TIP_OFFSET_M, from the floor probe).
 JAW_TIP_OFFSET_M = 0.015
@@ -77,8 +85,9 @@ JAW_TIP_OFFSET_M = 0.015
 # z_min: the measured floor (-0.126 m at the jaw tips with the homing-tick joint zero, Oct 27)
 # plus 2 cm. Was -0.05 ("conservative until calibrated"), which refused a safe 7.4 cm lowering.
 DEFAULT_Z_MIN_M = -0.106
-MAX_GRIPPER_SPEED = 80.0
-DEFAULT_GRIPPER_SPEED = 50.0
+MAX_GRIPPER_SPEED = 104.0  # deg/s (80 units/s)
+DEFAULT_GRIPPER_SPEED = 65.0  # deg/s (50 units/s)
+MIN_GRIPPER_SPEED = 6.5  # deg/s (5 units/s)
 
 MAX_BASE_XY_SPEED = 0.15  # m/s
 MAX_BASE_THETA_SPEED = 45.0  # deg/s
@@ -91,12 +100,13 @@ BASE_THETA_TOL_DEG = 2.0
 BASE_GAIN = 1.5  # 1/s: commanded speed = gain * remaining, then capped
 
 # Abort thresholds while an arm move runs (gripper excluded: squeezing a block is a stall).
-TRACKING_ERROR_LIMIT = 12.0  # units, |target - measured| on any IK joint
+TRACKING_ERROR_LIMIT = 12.0  # deg, |target - measured| on any IK joint (was 12 units: 10.5-18 deg)
 TRACKING_ERROR_HOLD_S = 0.3
 STALL_SEVERITY_LIMIT = 0.25
 STALL_HOLD_S = 0.25
-STALL_LAG_MIN = 4.0  # units: below this lag, a loaded joint is just holding, not blocked
+STALL_LAG_MIN = 4.0  # deg: below this lag, a loaded joint is just holding, not blocked
 SETTLE_TIMEOUT_S = 1.0
+SETTLED_DEG = 3.0  # a finished arm move within this of its target on every joint is settled
 
 # Contact-stop trajectories (the floor touch): watch the TCP's measured height (FK of the
 # measured joints) against the commanded one every tick. In free air the measured TCP trails
@@ -122,8 +132,10 @@ CONTACT_FOLLOW_MIN_M = 0.002
 
 # Gripper: closed is 0. When it stalls on an object, hold this far past the measured
 # position, so it keeps a firm grip without driving the servo at full torque.
-GRIPPER_SQUEEZE = 4.0
+GRIPPER_SQUEEZE = 5.0  # deg (4 units)
 GRIPPER_STALL_TICKS = 4
+GRIPPER_STALL_LAG_DEG = 4.0  # closing, the target ran this far ahead of the jaws (3 units)
+GRIPPER_SETTLED_DEG = 2.5  # an open or close within this of its goal is done (2 units)
 
 # Hold: after a close stalls on an object, the hold is watched every tick until the next
 # gripper command (status()["gripper_hold"]).
@@ -131,7 +143,7 @@ GRIPPER_STALL_TICKS = 4
 # the object gone they travel most of the way to the squeeze target (GRIPPER_SQUEEZE). Load
 # can't tell: the firmware itself cuts the gripper to Protective_Torque (20%) after ~2 s over
 # Overload_Torque (25%), and today's holds load it ~41% (registers read Oct 26).
-HOLD_DROP_UNITS = 2.5
+HOLD_DROP_DEG = 3.3  # (2.5 units)
 HOLD_DROP_TICKS = 3
 # Protection: over-current and overload are the gripper firmware's own (Protection_Current
 # 250 ~1.6 A, Overload_Torque 25% -> Protective_Torque 20%, each after ~2 s); a load rule here
@@ -139,7 +151,7 @@ HOLD_DROP_TICKS = 3
 # Max_Temperature_Limit 70 C, which drops the object, so temperature is watched here: at
 # GRIPPER_TEMP_WARN_C the squeeze eases to GRIPPER_SQUEEZE_EASED, at GRIPPER_TEMP_HARD_C it
 # stops (holds the stalled position; never opens: the object would fall).
-GRIPPER_SQUEEZE_EASED = 2.0
+GRIPPER_SQUEEZE_EASED = 2.6  # deg (2 units)
 GRIPPER_TEMP_WARN_C = 55.0
 GRIPPER_TEMP_HARD_C = 62.0
 HOLD_MAX_EVENTS = 5
@@ -163,12 +175,14 @@ class AutoController:
 
     def __init__(
         self,
-        norm_to_rad: Callable[[str, float], float],
+        angles: Callable[[], JointAngles],
         clock: Callable[[], float] = time.monotonic,
     ):
+        """angles: the robot's current calibration as a JointAngles (asked for again on each
+        command and tick, so a calibration loaded after start-up is used)."""
         # Must be the same clock the control loop passes to step() as `now`.
         self._clock = clock
-        self._norm_to_rad = norm_to_rad
+        self._angles = angles
         self._lock = threading.Lock()
         self._last_heartbeat = -math.inf
         self._next_id = 1
@@ -189,6 +203,9 @@ class AutoController:
         """Validates cmd and queues it to run. Raises CommandRefused (nothing moves) if it
         isn't safe. Returns the command id."""
         kind = cmd.get("cmd")
+        if kind in ("trajectory", "joints", "gripper") and cmd.get("units") != JOINT_UNITS:
+            raise CommandRefused(f"{kind}: joint positions must be in degrees (\"units\": \"deg\"); "
+                                 "is the planner on the version before Oct 29?")
         with self._lock:
             if self._clock() - self._last_heartbeat > HEARTBEAT_TIMEOUT_S:
                 raise CommandRefused("no recent heartbeat from the planner")
@@ -232,9 +249,12 @@ class AutoController:
         with self._lock:
             self._finish_locked("aborted", reason)
 
-    def status(self, measured: dict[str, float]) -> dict:
-        """The current (or last finished) command, the arm's commanded and measured joints,
-        its TCP pose from the measured joints, and the base odometry."""
+    def status(self, measured_units: dict[str, float]) -> dict:
+        """The current (or last finished) command, the arm's commanded and measured joints
+        (degrees; measured_units is RobotBridge's normalized reading), its TCP pose from the
+        measured joints, and the base odometry."""
+        angles = self._angles()
+        measured = {j: angles.to_deg(j, v) for j, v in measured_units.items() if j in ARM_JOINTS}
         with self._lock:
             cur = self._cmd if self._cmd is not None else self._last
             targets = dict(self._targets)
@@ -243,6 +263,7 @@ class AutoController:
         public = ("id", "kind", "state", "reason", "result", "submitted", "finished")
         out = {
             "command": None if cur is None else {k: cur[k] for k in public},
+            "joint_units": JOINT_UNITS,
             "joints": measured,
             "targets": targets,
             "odom": {"x": float(odom[0]), "y": float(odom[1]), "theta_deg": math.degrees(odom[2])},
@@ -250,7 +271,7 @@ class AutoController:
             "time": time.time(),
         }
         if all(j in measured for j in IK_ARM_JOINTS):
-            pose = kin.forward_kinematics(np.array([self._norm_to_rad(j, measured[j]) for j in IK_ARM_JOINTS]))
+            pose = kin.forward_kinematics(np.radians([measured[j] for j in IK_ARM_JOINTS]))
             out["ee"] = {"xyz": [float(v) for v in pose[:3, 3]], "rot": pose[:3, :3].round(4).tolist()}
         return out
 
@@ -264,8 +285,19 @@ class AutoController:
         base_vel: dict[str, float],
     ) -> dict[str, float]:
         """Advances the running command by one control tick. Mutates targets (the bridge's
-        joint targets) in place and returns the base velocity command (x.vel, y.vel in m/s,
-        theta.vel in deg/s)."""
+        joint targets, normalized units) in place and returns the base velocity command (x.vel,
+        y.vel in m/s, theta.vel in deg/s). Everything inside runs in degrees: the bridge's
+        targets and joint readings are converted on the way in and the targets back on the way
+        out."""
+        angles = self._angles()
+        deg = {j: angles.to_deg(j, v) for j, v in targets.items() if j in ARM_JOINTS}
+        state = {j: {**s, "pos": angles.to_deg(j, s["pos"])} for j, s in joint_state.items() if j in ARM_JOINTS and "pos" in s}
+        vel = self._step(now, deg, state, base_vel)
+        for j, v in deg.items():
+            targets[j] = angles.to_units(j, v)
+        return vel
+
+    def _step(self, now: float, targets: dict[str, float], joint_state: dict[str, dict], base_vel: dict[str, float]) -> dict[str, float]:
         vel = {"x.vel": 0.0, "y.vel": 0.0, "theta.vel": 0.0}
         self._integrate_odom(now, base_vel)
         with self._lock:
@@ -311,6 +343,7 @@ class AutoController:
         if len(wps) > MAX_WAYPOINTS:
             raise CommandRefused(f"trajectory: at most {MAX_WAYPOINTS} waypoints")
         z_min = float(cmd["z_min"]) if cmd.get("z_min") is not None else DEFAULT_Z_MIN_M
+        angles = self._angles()
         prev = {j: start[j] for j in ARM_JOINTS}
         full = [prev]
         for i, (wp, d) in enumerate(zip(wps, durs, strict=True)):
@@ -323,20 +356,20 @@ class AutoController:
                 raise CommandRefused(f"trajectory: duration {i} must be > 0")
             cur = dict(prev)
             for j, v in wp.items():
-                if j not in JOINT_RANGE:
+                if j not in ARM_JOINTS:
                     raise CommandRefused(f"trajectory: unknown joint {j!r}")
-                lo, hi = JOINT_RANGE[j]
+                lo, hi = angles.limits(j)
                 if not lo <= v <= hi:
-                    raise CommandRefused(f"trajectory: waypoint {i}: {j} = {v:.1f} is outside {lo:.0f}..{hi:.0f}")
+                    raise CommandRefused(f"trajectory: waypoint {i}: {j} = {v:.1f} deg is outside {lo:.1f}..{hi:.1f}")
                 cur[j] = v
             speed = max(abs(cur[j] - prev[j]) for j in ARM_JOINTS) / d
             if speed > MAX_JOINT_SPEED * 1.001:
                 hint = " -- does the first waypoint start near the current pose?" if i == 0 else ""
                 raise CommandRefused(
-                    f"trajectory: segment {i} needs {speed:.0f} units/s (max {MAX_JOINT_SPEED:.0f}){hint}"
+                    f"trajectory: segment {i} needs {speed:.0f} deg/s (max {MAX_JOINT_SPEED:.0f}){hint}"
                 )
             span = max(abs(cur[j] - prev[j]) for j in IK_ARM_JOINTS)
-            n = max(1, math.ceil(span / CLEARANCE_SAMPLE_UNITS))
+            n = max(1, math.ceil(span / CLEARANCE_SAMPLE_DEG))
             for k in range(1, n + 1):
                 a = k / n
                 z = self._lowest_z({j: prev[j] + (cur[j] - prev[j]) * a for j in IK_ARM_JOINTS})
@@ -355,12 +388,11 @@ class AutoController:
 
     def _lowest_z(self, joints: dict[str, float]) -> float:
         """Lower of the TCP and the jaw tips."""
-        q = np.array([self._norm_to_rad(j, joints[j]) for j in IK_ARM_JOINTS])
-        t = kin.forward_kinematics(q)
+        t = kin.forward_kinematics(np.radians([joints[j] for j in IK_ARM_JOINTS]))
         return float(min(t[2, 3], t[2, 3] + JAW_TIP_OFFSET_M * t[2, 2]))
 
     def _plan_joints(self, start: dict[str, float], cmd: dict) -> dict:
-        """One straight joint-space move, smoothstepped, at `speed` units/s (average) on the
+        """One straight joint-space move, smoothstepped, at `speed` deg/s (average) on the
         joint that moves farthest. Validated like a one-segment trajectory."""
         goal = cmd.get("targets")
         if not isinstance(goal, dict) or not goal:
@@ -378,11 +410,12 @@ class AutoController:
         return run
 
     def _plan_gripper(self, start: dict[str, float], cmd: dict) -> dict:
+        lo, hi = self._angles().limits(GRIPPER)
         try:
-            goal = _clamp(float(cmd["pos"]), *JOINT_RANGE[GRIPPER])
+            goal = _clamp(float(cmd["pos"]), lo, hi)
         except (KeyError, TypeError, ValueError):
-            raise CommandRefused("gripper: 'pos' must be a number, 0 (closed) .. 100 (open)") from None
-        speed = _clamp(float(cmd.get("speed") or DEFAULT_GRIPPER_SPEED), 5.0, MAX_GRIPPER_SPEED)
+            raise CommandRefused(f"gripper: 'pos' must be a number, degrees open, 0 (closed) .. {hi:.0f}") from None
+        speed = _clamp(float(cmd.get("speed") or DEFAULT_GRIPPER_SPEED), MIN_GRIPPER_SPEED, MAX_GRIPPER_SPEED)
         return {"gripper_start": start[GRIPPER], "gripper_goal": goal, "gripper_speed": speed, "stall_ticks": 0}
 
     def _plan_base(self, cmd: dict) -> dict:
@@ -407,8 +440,7 @@ class AutoController:
     # --- execution ---
 
     def _tcp_z(self, joints: dict[str, float]) -> float:
-        q = np.array([self._norm_to_rad(j, joints[j]) for j in IK_ARM_JOINTS])
-        return float(kin.forward_kinematics(q)[2, 3])
+        return float(kin.forward_kinematics(np.radians([joints[j] for j in IK_ARM_JOINTS]))[2, 3])
 
     def _watch_contact(self, cmd: dict, t: float, targets: dict, joint_state: dict) -> str:
         """For a contact_stop trajectory: a non-empty description once the TCP is in contact
@@ -474,17 +506,17 @@ class AutoController:
         if t >= cmd["total"]:
             targets.update(wps[-1])
             err = self._max_tracking_error(targets, joint_state)
-            if err < 3.0 or t - cmd["total"] > SETTLE_TIMEOUT_S:
+            if err < SETTLED_DEG or t - cmd["total"] > SETTLE_TIMEOUT_S:
                 # "done" either way, but say how close it got: a stretched-out arm sags short
                 # of its target and only settles by the timeout.
                 cmd["result"] = {
                     **({"contact": False} if cmd.get("contact_stop") else {}),
-                    "settled": err < 3.0,
+                    "settled": err < SETTLED_DEG,
                     "max_error": round(err, 1),
                     "errors": {j: round(targets[j] - joint_state[j]["pos"], 1) for j in IK_ARM_JOINTS if j in joint_state},
                 }
                 with self._lock:
-                    self._finish_locked("done", "" if err < 3.0 else f"settle timeout, {err:.1f} units off")
+                    self._finish_locked("done", "" if err < SETTLED_DEG else f"settle timeout, {err:.1f} deg off")
                 return
         else:
             i, rem = 0, t
@@ -529,7 +561,7 @@ class AutoController:
         if err > TRACKING_ERROR_LIMIT:
             since = cmd.setdefault("track_since", now)
             if now - since > TRACKING_ERROR_HOLD_S:
-                return f"tracking error {err:.1f} units (blocked or in contact)"
+                return f"tracking error {err:.1f} deg (blocked or in contact)"
         else:
             cmd.pop("track_since", None)
         return ""
@@ -548,19 +580,19 @@ class AutoController:
         meas, load = st.get("pos", targets[GRIPPER]), st.get("load", 0.0)
         # Stalled on an object: closing, the target has run ahead of the measured position,
         # and the motor is loaded and not moving (the bridge's stall severity).
-        if goal < start and targets[GRIPPER] < meas - 3.0 and st.get("severity", 0.0) > 0.0:
+        if goal < start and targets[GRIPPER] < meas - GRIPPER_STALL_LAG_DEG and st.get("severity", 0.0) > 0.0:
             cmd["stall_ticks"] += 1
         else:
             cmd["stall_ticks"] = 0
         if cmd["stall_ticks"] >= GRIPPER_STALL_TICKS:
-            targets[GRIPPER] = max(JOINT_RANGE[GRIPPER][0], meas - GRIPPER_SQUEEZE)
+            targets[GRIPPER] = max(0.0, meas - GRIPPER_SQUEEZE)  # 0: closed
             with self._lock:
                 cmd["result"] = {"pos": round(meas, 1), "load": load, "stalled": True, "temp": st.get("temp")}
                 self._hold = {"state": "holding", "pos": round(meas, 1), "squeeze": GRIPPER_SQUEEZE,
                               "temp": st.get("temp"), "events": [], "drop_ticks": 0}
                 self._finish_locked("done", "stalled on an object")
             return
-        if a >= 1.0 and (abs(meas - goal) < 2.0 or t > span / speed + SETTLE_TIMEOUT_S):
+        if a >= 1.0 and (abs(meas - goal) < GRIPPER_SETTLED_DEG or t > span / speed + SETTLE_TIMEOUT_S):
             with self._lock:
                 cmd["result"] = {"pos": round(meas, 1), "load": load, "stalled": False}
                 self._finish_locked("done", "")
@@ -632,11 +664,11 @@ class AutoController:
             h["temp"] = temp
             if h["state"] == "dropped":
                 return
-            if meas < h["pos"] - HOLD_DROP_UNITS:
+            if meas < h["pos"] - HOLD_DROP_DEG:
                 h["drop_ticks"] += 1
                 if h["drop_ticks"] >= HOLD_DROP_TICKS:
                     h["state"] = "dropped"
-                    targets[GRIPPER] = max(JOINT_RANGE[GRIPPER][0], meas)  # stop pushing on nothing
+                    targets[GRIPPER] = max(0.0, meas)  # stop pushing on nothing
                     self._hold_event(h, f"dropped: the jaws closed to {meas:.1f} from {h['pos']:.1f}")
                 return
             h["drop_ticks"] = 0
@@ -647,7 +679,7 @@ class AutoController:
                 squeeze, why = min(squeeze, GRIPPER_SQUEEZE_EASED), f"temperature {temp:.0f} C"
             if squeeze < h["squeeze"]:
                 h["squeeze"] = squeeze
-                targets[GRIPPER] = max(JOINT_RANGE[GRIPPER][0], h["pos"] - squeeze)
+                targets[GRIPPER] = max(0.0, h["pos"] - squeeze)
                 self._hold_event(h, f"squeeze eased to {squeeze:.0f}: {why}")
 
     @staticmethod
