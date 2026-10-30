@@ -1,5 +1,7 @@
-import cv2, numpy as np
+import cv2
+import numpy as np
 from PIL import Image, ImageDraw, ImageFont
+
 DPI = 600
 MM = DPI / 25.4
 OUT = str(__import__("pathlib").Path(__file__).resolve().parent)  # next to this script
@@ -30,7 +32,8 @@ for name, sx, sy, sq, mk, dic, first in BOARDS:
         yb = y0 + bh + int(5 * MM)
         dr.rectangle([x0, yb, x0 + int(round(100 * MM)), yb + int(1.0 * MM)], fill=0)
         for t in (0, 50, 100):
-            xt = x0 + int(round(t * MM)); dr.rectangle([xt, yb - int(2 * MM), xt + int(0.3 * MM), yb + int(1.0 * MM)], fill=0)
+            xt = x0 + int(round(t * MM))
+            dr.rectangle([xt, yb - int(2 * MM), xt + int(0.3 * MM), yb + int(1.0 * MM)], fill=0)
         lines = [f"LeKiwi {name.split('_')[0]} board: ChArUco {sx}x{sy} squares, square {sq:.0f} mm, marker {mk:.0f} mm, DICT_5X5_100, ids {first}-{first + n - 1}.",
                  "Print at 100% / actual size (no scaling). The bar is 100 mm: measure it. Glue flat on stiff board."]
         for k, line in enumerate(lines):
