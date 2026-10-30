@@ -57,7 +57,9 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]  # gemma_brain: common/, brain/, data/, runs/
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT.parent / "web_server"))  # the Pi side: auto_control.py
 
+from auto_control import BASE_POS_TOL_M, BASE_THETA_TOL_DEG
 from brain import params as prm
 from common.arm import (
     DEFAULT_FLOOR_Z_M,
@@ -129,11 +131,12 @@ SHAPE_CHANGES = (
 SWEEP_BACK_M = (0.0, 0.10, 0.20)
 SWEEP_HEADINGS_DEG = (-20.0, -10.0, 0.0, 10.0, 20.0)
 # Back to the start after the sweep, closed loop: the front camera's view of the boards against
-# the run's first frame says where the base is; turn, then drive, until within these
-# (convention: the boards' placement tolerance is a few cm; odometry alone drifts ~1-2 cm in a
-# 20 cm sweep). A single drive never goes further forward than MAX_RETURN_FORWARD_M.
-RETURN_TOL_M = 0.01
-RETURN_TOL_DEG = 1.0
+# the run's first frame says where the base is; turn, then drive, until within the base's own
+# tolerances (the Pi's: a move smaller than these counts as done before it starts, Oct 29: a
+# 1.2-1.9 deg turn didn't move the base). A single drive never goes further forward than
+# MAX_RETURN_FORWARD_M.
+RETURN_TOL_M = BASE_POS_TOL_M
+RETURN_TOL_DEG = BASE_THETA_TOL_DEG
 RETURN_TRIES = 4
 MAX_RETURN_FORWARD_M = 0.25
 
