@@ -131,7 +131,11 @@ def _scene(rng):
                 seen[name] = d
         if seen:
             records.append(
-                {"joints": {j: v - TRUE_OFFSETS.get(j, 0.0) for j, v in p["joints"].items()}, "boards": seen}
+                {
+                    "joints": {j: v - TRUE_OFFSETS.get(j, 0.0) for j, v in p["joints"].items()},
+                    "boards": seen,
+                    "anchor": p["anchor"],
+                }
             )
     return records
 
@@ -206,3 +210,34 @@ def test_the_lens_capture_keeps_a_still_view_once(tmp_path, monkeypatch):
     assert views["image_size"] == [1280, 720] and len(views["views"]) == 1
     assert set(views["views"][0]["boards"]) == {"wrist", "front", "side"}
     assert (out / views["views"][0]["frame"]).exists()
+
+
+def test_the_offsets_hold_with_any_anchor_left_out():
+    """On a model without pose-dependent error the leave-one-anchor-out spread is near zero; on
+    the robot it measures how far the offsets can be trusted."""
+    records = _scene(np.random.default_rng(1))
+    assert len({r["anchor"] for r in records}) == 6
+    spread = sc.offset_spread(records, K_WRIST, DIST_WRIST)
+    assert all(v < 0.3 for v in spread["spread_deg"].values()), spread["spread_deg"]
+
+
+def test_the_base_sweep_never_drives_forward_and_frames_every_stop(tmp_path, monkeypatch):
+    jpeg = cv2.imencode(".jpg", _scene_with_all_boards())[1].tobytes()
+
+    class Base:
+        moves = []
+
+        def base(self, dx=0.0, dy=0.0, dtheta_deg=0.0, speed=None):
+            self.moves.append((dx, dtheta_deg))
+
+        def frame(self, cam, after=0.0):
+            assert cam == "front"
+            return jpeg, after
+
+    monkeypatch.setattr(capture_cameras, "SETTLE_S", 0.0)
+    robot = Base()
+    frames = capture_cameras.capture_sweep(robot, tmp_path, capture_cameras.sweep_plan())
+    assert all(dx <= 0 for dx, _ in robot.moves)
+    assert abs(sum(dx for dx, _ in robot.moves) + 0.20) < 1e-9 and abs(sum(t for _, t in robot.moves)) < 1e-9
+    assert all(abs(t) <= 20 for _, t in robot.moves)  # no turn larger than the sweep's widest
+    assert len(frames) == 15 and len({(f["base"]["back_m"], f["base"]["heading_deg"]) for f in frames}) == 15

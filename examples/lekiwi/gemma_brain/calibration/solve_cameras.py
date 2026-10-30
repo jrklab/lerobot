@@ -226,6 +226,27 @@ def solve_wrist(records: list[dict], K, dist, offset_joints=OFFSET_JOINTS) -> di
     }
 
 
+def offset_spread(records: list[dict], K, dist) -> dict | None:
+    """The joint offsets solved again with each anchor's poses left out in turn, and their spread
+    per joint: how much the offsets depend on which arm shapes were seen. The error the model
+    lacks (backlash, sag, link lengths) is pose-dependent and the offsets soak some of it up, so
+    this spread, not the reprojection noise, says how far to trust them. None without anchors."""
+    anchors = sorted({r["anchor"] for r in records if "anchor" in r})
+    if len(anchors) < 3:
+        return None
+    without = {
+        a: solve_wrist([r for r in records if r.get("anchor") != a], K, dist)["joint_offsets_deg"]
+        for a in anchors
+    }
+    return {
+        "without": without,
+        "spread_deg": {
+            j: max(o[j] for o in without.values()) - min(o[j] for o in without.values())
+            for j in OFFSET_JOINTS
+        },
+    }
+
+
 # --- 3. the front camera ---
 
 
@@ -269,7 +290,9 @@ def main() -> None:
         for cam, d in (("wrist", args.lens_wrist), ("front", args.lens_front))
     }
     wrist_views = [v["boards"] for v in held["wrist"]] + [r["boards"] for r in sc["wrist"]]
-    front_views = [v["boards"] for v in held["front"]] + [f["boards"] for f in sc["front"]]
+    front_views = [v["boards"] for v in held["front"]] + [
+        f["boards"] for f in sc["front"] + sc.get("sweep", [])
+    ]
     wl = lens(wrist_views, IMAGE_SIZE)
     fl = lens(front_views, IMAGE_SIZE)
     print(
@@ -281,6 +304,12 @@ def main() -> None:
         f"reprojection rms {w['rms_px']:.2f} px over {w['poses']} poses, {w['corners']} corners"
     )
     print("joint zero offsets (deg):", {j: round(v, 2) for j, v in w["joint_offsets_deg"].items()})
+    spread = offset_spread(sc["wrist"], wl["K"], wl["dist"])
+    if spread:
+        print("  each anchor left out in turn:")
+        for anchor, off in spread["without"].items():
+            print(f"    without {anchor:12s}", {j: round(v, 2) for j, v in off.items()})
+        print("  spread (max - min, deg):", {j: round(v, 2) for j, v in spread["spread_deg"].items()})
     f = solve_front([fr["boards"] for fr in sc["front"]], fl["K"], fl["dist"], w["boards"])
     print(
         f"front camera in the arm's frame: {np.round(f['T_base_cam'][:3, 3] * 1000, 1).tolist()} mm "
@@ -314,6 +343,7 @@ def main() -> None:
                 if p
             ],
             "rms_px": {"wrist_lens": wl["rms_px"], "front_lens": fl["rms_px"], "wrist_scene": w["rms_px"]},
+            "offset_spread_deg": spread["spread_deg"] if spread else None,
         }
         CALIB.write_text(json.dumps(calib, indent=2) + "\n")
         print(f"wrote {CALIB}")
