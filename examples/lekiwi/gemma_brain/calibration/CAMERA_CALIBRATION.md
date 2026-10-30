@@ -217,5 +217,5 @@ front camera's T_base_cam reads x 82 mm there.
 
 Since Oct 30 the brain's geometry (brain/geometry.py) works from these cameras instead of the fitted
 image-space values, after checking both on logged runs (see the README's calibration table).
-Next:
-frames against the current fitted calibrations; then phase E re-measures what depends on them.
+Next: a robot check of the switched geometry; then phase E re-measures what depends on the
+cameras (the floor, the grasp target).
