@@ -302,7 +302,7 @@ def main() -> None:
     }
     wrist_views = [v["boards"] for v in held["wrist"]] + [r["boards"] for r in sc["wrist"]]
     front_views = [v["boards"] for v in held["front"]] + [
-        f["boards"] for f in sc["front"] + sc.get("sweep", [])
+        f["boards"] for f in sc["front"] + sc.get("sweep", []) + sc.get("closeup", [])
     ]
     wl = lens(wrist_views, IMAGE_SIZE)
     fl = lens(front_views, IMAGE_SIZE)

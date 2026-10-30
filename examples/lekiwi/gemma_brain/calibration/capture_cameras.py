@@ -21,19 +21,21 @@
 the robot moves, nobody holds anything.
 
     .venv/bin/python calibration/capture_cameras.py scene --plan-only
-    .venv/bin/python calibration/capture_cameras.py scene [--no-sweep] [--reverse]
+    .venv/bin/python calibration/capture_cameras.py scene [--no-sweep] [--no-closeup] [--reverse]
     .venv/bin/python calibration/capture_cameras.py home --scene runs/<t>-scene
 
 The wrist board lies flat on the floor centred on the reach point (its long side across the
 robot), the front board stands upright in front where both cameras see it, the side board
-upright where the front camera sees it (calibration/CAMERA_CALIBRATION.md). First the front
+upright beside the robot, either side (calibration/CAMERA_CALIBRATION.md). First the front
 camera (arm folded, out of its view) takes a few frames; then the arm visits plan()'s poses,
 each a joint move checked for floor and body clearance, and at each one the wrist camera takes
 a frame and the measured joint angles are recorded; the arm folds. Then the base sweep (not
 with --no-sweep): the base turns and backs up with the arm folded, and the front camera takes
 a frame at each stop, for its lens; then it drives back to the start, closed loop on the front
-camera's view of the boards (once calib.json has the measured front camera; --reverse visits
-the arm poses in the opposite order). --plan-only prints the poses'
+camera's view of the boards (once calib.json has the measured front camera). Then the side board
+close-up (not with --no-closeup): the robot turns 90 deg right, or left if the board isn't there,
+drives in to 30 cm from it, takes frames at a few headings, backs out and returns to the start.
+--reverse visits the arm poses in the opposite order. --plan-only prints the poses'
 joint targets (or why one is refused) and the sweep's moves, and moves nothing.
 runs/<t>-scene/scene.json plus the frames.
 
@@ -138,6 +140,17 @@ SWEEP_HEADINGS_DEG = (-20.0, -10.0, 0.0, 10.0, 20.0)
 RETURN_TOL_M = BASE_POS_TOL_M
 RETURN_TOL_DEG = BASE_THETA_TOL_DEG
 RETURN_TRIES = 4
+# The front lens's close-up: the side board (beside the robot, found by turning 90 deg right, then
+# left) is approached to CLOSEUP_STANDOFF_M, where it fills ~70% of the image width (24.5 cm at
+# f ~550 px) and, the camera being low and tilted down, reaches the top of the image: the rows the
+# sweep leaves empty. Closed loop on the board's measured distance, one drive of at most
+# CLOSEUP_STEP_M at a time; then a few headings there, and back out the same way.
+CLOSEUP_BOARD = "side"
+SIDE_TURNS_DEG = (-90.0, 90.0)  # right first
+CLOSEUP_STANDOFF_M = 0.30
+CLOSEUP_STEP_M = 0.15
+CLOSEUP_TRIES = 6
+CLOSEUP_HEADINGS_DEG = (-15.0, 0.0, 15.0)
 MAX_RETURN_FORWARD_M = 0.25
 
 
@@ -378,6 +391,68 @@ def front_measure(robot, ref_boards: dict, cams: dict):
     return measure
 
 
+def board_ahead(robot, cams: dict, name: str = CLOSEUP_BOARD) -> float | None:
+    """How far the named board's centre is ahead of the front camera, along the base's forward
+    axis (m), from a fresh front frame; None when the board isn't in view."""
+    time.sleep(SETTLE_S)
+    seen = boards.detect(robot.frame("front", after=time.time())[0])
+    if name not in seen:
+        return None
+    K, dist = np.asarray(cams["front"]["K"]), np.asarray(cams["front"]["dist"])
+    T_base_cam = np.asarray(cams["front"]["T_base_cam"])
+    T = T_base_cam @ board_in_camera(K, dist, name, seen[name])
+    centre = np.asarray(boards.BOARDS[name].getChessboardCorners(), float).mean(axis=0)
+    return float((T[:3, :3] @ centre + T[:3, 3])[0] - T_base_cam[0, 3])
+
+
+def drive_to(robot, cams: dict, target_m: float) -> float:
+    """Drive straight until the close-up board is target_m ahead (within the base's tolerance),
+    re-measuring after every drive of at most CLOSEUP_STEP_M; returns the last distance."""
+    for _ in range(CLOSEUP_TRIES):
+        d = board_ahead(robot, cams)
+        if d is None:
+            raise RuntimeError(f"lost the {CLOSEUP_BOARD} board while driving to it")
+        if abs(d - target_m) < BASE_POS_TOL_M:
+            return d
+        robot.base(dx=float(np.clip(d - target_m, -CLOSEUP_STEP_M, CLOSEUP_STEP_M)))
+    raise RuntimeError(
+        f"not {100 * target_m:.0f} cm from the {CLOSEUP_BOARD} board after {CLOSEUP_TRIES} drives"
+    )
+
+
+def capture_closeup(robot, out: Path, cams: dict) -> tuple[list[dict], float | None]:
+    """Find the side board (a 90 deg turn right, then left), drive in to CLOSEUP_STANDOFF_M, take
+    a front frame at each of CLOSEUP_HEADINGS_DEG, drive back out and turn back. Returns the
+    frames and the turn that found the board (None: on neither side, nothing taken)."""
+    found, heading = None, 0.0
+    for turn in SIDE_TURNS_DEG:
+        robot.base(dtheta_deg=turn - heading)
+        heading = turn
+        if board_ahead(robot, cams) is not None:
+            found = turn
+            break
+    if found is None:
+        robot.base(dtheta_deg=-heading)
+        print(f"  no {CLOSEUP_BOARD} board on either side: no close-up")
+        return [], None
+    print(f"  the {CLOSEUP_BOARD} board is on the {'right' if found < 0 else 'left'}")
+    start = board_ahead(robot, cams)  # the distance to come back out to
+    drive_to(robot, cams, CLOSEUP_STANDOFF_M)
+    frames, h = [], 0.0
+    for target in CLOSEUP_HEADINGS_DEG:
+        robot.base(dtheta_deg=target - h)
+        h = target
+        time.sleep(SETTLE_S)
+        rec = _grab(robot, "front", out, f"closeup-{target:+03.0f}deg")
+        rec["base"] = {"side_turn_deg": found, "heading_deg": target}
+        if rec["boards"]:
+            frames.append(rec)
+    robot.base(dtheta_deg=-h)
+    drive_to(robot, cams, start)
+    robot.base(dtheta_deg=-found)
+    return frames, found
+
+
 def return_to_start(robot, measure) -> tuple[float, float, float]:
     """Turn, then drive, until the base is back where measure() counts from (within RETURN_TOL);
     returns the last offset. Raises if it doesn't get there in RETURN_TRIES moves."""
@@ -407,6 +482,9 @@ def main() -> None:
     sp.add_argument("--plan-only", action="store_true")
     sp.add_argument("--no-sweep", action="store_true", help="skip the base sweep for the front lens")
     sp.add_argument("--reverse", action="store_true", help="visit the poses in the opposite order")
+    sp.add_argument(
+        "--no-closeup", action="store_true", help="skip the side board close-up for the front lens"
+    )
     hp = sub.add_parser(
         "home", help="drive the base back to where a scene started (front camera, floor board)"
     )
@@ -442,6 +520,13 @@ def main() -> None:
         for m in moves:
             what = f"back {100 * m['back_m']:.0f} cm" if m["back_m"] else f"turn {m['turn_deg']:+.0f} deg"
             print(f"  {what:14s}", f"-> front frame at {m['at']}" if m["at"] else "")
+    if moves and not args.no_closeup:
+        print(
+            f"then back to the start, and the {CLOSEUP_BOARD} board close-up: turn {SIDE_TURNS_DEG[0]:+.0f} deg "
+            f"(then {SIDE_TURNS_DEG[1]:+.0f} if it isn't there), drive in to {100 * CLOSEUP_STANDOFF_M:.0f} cm from "
+            f"it (at most {100 * CLOSEUP_STEP_M:.0f} cm a drive, re-measured), frames at "
+            f"{', '.join(f'{h:+.0f}' for h in CLOSEUP_HEADINGS_DEG)} deg, back out, turn back, back to the start"
+        )
     if args.plan_only:
         return
     with Robot(base_enabled=bool(moves)) as robot:
@@ -455,13 +540,20 @@ def main() -> None:
             print(f"{len(scene['sweep'])} sweep frames with a board")
             cams = _cameras()
             if cams and scene["front"] and scene["front"][0]["boards"]:
+                measure = front_measure(robot, scene["front"][0]["boards"], cams)
                 print("back to the start:")
-                scene["returned"] = return_to_start(
-                    robot, front_measure(robot, scene["front"][0]["boards"], cams)
-                )
+                scene["returned"] = return_to_start(robot, measure)
+                if not args.no_closeup:
+                    print(f"the {CLOSEUP_BOARD} board close-up:")
+                    try:
+                        scene["closeup"], scene["closeup_turn_deg"] = capture_closeup(robot, out, cams)
+                    finally:
+                        (out / "scene.json").write_text(json.dumps(scene, indent=1) + "\n")
+                    print("back to the start:")
+                    scene["returned"] = return_to_start(robot, measure)
                 (out / "scene.json").write_text(json.dumps(scene, indent=1) + "\n")
             else:
-                print("no measured front camera in calib.json yet: the robot stays 20 cm back")
+                print("no measured front camera in calib.json yet: the robot stays 20 cm back, no close-up")
 
 
 if __name__ == "__main__":

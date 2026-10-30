@@ -283,3 +283,49 @@ def test_the_reversed_plan_visits_the_same_poses_backwards():
     )
     assert all("joints" in p for p in back), [p for p in back if "refused" in p]
     assert [p["name"] for p in back] == [p["name"] for p in reversed(ahead)]
+
+
+class _SideWorld:
+    """A base that moves 8% short, beside a board 53 cm off to one side (y), seen when within
+    35 deg of straight ahead; board_ahead() measures it from the base's simulated pose."""
+
+    def __init__(self, side_y):
+        self.pose, self.board, self.closest = _base_move(0, 0, 0), np.array([0.0, side_y, 0.0]), np.inf
+        self.jpeg = cv2.imencode(".jpg", _scene_with_all_boards())[1].tobytes()
+
+    def base(self, dx=0.0, dy=0.0, dtheta_deg=0.0, speed=None):
+        self.pose = self.pose @ _base_move(0.92 * dx, 0.92 * dy, 0.92 * dtheta_deg)
+
+    def frame(self, cam, after=0.0):
+        return self.jpeg, after
+
+    def ahead(self, robot, cams, name="side"):
+        if self.board is None:
+            return None
+        v = sc.inv(self.pose) @ np.append(self.board, 1.0)
+        if abs(np.degrees(np.arctan2(v[1], v[0]))) > 35:
+            return None
+        self.closest = min(self.closest, v[0])
+        return float(v[0])
+
+
+def test_the_closeup_finds_the_side_board_on_either_side_and_comes_back(tmp_path, monkeypatch):
+    monkeypatch.setattr(capture_cameras, "SETTLE_S", 0.0)
+    for side_y, turn in ((-0.53, -90.0), (0.53, 90.0)):
+        world = _SideWorld(side_y)
+        monkeypatch.setattr(capture_cameras, "board_ahead", world.ahead)
+        frames, found = capture_cameras.capture_closeup(world, tmp_path, cams={})
+        assert found == turn and len(frames) == 3
+        assert world.closest > capture_cameras.CLOSEUP_STANDOFF_M - 0.02  # never nearer than the stand-off
+        x, y = world.pose[0, 3], world.pose[1, 3]
+        heading = np.degrees(np.arctan2(world.pose[1, 0], world.pose[0, 0]))
+        # back near the start: the closed-loop return_to_start() takes the rest
+        assert np.hypot(x, y) < 0.03 and abs(heading) < 20, (x, y, heading)
+
+
+def test_the_closeup_is_skipped_without_a_side_board(tmp_path, monkeypatch):
+    monkeypatch.setattr(capture_cameras, "SETTLE_S", 0.0)
+    world = _SideWorld(0.53)
+    world.board = None
+    monkeypatch.setattr(capture_cameras, "board_ahead", world.ahead)
+    assert capture_cameras.capture_closeup(world, tmp_path, cams={}) == ([], None)
