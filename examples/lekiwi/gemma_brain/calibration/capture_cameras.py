@@ -14,13 +14,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# ruff: noqa: E402
+# ruff: noqa: E402, N803, N806
+# (N8: transforms and camera matrices keep their textbook capitals, as in solve_cameras.py)
 
 """Capture the ChArUco views that solve_cameras.py solves the cameras from: the boards stay put,
 the robot moves, nobody holds anything.
 
     .venv/bin/python calibration/capture_cameras.py scene --plan-only
-    .venv/bin/python calibration/capture_cameras.py scene [--no-sweep]
+    .venv/bin/python calibration/capture_cameras.py scene [--no-sweep] [--reverse]
+    .venv/bin/python calibration/capture_cameras.py home --scene runs/<t>-scene
 
 The wrist board lies flat on the floor centred on the reach point (its long side across the
 robot), the front board stands upright in front where both cameras see it, the side board
@@ -29,7 +31,9 @@ camera (arm folded, out of its view) takes a few frames; then the arm visits pla
 each a joint move checked for floor and body clearance, and at each one the wrist camera takes
 a frame and the measured joint angles are recorded; the arm folds. Then the base sweep (not
 with --no-sweep): the base turns and backs up with the arm folded, and the front camera takes
-a frame at each stop, for its lens; the robot ends 20 cm back. --plan-only prints the poses'
+a frame at each stop, for its lens; then it drives back to the start, closed loop on the front
+camera's view of the floor board (once calib.json has the measured front camera; --reverse visits
+the arm poses in the opposite order). --plan-only prints the poses'
 joint targets (or why one is refused) and the sweep's moves, and moves nothing.
 runs/<t>-scene/scene.json plus the frames.
 
@@ -67,6 +71,7 @@ from common.arm import (
 )
 
 from calibration import boards
+from calibration.solve_cameras import FRONT_VIA, board_in_camera, inv
 
 # A lens view is new when its board's centre moved this share of the image width from every
 # kept view of that board, or its size changed by this share; still when no corner moved more
@@ -123,6 +128,14 @@ SHAPE_CHANGES = (
 # lies ~6 cm ahead of the robot.
 SWEEP_BACK_M = (0.0, 0.10, 0.20)
 SWEEP_HEADINGS_DEG = (-20.0, -10.0, 0.0, 10.0, 20.0)
+# Back to the start after the sweep, closed loop: the front camera's view of the floor board
+# against the run's first frame says where the base is; turn, then drive, until within these
+# (convention: the boards' placement tolerance is a few cm; odometry alone drifts ~1-2 cm in a
+# 20 cm sweep). A single drive never goes further forward than MAX_RETURN_FORWARD_M.
+RETURN_TOL_M = 0.01
+RETURN_TOL_DEG = 1.0
+RETURN_TRIES = 4
+MAX_RETURN_FORWARD_M = 0.25
 
 
 def _in_limits(calib: Calibration, joint: str, deg: float) -> bool:
@@ -131,10 +144,15 @@ def _in_limits(calib: Calibration, joint: str, deg: float) -> bool:
 
 
 def plan(
-    calib: Calibration, board_x: float = prm.REACH_POINT_X_M.value, floor_z: float = DEFAULT_FLOOR_Z_M
+    calib: Calibration,
+    board_x: float = prm.REACH_POINT_X_M.value,
+    floor_z: float = DEFAULT_FLOOR_Z_M,
+    reverse: bool = False,
 ) -> list[dict]:
-    """[{"name", "joints"} or {"name", "refused"}]: every pose in the joint limits (less the
-    planner's margin) and every move from the previous pose clear of the floor and the body."""
+    """[{"name", "anchor", "joints"} or {..., "refused"}]: every pose in the joint limits (less the
+    planner's margin) and every move from the previous pose clear of the floor and the body.
+    reverse: the same poses in the opposite order, so most are reached from the other side (a
+    joint's play past its encoder shows as the difference)."""
     arm = Arm(None, calib=calib, floor_z=floor_z)
     ready = dict(NAMED_POSES["ready"])
     anchors = []
@@ -149,25 +167,41 @@ def plan(
             anchors.append((name, {**ready, **wps[-1]}, changes))
         except PlanError as e:
             anchors.append((name, None, str(e)))
-    out, prev = [], ready
+    poses = []
     for name, base, changes in anchors:
         if base is None:
-            out.append({"name": name, "anchor": name, "refused": changes})
+            poses.append({"name": name, "anchor": name, "refused": changes})
             continue
         for ch in changes:
             label = name + "".join(f" {j[4:]}{d:+d}" for j, d in ch.items())
             goal = {j: v + ch.get(j, 0) for j, v in base.items()}
             bad = [j for j in ch if not _in_limits(calib, j, goal[j])]
+            if bad:
+                poses.append(
+                    {
+                        "name": label,
+                        "anchor": name,
+                        "refused": f"{bad[0]} past its limit ({goal[bad[0]]:.1f} deg)",
+                    }
+                )
+            else:
+                poses.append({"name": label, "anchor": name, "joints": goal})
+    out, prev = [], ready
+    for p in reversed(poses) if reverse else poses:
+        if "joints" in p:
             try:
-                if bad:
-                    raise PlanError(f"{bad[0]} past its limit ({goal[bad[0]]:.1f} deg)")
-                arm.check_clear(prev, goal, label)
+                arm.check_clear(prev, p["joints"], p["name"])
+                prev = p["joints"]
             except PlanError as e:
-                out.append({"name": label, "anchor": name, "refused": str(e)})
-                continue
-            out.append({"name": label, "anchor": name, "joints": goal})
-            prev = goal
+                p = {"name": p["name"], "anchor": p["anchor"], "refused": str(e)}
+        out.append(p)
     return out
+
+
+def _cameras() -> dict | None:
+    """calib.json "cameras" (solve_cameras.py --write), or None before the first calibration."""
+    calib = json.loads((ROOT / "data" / "calib.json").read_text())
+    return calib.get("cameras", {}).get("value")
 
 
 def _out(kind: str) -> Path:
@@ -308,6 +342,51 @@ def capture_sweep(robot, out: Path, moves: list[dict]) -> list[dict]:
     return frames
 
 
+def base_offset(T_cam_board_ref, T_cam_board_now, T_base_cam) -> tuple[float, float, float]:
+    """Where the base is now against where it was in the reference frame, in the reference
+    base frame: (x m, y m, heading deg). The board is fixed and the camera rides the base."""
+    move = T_base_cam @ T_cam_board_ref @ inv(T_cam_board_now) @ inv(T_base_cam)
+    return float(move[0, 3]), float(move[1, 3]), float(np.degrees(np.arctan2(move[1, 0], move[0, 0])))
+
+
+def front_measure(robot, ref_boards: dict, cams: dict):
+    """A function giving the base's offset from the reference frame's place, from a fresh front
+    frame of the floor board (FRONT_VIA)."""
+    K, dist = np.asarray(cams["front"]["K"]), np.asarray(cams["front"]["dist"])
+    T_base_cam = np.asarray(cams["front"]["T_base_cam"])
+    ref = board_in_camera(K, dist, FRONT_VIA, ref_boards[FRONT_VIA])
+
+    def measure() -> tuple[float, float, float]:
+        time.sleep(SETTLE_S)
+        seen = boards.detect(robot.frame("front", after=time.time())[0])
+        if FRONT_VIA not in seen:
+            raise RuntimeError(
+                f"the {FRONT_VIA} board isn't in the front camera's view: can't find the start"
+            )
+        return base_offset(ref, board_in_camera(K, dist, FRONT_VIA, seen[FRONT_VIA]), T_base_cam)
+
+    return measure
+
+
+def return_to_start(robot, measure) -> tuple[float, float, float]:
+    """Turn, then drive, until the base is back where measure() counts from (within RETURN_TOL);
+    returns the last offset. Raises if it doesn't get there in RETURN_TRIES moves."""
+    for k in range(RETURN_TRIES + 1):
+        x, y, th = measure()
+        print(f"  base {100 * x:+.1f} cm forward, {100 * y:+.1f} cm left, {th:+.1f} deg from the start")
+        if np.hypot(x, y) < RETURN_TOL_M and abs(th) < RETURN_TOL_DEG:
+            return x, y, th
+        if k == RETURN_TRIES:
+            break
+        if abs(th) >= RETURN_TOL_DEG:
+            robot.base(dtheta_deg=-th)  # the heading first: then the offset is in the start's axes
+        else:
+            if -x > MAX_RETURN_FORWARD_M:
+                raise RuntimeError(f"the start is {-100 * x:.0f} cm ahead: more than a return drives blind")
+            robot.base(dx=-x, dy=-y)
+    raise RuntimeError(f"not back at the start after {RETURN_TRIES} moves")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="what", required=True)
@@ -317,6 +396,11 @@ def main() -> None:
     sp = sub.add_parser("scene")
     sp.add_argument("--plan-only", action="store_true")
     sp.add_argument("--no-sweep", action="store_true", help="skip the base sweep for the front lens")
+    sp.add_argument("--reverse", action="store_true", help="visit the poses in the opposite order")
+    hp = sub.add_parser(
+        "home", help="drive the base back to where a scene started (front camera, floor board)"
+    )
+    hp.add_argument("--scene", type=Path, required=True)
     sp.add_argument(
         "--board-x", type=float, default=prm.REACH_POINT_X_M.value, help="the floor board's centre (arm x, m)"
     )
@@ -327,8 +411,13 @@ def main() -> None:
     if args.what == "lens":
         capture_lens(Robot(), args.cam, args.views)  # frames only: the robot isn't taken over
         return
+    if args.what == "home":
+        ref = json.loads((args.scene / "scene.json").read_text())["front"][0]["boards"]
+        with Robot() as robot:
+            return_to_start(robot, front_measure(robot, ref, _cameras()))
+        return
     robot = Robot()
-    poses = plan(Calibration.from_robot(robot), args.board_x)
+    poses = plan(Calibration.from_robot(robot), args.board_x, reverse=args.reverse)
     for k, p in enumerate(poses):
         print(
             f"{k:2d} {p['name']:28s}",
@@ -354,6 +443,15 @@ def main() -> None:
             finally:
                 (out / "scene.json").write_text(json.dumps(scene, indent=1) + "\n")
             print(f"{len(scene['sweep'])} sweep frames with a board")
+            cams = _cameras()
+            if cams and scene["front"] and FRONT_VIA in scene["front"][0]["boards"]:
+                print("back to the start:")
+                scene["returned"] = return_to_start(
+                    robot, front_measure(robot, scene["front"][0]["boards"], cams)
+                )
+                (out / "scene.json").write_text(json.dumps(scene, indent=1) + "\n")
+            else:
+                print("no measured front camera in calib.json yet: the robot stays 20 cm back")
 
 
 if __name__ == "__main__":

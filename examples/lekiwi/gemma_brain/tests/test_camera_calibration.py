@@ -241,3 +241,45 @@ def test_the_base_sweep_never_drives_forward_and_frames_every_stop(tmp_path, mon
     assert abs(sum(dx for dx, _ in robot.moves) + 0.20) < 1e-9 and abs(sum(t for _, t in robot.moves)) < 1e-9
     assert all(abs(t) <= 20 for _, t in robot.moves)  # no turn larger than the sweep's widest
     assert len(frames) == 15 and len({(f["base"]["back_m"], f["base"]["heading_deg"]) for f in frames}) == 15
+
+
+def _base_move(x, y, th_deg):
+    return _T(_rot([0, 0, 1], np.radians(th_deg)), [x, y, 0.0])
+
+
+def test_the_base_offset_from_the_front_camera_is_the_move_it_made():
+    ref = sc.inv(FRONT_TRUE) @ BOARDS_TRUE["wrist"]
+    for x, y, th in ((-0.2, 0.0, 0.0), (-0.1, 0.03, 12.0), (0.01, -0.02, -20.0)):
+        now = sc.inv(FRONT_TRUE) @ sc.inv(_base_move(x, y, th)) @ BOARDS_TRUE["wrist"]
+        got = capture_cameras.base_offset(ref, now, FRONT_TRUE)
+        assert np.allclose(got, (x, y, th), atol=1e-9), got
+
+
+def test_the_return_reaches_the_start_though_the_base_moves_8_percent_short():
+    class Base:
+        pose = _base_move(-0.20, 0.015, 4.0)  # after the sweep, odometry drift included
+        forward = []
+
+        def base(self, dx=0.0, dy=0.0, dtheta_deg=0.0, speed=None):
+            self.forward.append(dx)
+            self.pose = self.pose @ _base_move(0.92 * dx, 0.92 * dy, 0.92 * dtheta_deg)
+
+    robot = Base()
+
+    def measure():
+        p = robot.pose
+        return p[0, 3], p[1, 3], float(np.degrees(np.arctan2(p[1, 0], p[0, 0])))
+
+    x, y, th = capture_cameras.return_to_start(robot, measure)
+    assert np.hypot(x, y) < capture_cameras.RETURN_TOL_M and abs(th) < capture_cameras.RETURN_TOL_DEG
+    assert max(robot.forward) <= capture_cameras.MAX_RETURN_FORWARD_M
+
+
+def test_the_reversed_plan_visits_the_same_poses_backwards():
+    cal = _Oct29(*_real_cal())
+    ahead, back = (
+        capture_cameras.plan(cal, floor_z=FLOOR_Z),
+        capture_cameras.plan(cal, floor_z=FLOOR_Z, reverse=True),
+    )
+    assert all("joints" in p for p in back), [p for p in back if "refused" in p]
+    assert [p["name"] for p in back] == [p["name"] for p in reversed(ahead)]
