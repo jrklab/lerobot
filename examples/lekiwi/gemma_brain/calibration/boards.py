@@ -51,8 +51,10 @@ _DETECTORS = {name: cv2.aruco.CharucoDetector(b) for name, b in BOARDS.items()}
 
 
 def object_points(name: str, corner_ids) -> np.ndarray:
-    """(N, 3) metres: the board's inner corners with these ids, in the board's frame."""
-    return np.asarray(BOARDS[name].getChessboardCorners(), float)[np.asarray(corner_ids, int).ravel()]
+    """(N, 3) metres: the board's inner corners with these ids, in the board's frame. name may
+    carry a capture's prefix ("2/wrist": the wrist board as placed in the third scene)."""
+    board = BOARDS[name.rsplit("/", 1)[-1]]
+    return np.asarray(board.getChessboardCorners(), float)[np.asarray(corner_ids, int).ravel()]
 
 
 def decode(jpeg: bytes) -> np.ndarray:

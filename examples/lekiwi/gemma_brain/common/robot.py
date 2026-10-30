@@ -56,6 +56,7 @@ def find_url(candidates=CANDIDATE_URLS, timeout: float = 1.5) -> str:
 JOINT_UNITS = "deg"
 HEARTBEAT_PERIOD_S = 0.1
 HEARTBEAT_TIMEOUT_S = 1.0
+ENABLE_TIMEOUT_S = 3.0  # convention: auto mode's first control step takes a few of its ticks
 
 
 class RobotError(RuntimeError):
@@ -125,6 +126,13 @@ class Robot:
         self._hb_stop.clear()
         self._hb_thread = threading.Thread(target=self._heartbeat_loop, name="heartbeat", daemon=True)
         self._hb_thread.start()
+        # Auto mode holds no joint targets until its first control step; a command sent before
+        # that is refused "no joint state yet" (Oct 29: the first one after a service restart).
+        deadline = time.monotonic() + ENABLE_TIMEOUT_S
+        while not self._json("GET", "/auto/status").get("targets"):
+            if time.monotonic() > deadline:
+                raise RobotError(f"auto mode has no joint state {ENABLE_TIMEOUT_S:.0f} s after enable")
+            time.sleep(0.05)
         logger.info("auto mode enabled")
 
     def disable(self) -> None:

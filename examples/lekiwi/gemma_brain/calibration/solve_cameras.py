@@ -20,15 +20,18 @@
 """Solve the cameras from the ChArUco captures (calibration/capture_cameras.py) into calib.json
 "cameras". No robot motion.
 
-    .venv/bin/python calibration/solve_cameras.py --scene runs/<t>-scene \\
-        [--lens-wrist runs/<t>-lens-wrist] [--lens-front runs/<t>-lens-front] [--write]
+    .venv/bin/python calibration/solve_cameras.py --scene runs/<t>-scene [runs/<t2>-scene ...] \\
+        [--closeup runs/<t>-closeup ...] [--lens-wrist runs/<t>-lens-wrist] [--lens-front ...] [--write]
+
+Several scenes solve together, each with its own board poses: runs in both pose orders average
+out the arm's approach-dependent play (Oct 29: ~1.7 mm the encoders don't see).
 
 The hand-held lens captures are optional (a fallback): the scene's own views are always used,
 the arm's for the wrist lens and the base sweep's for the front one (Oct 29: focal lengths +/-2
 px, the front centre within 8 px between lens models, 48 px apart before the sweep).
 
-1. Each lens (focal length, optical centre, distortion): OpenCV's calibrateCamera over every
-   view of a board.
+1. Each lens (focal length, optical centre, radial distortion k1 k2: LENS_FLAGS): OpenCV's
+   calibrateCamera over every view of a board.
 2. The wrist camera's pose on the gripper and the boards' poses in the arm's frame: a linear
    hand-eye solution (Park and Martin, AX = XB) to start from, then a least-squares fit of every
    detected corner's reprojection. With --fit-offsets, also the zero offsets of the three joints
@@ -65,7 +68,12 @@ from common.arm import IK_ARM_JOINTS, kin
 from calibration import boards
 
 CALIB = ROOT / "data" / "calib.json"
-IMAGE_SIZE = (640, 480)  # both cameras' frames from the Pi (/auto/frame)
+IMAGE_SIZE = (640, 480)
+# The lens model: radial distortion k1, k2 only. The full model's tangential terms and k3 lowered
+# the error by 0.01-0.02 px but let the optical centre wander: across four Oct 29 runs the front
+# camera's centre spread 15 px (x) and 8 px (y) with them, 1.5 and 4.8 px without; the wrist's
+# 2.1 / 0.9 px with, 1.5 / 0.6 px without.
+LENS_FLAGS = cv2.CALIB_FIX_K3 | cv2.CALIB_ZERO_TANGENT_DIST  # both cameras' frames from the Pi (/auto/frame)
 # The board that places the front camera: the floor board, close to the wrist camera and seen
 # from every arm pose. The upright boards stand ~65 cm out, located only from the forward poses:
 # through them the front camera came out up to 20 mm and 3 deg apart (Oct 29 scene).
@@ -114,7 +122,7 @@ def lens(views: list[dict], image_size: tuple[int, int]) -> dict:
             img.append(np.asarray(d["px"], np.float32).reshape(-1, 1, 2))
     if len(obj) < 3:  # convention: calibrateCamera needs a few views to separate focal length from pose
         raise ValueError(f"only {len(obj)} board views: capture more")
-    rms, K, dist, _, _ = cv2.calibrateCamera(obj, img, tuple(image_size), None, None)
+    rms, K, dist, _, _ = cv2.calibrateCamera(obj, img, tuple(image_size), None, None, flags=LENS_FLAGS)
     return {"K": K, "dist": dist.ravel(), "rms_px": float(rms), "views": len(obj)}
 
 
@@ -258,10 +266,18 @@ def offset_spread(records: list[dict], K, dist) -> dict | None:
 # --- 3. the front camera ---
 
 
+def mean_pose(Ts: list[np.ndarray]) -> np.ndarray:
+    """The mean of poses: translations averaged, rotations by the nearest rotation to their sum."""
+    U, _, Vt = np.linalg.svd(sum(T[:3, :3] for T in Ts))
+    out = np.eye(4)
+    out[:3, :3] = U @ np.diag([1.0, 1.0, np.linalg.det(U @ Vt)]) @ Vt
+    out[:3, 3] = np.mean([T[:3, 3] for T in Ts], axis=0)
+    return out
+
+
 def solve_front(views: list[dict], K, dist, boards_in_base: dict[str, np.ndarray]) -> dict:
     """The front camera's pose in the arm's frame (T_base_cam) from its views of boards whose
-    pose in the arm's frame is known: one estimate per board view, averaged (rotation by the
-    first, which is enough for views from one place)."""
+    pose in the arm's frame is known: one estimate per board view, averaged."""
     est = []
     for v in views:
         for name, d in v.items():
@@ -271,8 +287,7 @@ def solve_front(views: list[dict], K, dist, boards_in_base: dict[str, np.ndarray
                     est.append(boards_in_base[name] @ inv(C))
     if not est:
         raise ValueError("the front camera saw none of the boards the wrist camera located")
-    T = est[0].copy()
-    T[:3, 3] = np.mean([e[:3, 3] for e in est], axis=0)
+    T = mean_pose(est)
     spread = float(np.max([np.linalg.norm(e[:3, 3] - T[:3, 3]) for e in est]))
     return {"T_base_cam": T, "views": len(est), "spread_m": spread}
 
@@ -288,49 +303,71 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--lens-wrist", type=Path, help="a hand-held lens capture (optional)")
     ap.add_argument("--lens-front", type=Path, help="a hand-held lens capture (optional)")
-    ap.add_argument("--scene", type=Path, required=True)
+    ap.add_argument("--scene", type=Path, nargs="+", required=True, help="one or more scene captures")
+    ap.add_argument("--closeup", type=Path, nargs="*", default=[], help="closeup captures (front lens views)")
     ap.add_argument(
         "--fit-offsets", action="store_true", help="fit the joint zero offsets too (reported, not trusted)"
     )
     ap.add_argument("--write", action="store_true")
     args = ap.parse_args()
 
-    sc = _load(args.scene, "scene")
+    scenes = [_load(d, "scene") for d in args.scene]
     held = {
         cam: _load(d, "views")["views"] if d else []
         for cam, d in (("wrist", args.lens_wrist), ("front", args.lens_front))
     }
-    wrist_views = [v["boards"] for v in held["wrist"]] + [r["boards"] for r in sc["wrist"]]
-    front_views = [v["boards"] for v in held["front"]] + [
-        f["boards"] for f in sc["front"] + sc.get("sweep", []) + sc.get("closeup", [])
+    # Each scene's boards are its own (placed, or the robot returned, a little differently):
+    # their names carry the scene's index, "2/wrist".
+    records = [
+        {**r, "boards": {f"{i}/{n}": d for n, d in r["boards"].items()}}
+        for i, sc in enumerate(scenes)
+        for r in sc["wrist"]
     ]
+    closeups = [f["boards"] for d in args.closeup for f in _load(d, "closeup")["closeup"]]
+    wrist_views = [v["boards"] for v in held["wrist"]] + [r["boards"] for r in records]
+    front_views = (
+        [v["boards"] for v in held["front"]]
+        + [f["boards"] for sc in scenes for f in sc["front"] + sc.get("sweep", []) + sc.get("closeup", [])]
+        + closeups
+    )
     wl = lens(wrist_views, IMAGE_SIZE)
     fl = lens(front_views, IMAGE_SIZE)
     print(
         f"wrist lens: rms {wl['rms_px']:.2f} px over {wl['views']} views; front lens: rms {fl['rms_px']:.2f} px over {fl['views']}"
     )
     offset_joints = OFFSET_JOINTS if args.fit_offsets else []
-    w = solve_wrist(sc["wrist"], wl["K"], wl["dist"], offset_joints=offset_joints)
+    w = solve_wrist(records, wl["K"], wl["dist"], offset_joints=offset_joints)
     print(
         f"wrist camera on the gripper: {np.round(w['T_tcp_cam'][:3, 3] * 1000, 1).tolist()} mm; "
-        f"reprojection rms {w['rms_px']:.2f} px over {w['poses']} poses, {w['corners']} corners"
+        f"reprojection rms {w['rms_px']:.2f} px over {w['poses']} poses in {len(scenes)} scenes, {w['corners']} corners"
     )
     spread = None
     if args.fit_offsets:
         print("joint zero offsets (deg):", {j: round(v, 2) for j, v in w["joint_offsets_deg"].items()})
-        spread = offset_spread(sc["wrist"], wl["K"], wl["dist"])
+        spread = offset_spread(records, wl["K"], wl["dist"])
         if spread:
             print("  each anchor left out in turn:")
             for anchor, off in spread["without"].items():
                 print(f"    without {anchor:12s}", {j: round(v, 2) for j, v in off.items()})
             print("  spread (max - min, deg):", {j: round(v, 2) for j, v in spread["spread_deg"].items()})
-    f = solve_front(
-        [fr["boards"] for fr in sc["front"]], fl["K"], fl["dist"], {FRONT_VIA: w["boards"][FRONT_VIA]}
-    )
+    # The front camera: one estimate per scene, through that scene's floor board, then their mean.
+    fronts = [
+        solve_front(
+            [fr["boards"] for fr in sc["front"]],
+            fl["K"],
+            fl["dist"],
+            {FRONT_VIA: w["boards"][f"{i}/{FRONT_VIA}"]},
+        )["T_base_cam"]
+        for i, sc in enumerate(scenes)
+    ]
+    f = {"T_base_cam": mean_pose(fronts)}
     tilt = float(np.degrees(np.arcsin(-f["T_base_cam"][2, 2])))
+    across = max(np.linalg.norm(T[:3, 3] - f["T_base_cam"][:3, 3]) for T in fronts)
     print(
         f"front camera in the arm's frame: {np.round(f['T_base_cam'][:3, 3] * 1000, 1).tolist()} mm, "
-        f"{tilt:.1f} deg down ({f['views']} views of the {FRONT_VIA} board, spread {1000 * f['spread_m']:.1f} mm)"
+        f"{tilt:.1f} deg down (through the {FRONT_VIA} board; the scenes' estimates within {1000 * across:.1f} mm "
+        f"of their mean, tilts {min(np.degrees(np.arcsin(-T[2, 2])) for T in fronts):.1f}-"
+        f"{max(np.degrees(np.arcsin(-T[2, 2])) for T in fronts):.1f} deg)"
     )
     if args.write:
         calib = json.loads(CALIB.read_text())
@@ -351,13 +388,14 @@ def main() -> None:
             "meaning": "camera intrinsics (K, dist: OpenCV), the wrist camera's pose in the TCP frame and the front "
             "camera's pose in the arm base frame (metres); joint_offsets_deg: the zero offsets the solve assumed "
             "(deg, added to the measured angle; empty = none, the arm's own zeros)",
-            "method": "solve_cameras.py on a capture_cameras.py scene: calibrateCamera (the front lens with the base "
-            "sweep); Park-Martin hand-eye refined with every corner's reprojection; the front camera through the "
-            f"{FRONT_VIA} board",
+            "method": "solve_cameras.py on capture_cameras.py scenes: calibrateCamera, radial k1 k2 only (the front "
+            "lens with the base sweep and the side board close-up); Park-Martin hand-eye refined with every "
+            "corner's reprojection over all scenes, each with its own board poses; the front camera through each "
+            f"scene's {FRONT_VIA} board, averaged",
             "date": datetime.date.today().isoformat(),
             "log": [
                 str(p.resolve().relative_to(ROOT))
-                for p in (args.lens_wrist, args.lens_front, args.scene)
+                for p in (args.lens_wrist, args.lens_front, *args.scene, *args.closeup)
                 if p
             ],
             "rms_px": {"wrist_lens": wl["rms_px"], "front_lens": fl["rms_px"], "wrist_scene": w["rms_px"]},
