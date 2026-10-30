@@ -78,9 +78,12 @@ MAX_JOINT_SPEED = 60.0  # deg/s, on any joint in any segment (was 60 units/s: 53
 DEFAULT_JOINT_SPEED = 35.0  # deg/s
 MAX_WAYPOINTS = 600
 CLEARANCE_SAMPLE_DEG = 5.0
-# The jaw tips extend this far past the TCP along its approach axis (gemma_brain/common/arm.py's
-# JAW_TIP_OFFSET_M, from the floor probe).
-JAW_TIP_OFFSET_M = 0.015
+# The jaw tips extend this far past the TCP along its approach axis: the floor probes' TCP at
+# contact (-0.0973 m at x 0.24, Oct 29) less the floor the cameras measured (the floor board's top,
+# -0.1058, less its 1.25 mm ruler-measured thickness), Oct 30. The taught grasp agrees: the held
+# brick's top face (11.4 mm) level with the TCP, the tips 1.5 mm up. It was 0.015, estimated from a
+# probe against an older floor. The planner (gemma_brain/common/arm.py) imports it from here.
+JAW_TIP_OFFSET_M = 0.0097
 # Floor guard for the jaw tips' z in the arm base frame when a command doesn't send its own
 # z_min (the brain always sends one): the measured floor at the jaw tips (-0.112 m since the
 # Oct 29 arm recalibration; -0.126 with the old joint zeros) plus 2 cm.

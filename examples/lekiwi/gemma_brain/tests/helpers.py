@@ -47,10 +47,10 @@ class SimRobot(_SimRobot):
         return b"", after
 
 # The measured cameras (calib.json "cameras", Oct 30), and how far below the TCP-at-contact floor
-# the floor they see lies (-0.0966 vs the floor board's -0.1058), and the front camera's box
+# the floor they see lies (-0.0966 vs -0.1071: the floor board's top less its thickness), and the front camera's box
 # bottom of a brick at the reach point (calibrate_front.py: u_target, near_bottom).
 CAMS = Cameras.from_calib(json.loads((Path(__file__).parents[1] / "data" / "calib.json").read_text())["cameras"]["value"])
-SEEN_BELOW_CONTACT_M = 0.0092
+SEEN_BELOW_CONTACT_M = 0.0105
 NEAR_BOTTOM_UV = (0.451, 0.699)
 
 def geom(floor_z):

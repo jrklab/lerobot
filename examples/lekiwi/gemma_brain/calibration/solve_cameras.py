@@ -362,6 +362,9 @@ def main() -> None:
     ap.add_argument(
         "--fit-offsets", action="store_true", help="fit the joint zero offsets too (reported, not trusted)"
     )
+    ap.add_argument(
+        "--floor-board-thickness", type=float, default=0.0, help="the floor board's thickness (m, a ruler's)"
+    )
     ap.add_argument("--write", action="store_true")
     args = ap.parse_args()
 
@@ -430,9 +433,11 @@ def main() -> None:
         f"{max(np.degrees(np.arcsin(-T[2, 2])) for T in fronts):.1f} deg)"
     )
     centre, centre_rms = turn_centre(scenes, fl["K"], fl["dist"], f["T_base_cam"])
-    floor_seen = float(np.mean([w["boards"][f"{i}/{FRONT_VIA}"][2, 3] for i in range(len(scenes))]))
+    board_top = float(np.mean([w["boards"][f"{i}/{FRONT_VIA}"][2, 3] for i in range(len(scenes))]))
+    floor_seen = board_top - args.floor_board_thickness
     print(
-        f"the floor board lies at z {1000 * floor_seen:.1f} mm in the arm's frame (the floor the cameras see)"
+        f"the floor board's top lies at z {1000 * board_top:.1f} mm in the arm's frame; the floor under it "
+        f"{1000 * floor_seen:.1f} mm (the board {1000 * args.floor_board_thickness:.2f} mm thick)"
     )
     print(
         f"the base turns about ({100 * centre[0]:.1f}, {100 * centre[1]:.1f}) cm in the arm's frame (residual {100 * centre_rms:.2f} cm)"
@@ -459,10 +464,12 @@ def main() -> None:
                 "joint_offsets_deg": w["joint_offsets_deg"],
                 "base_turn_centre": centre.tolist(),
                 "floor_z": floor_seen,
+                "floor_board_thickness_m": args.floor_board_thickness,
             },
             "meaning": "camera intrinsics (K, dist: OpenCV), the wrist camera's pose in the TCP frame and the front "
             "camera's pose in the arm base frame (metres); base_turn_centre: (x, y) the base turns about (m); "
-            "floor_z: the floor board's plane, the floor the cameras were placed against (m); "
+            "floor_z: the floor under the floor board the cameras were placed against (its top less "
+            "floor_board_thickness_m, a ruler's) (m); "
             "joint_offsets_deg: the zero offsets the solve assumed "
             "(deg, added to the measured angle; empty = none, the arm's own zeros)",
             "method": "solve_cameras.py on capture_cameras.py scenes: calibrateCamera, radial k1 k2 only (the front "

@@ -86,9 +86,11 @@ class Skills:
         self.seen: dict[str, Detection] = {}  # the last detection of each object, per camera
         self.heights: dict[str, float] = {}  # object heights measured side-on by the front camera
         self._roll_range = None
-        # The Arm's whole-arm floor clearance from the measured floor (arm.DEFAULT_FLOOR_Z_M,
-        # -0.100, predates the joint-zero fix; the measured floor is ~-0.126 at the jaw tips).
-        self.arm.floor_z = float(geom.floor_coef[0]) - JAW_TIP_OFFSET_M
+        # The Arm's whole-arm floor clearance from the measured floor, where the arm works (the
+        # reach point): the plane's height at x 0 is off by its tilt there (a few mm), and with the
+        # jaw tips 9.7 mm past the TCP (Oct 30) the final look's descent ends just above the
+        # clearance, a free move under that guard.
+        self.arm.floor_z = geom.floor(prm.REACH_POINT_X_M.value, 0.0) - JAW_TIP_OFFSET_M
         self.arm.z_min = self.arm.floor_z + FLOOR_CLEARANCE_M + JAW_TIP_OFFSET_M
 
     def ev(self, name: str, **kw) -> None:
@@ -156,7 +158,13 @@ class Skills:
         # Low and contact-stop moves get a guard just under them; the Pi checks the jaw tips, so
         # their offset too. A contact-stop move without one got the Pi's built-in default, which
         # predates the joint-zero fix (-0.050, the floor is ~-0.126): refused (Oct 27 place-in).
-        z_min = (min(goal[2], p[2]) - search - JAW_TIP_OFFSET_M - prm.LOW_MOVE_GUARD_M.value) if low or until_contact else None
+        z_min = min(goal[2], p[2]) - search - JAW_TIP_OFFSET_M - prm.LOW_MOVE_GUARD_M.value
+        if not (low or until_contact):
+            # A free move keeps the free-move guard, but never above its own lowest jaw tips (a
+            # straight line's lowest point is an end the skill chose): the final look's descent
+            # ends with the tips 0.3 mm over the free-move clearance (tips 9.7 mm past the TCP,
+            # Oct 30), as Arm.joint_z_min does for joint moves.
+            z_min = min(self.arm.z_min, z_min)
         try:
             if until_contact:
                 wps, durs = plan_ee_line(self.arm.calib, self.arm.targets(), goal.tolist(), VERTICAL, roll, speed,

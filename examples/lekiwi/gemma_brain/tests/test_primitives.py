@@ -199,7 +199,7 @@ def test_a_move_crossing_the_clearance_goes_at_the_near_speed_only_below_it():
     # guard is taken (Oct 28 fit). Tilted the same way about where the arm is:
     x = sk.cmd_tcp()[0]
     sk.geom.floor_coef = np.array([-0.12 + 0.0224 * x, -0.0224, 0.0])
-    sk.arm.floor_z = float(sk.geom.floor_coef[0]) - JAW_TIP_OFFSET_M  # as Skills.__init__ sets them
+    sk.arm.floor_z = sk.geom.floor(prm.REACH_POINT_X_M.value, 0.0) - JAW_TIP_OFFSET_M  # as Skills.__init__ sets them
     sk.arm.z_min = sk.arm.floor_z + FLOOR_CLEARANCE_M + JAW_TIP_OFFSET_M
     sent = []
     orig = sk.arm.robot.trajectory

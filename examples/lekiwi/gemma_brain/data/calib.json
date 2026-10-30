@@ -248,14 +248,14 @@
       "wrist": {
         "K": [
           [
-            546.674201835234,
+            546.6742018352339,
             0.0,
-            304.62421292247785
+            304.6242129224778
           ],
           [
             0.0,
-            547.2819570641947,
-            275.1555048687274
+            547.2819570641946,
+            275.15550486872746
           ],
           [
             0.0,
@@ -264,30 +264,30 @@
           ]
         ],
         "dist": [
-          -0.4242214412375561,
-          0.17357848460128483,
+          -0.4242214412375559,
+          0.17357848460128453,
           0.0,
           0.0,
           0.0
         ],
         "T_tcp_cam": [
           [
-            0.9883969366643188,
-            0.14789798911450114,
-            0.034607519536617254,
-            -0.015568284563248982
+            0.9883969366648101,
+            0.14789798911028884,
+            0.03460751954059026,
+            -0.015568284565543818
           ],
           [
-            -0.14914887425830026,
-            0.9018997267779533,
-            0.40537821370337,
-            -0.06054012302231339
+            -0.14914887425593265,
+            0.9018997267764228,
+            0.40537821370764593,
+            -0.06054012302510634
           ],
           [
-            0.02874211022301912,
-            -0.40583625719462313,
-            0.9134937457072093,
-            -0.09030097504271815
+            0.028742110218413698,
+            -0.4058362571995592,
+            0.9134937457051613,
+            -0.09030097504269441
           ],
           [
             0.0,
@@ -300,14 +300,14 @@
       "front": {
         "K": [
           [
-            549.1892847259043,
+            549.1892847345916,
             0.0,
-            336.5797922166848
+            336.57979221182336
           ],
           [
             0.0,
-            546.7699219268327,
-            236.31701442915423
+            546.7699219315408,
+            236.31701442623142
           ],
           [
             0.0,
@@ -316,30 +316,30 @@
           ]
         ],
         "dist": [
-          -0.43436847584648036,
-          0.18352382782390975,
+          -0.43436847591139527,
+          0.18352382799346292,
           0.0,
           0.0,
           0.0
         ],
         "T_base_cam": [
           [
-            0.03401799368862758,
-            -0.14061245342220402,
-            0.9894801231192001,
-            0.08186707116571197
+            0.03401799312694631,
+            -0.14061245046192125,
+            0.9894801235591899,
+            0.08186707196295663
           ],
           [
-            -0.9994027310870273,
-            0.0012362245629775259,
-            0.034534806277437775,
-            0.00731369796532196
+            -0.9994027311026621,
+            0.001236225312754141,
+            0.03453480579815483,
+            0.007313698479785503
           ],
           [
-            -0.006079243471908953,
-            -0.9900639422236409,
-            -0.14048641609561788,
-            -0.04837424579482641
+            -0.00607924404471623,
+            -0.9900639426431355,
+            -0.14048641311448867,
+            -0.04837424675816428
           ],
           [
             0.0,
@@ -351,12 +351,13 @@
       },
       "joint_offsets_deg": {},
       "base_turn_centre": [
-        -0.04585909141616856,
-        -0.0004303938073463581
+        -0.045859062665939185,
+        -0.00043037820475343597
       ],
-      "floor_z": -0.10584487858861831
+      "floor_z": -0.10709487858294041,
+      "floor_board_thickness_m": 0.00125
     },
-    "meaning": "camera intrinsics (K, dist: OpenCV), the wrist camera's pose in the TCP frame and the front camera's pose in the arm base frame (metres); base_turn_centre: (x, y) the base turns about (m); floor_z: the floor board's plane, the floor the cameras were placed against (m); joint_offsets_deg: the zero offsets the solve assumed (deg, added to the measured angle; empty = none, the arm's own zeros)",
+    "meaning": "camera intrinsics (K, dist: OpenCV), the wrist camera's pose in the TCP frame and the front camera's pose in the arm base frame (metres); base_turn_centre: (x, y) the base turns about (m); floor_z: the floor under the floor board the cameras were placed against (its top less floor_board_thickness_m, a ruler's) (m); joint_offsets_deg: the zero offsets the solve assumed (deg, added to the measured angle; empty = none, the arm's own zeros)",
     "method": "solve_cameras.py on capture_cameras.py scenes: calibrateCamera, radial k1 k2 only (the front lens with the base sweep and the side board close-up); Park-Martin hand-eye refined with every corner's reprojection over all scenes, each with its own board poses; the front camera through each scene's wrist board, averaged",
     "date": "2026-10-30",
     "log": [
@@ -367,9 +368,9 @@
       "runs/20261029T233742-closeup"
     ],
     "rms_px": {
-      "wrist_lens": 0.4090450015273713,
-      "front_lens": 0.5333709960024038,
-      "wrist_scene": 3.9960380661831376
+      "wrist_lens": 0.40904500152737144,
+      "front_lens": 0.5333709960024042,
+      "wrist_scene": 3.996038066183131
     },
     "offset_spread_deg": null,
     "offsets_to_apply_deg": {}
