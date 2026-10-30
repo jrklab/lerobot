@@ -227,7 +227,7 @@ def test_the_base_sweep_never_drives_forward_and_frames_every_stop(tmp_path, mon
     class Base:
         moves = []
 
-        def base(self, dx=0.0, dy=0.0, dtheta_deg=0.0, speed=None):
+        def base(self, dx=0.0, dy=0.0, dtheta_deg=0.0, speed=None, theta_speed=None):
             self.moves.append((dx, dtheta_deg))
 
         def frame(self, cam, after=0.0):
@@ -260,7 +260,7 @@ def test_the_return_reaches_the_start_though_the_base_moves_8_percent_short():
         pose = _base_move(-0.20, 0.015, 4.0)  # after the sweep, odometry drift included
         forward = []
 
-        def base(self, dx=0.0, dy=0.0, dtheta_deg=0.0, speed=None):
+        def base(self, dx=0.0, dy=0.0, dtheta_deg=0.0, speed=None, theta_speed=None):
             self.forward.append(dx)
             self.pose = self.pose @ _base_move(0.92 * dx, 0.92 * dy, 0.92 * dtheta_deg)
 
@@ -293,7 +293,7 @@ class _SideWorld:
         self.pose, self.board, self.closest = _base_move(0, 0, 0), np.array([0.0, side_y, 0.0]), np.inf
         self.jpeg = cv2.imencode(".jpg", _scene_with_all_boards())[1].tobytes()
 
-    def base(self, dx=0.0, dy=0.0, dtheta_deg=0.0, speed=None):
+    def base(self, dx=0.0, dy=0.0, dtheta_deg=0.0, speed=None, theta_speed=None):
         self.pose = self.pose @ _base_move(0.92 * dx, 0.92 * dy, 0.92 * dtheta_deg)
 
     def frame(self, cam, after=0.0):

@@ -152,6 +152,10 @@ CLOSEUP_STANDOFF_M = 0.30
 CLOSEUP_STEP_M = 0.15
 CLOSEUP_TRIES = 6
 CLOSEUP_HEADINGS_DEG = (-15.0, 0.0, 15.0)
+# The 90 and 180 deg turns to find the side board go at half the Pi's default turn speed (25
+# deg/s): the motor bus dropped right after the first full-speed 90 deg turn (Oct 29, cause not
+# known; a supply sagging under the turn's current would fit).
+SIDE_TURN_SPEED_DEG_S = 12.0
 MAX_RETURN_FORWARD_M = 0.25
 
 
@@ -427,13 +431,13 @@ def capture_closeup(robot, out: Path, cams: dict) -> tuple[list[dict], float | N
     frames and the turn that found the board (None: on neither side, nothing taken)."""
     found, heading = None, 0.0
     for turn in SIDE_TURNS_DEG:
-        robot.base(dtheta_deg=turn - heading)
+        robot.base(dtheta_deg=turn - heading, theta_speed=SIDE_TURN_SPEED_DEG_S)
         heading = turn
         if board_ahead(robot, cams) is not None:
             found = turn
             break
     if found is None:
-        robot.base(dtheta_deg=-heading)
+        robot.base(dtheta_deg=-heading, theta_speed=SIDE_TURN_SPEED_DEG_S)
         print(f"  no {CLOSEUP_BOARD} board on either side: no close-up")
         return [], None
     print(f"  the {CLOSEUP_BOARD} board is on the {'right' if found < 0 else 'left'}")
@@ -450,7 +454,7 @@ def capture_closeup(robot, out: Path, cams: dict) -> tuple[list[dict], float | N
             frames.append(rec)
     robot.base(dtheta_deg=-h)
     drive_to(robot, cams, start)
-    robot.base(dtheta_deg=-found)
+    robot.base(dtheta_deg=-found, theta_speed=SIDE_TURN_SPEED_DEG_S)
     return frames, found
 
 

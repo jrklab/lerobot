@@ -233,11 +233,13 @@ class Robot:
         """pos: degrees open from closed (0), speed in deg/s."""
         return self.run({"cmd": "gripper", "pos": pos, "speed": speed, "units": JOINT_UNITS})
 
-    def base(self, dx: float = 0.0, dy: float = 0.0, dtheta_deg: float = 0.0, speed: float | None = None) -> dict:
+    def base(self, dx: float = 0.0, dy: float = 0.0, dtheta_deg: float = 0.0, speed: float | None = None,
+             theta_speed: float | None = None) -> dict:
+        """speed: m/s for driving, theta_speed: deg/s for turning (None: the Pi's defaults)."""
         if not self.base_enabled:
             raise BaseLocked(f"base move refused (base locked): dx={dx} dy={dy} dtheta={dtheta_deg}")
         try:
-            return self._base(dx, dy, dtheta_deg, speed)
+            return self._base(dx, dy, dtheta_deg, speed, theta_speed)
         except RobotError as e:
             moved = (e.result.get("result") or {}).get("moved")
             if "heartbeat lost" not in str(e) or not moved:
@@ -248,7 +250,11 @@ class Robot:
             logger.warning("base move cut off by a heartbeat gap after %s; finishing %s", moved, rest)
             if abs(rest[0]) < 0.01 and abs(rest[1]) < 0.01 and abs(rest[2]) < 2.0:
                 return {**e.result, "state": "done", "reason": "finished (close enough after a link stall)"}
-            return self._base(*rest, speed)
+            return self._base(*rest, speed, theta_speed)
 
-    def _base(self, dx: float, dy: float, dtheta_deg: float, speed: float | None) -> dict:
-        return self.run({"cmd": "base", "dx": dx, "dy": dy, "dtheta_deg": dtheta_deg, "speed": speed})
+    def _base(self, dx: float, dy: float, dtheta_deg: float, speed: float | None,
+              theta_speed: float | None = None) -> dict:
+        cmd = {"cmd": "base", "dx": dx, "dy": dy, "dtheta_deg": dtheta_deg, "speed": speed}
+        if theta_speed is not None:
+            cmd["theta_speed"] = theta_speed
+        return self.run(cmd)
