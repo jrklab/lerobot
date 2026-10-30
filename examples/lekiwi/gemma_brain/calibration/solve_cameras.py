@@ -23,19 +23,23 @@
     .venv/bin/python calibration/solve_cameras.py --scene runs/<t>-scene \\
         [--lens-wrist runs/<t>-lens-wrist] [--lens-front runs/<t>-lens-front] [--write]
 
-The hand-held lens captures are optional: the scene's own views are always used, and on Oct 29
-they pinned the wrist lens alone (focal length +/-2 px, centre +/-1 px) but not the front one
-(its centre moved 48 px between lens models: all its views come from one robot position).
+The hand-held lens captures are optional (a fallback): the scene's own views are always used,
+the arm's for the wrist lens and the base sweep's for the front one (Oct 29: focal lengths +/-2
+px, the front centre within 8 px between lens models, 48 px apart before the sweep).
 
 1. Each lens (focal length, optical centre, distortion): OpenCV's calibrateCamera over every
-   view of a board, the hand-held ones and the scene's.
-2. The wrist camera's pose on the gripper, the boards' poses in the arm's frame, and the zero
-   offsets of the three joints that tilt the gripper (shoulder lift, elbow, wrist flex): a
-   linear hand-eye solution (Park and Martin, AX = XB) to start from, then a least-squares fit
-   of every detected corner's reprojection. The shoulder pan's and wrist roll's offsets can't
-   be told apart from where the boards lie and how the camera is mounted, so they stay 0.
-3. The front camera's pose in the arm's frame: from its view of the upright front board, whose
-   pose in the arm's frame step 2 found (the arm folded out of the view).
+   view of a board.
+2. The wrist camera's pose on the gripper and the boards' poses in the arm's frame: a linear
+   hand-eye solution (Park and Martin, AX = XB) to start from, then a least-squares fit of every
+   detected corner's reprojection. With --fit-offsets, also the zero offsets of the three joints
+   that tilt the gripper (shoulder lift, elbow, wrist flex), reported with their spread when
+   each arm shape (anchor) is left out in turn. Off by default: on Oct 29 they came out under
+   1 deg but moved up to 2.6 deg with the shapes, the rigid arm model missing 1-3 mm of
+   shape-dependent bending or play that the offsets can't remove, and fitting them lowered the
+   error only from 3.8 to 3.1 px. The shoulder pan's and wrist roll's offsets can't be told
+   apart from where the boards lie and how the camera is mounted at all.
+3. The front camera's pose in the arm's frame: from its views of the floor board (FRONT_VIA),
+   whose pose step 2 found, taken with the arm folded before the base moved.
 
 Frames: the arm base frame of so101_kinematics, metres; joint angles in degrees from the homing
 tick (joint_angles.py). A joint offset is what is added to the measured angle to get the true
@@ -62,6 +66,10 @@ from calibration import boards
 
 CALIB = ROOT / "data" / "calib.json"
 IMAGE_SIZE = (640, 480)  # both cameras' frames from the Pi (/auto/frame)
+# The board that places the front camera: the floor board, close to the wrist camera and seen
+# from every arm pose. The upright boards stand ~65 cm out, located only from the forward poses:
+# through them the front camera came out up to 20 mm and 3 deg apart (Oct 29 scene).
+FRONT_VIA = "wrist"
 # The joints whose zero offsets the scene can tell: they tilt the gripper.
 OFFSET_JOINTS = ["arm_shoulder_lift", "arm_elbow_flex", "arm_wrist_flex"]
 
@@ -281,6 +289,9 @@ def main() -> None:
     ap.add_argument("--lens-wrist", type=Path, help="a hand-held lens capture (optional)")
     ap.add_argument("--lens-front", type=Path, help="a hand-held lens capture (optional)")
     ap.add_argument("--scene", type=Path, required=True)
+    ap.add_argument(
+        "--fit-offsets", action="store_true", help="fit the joint zero offsets too (reported, not trusted)"
+    )
     ap.add_argument("--write", action="store_true")
     args = ap.parse_args()
 
@@ -298,22 +309,28 @@ def main() -> None:
     print(
         f"wrist lens: rms {wl['rms_px']:.2f} px over {wl['views']} views; front lens: rms {fl['rms_px']:.2f} px over {fl['views']}"
     )
-    w = solve_wrist(sc["wrist"], wl["K"], wl["dist"])
+    offset_joints = OFFSET_JOINTS if args.fit_offsets else []
+    w = solve_wrist(sc["wrist"], wl["K"], wl["dist"], offset_joints=offset_joints)
     print(
         f"wrist camera on the gripper: {np.round(w['T_tcp_cam'][:3, 3] * 1000, 1).tolist()} mm; "
         f"reprojection rms {w['rms_px']:.2f} px over {w['poses']} poses, {w['corners']} corners"
     )
-    print("joint zero offsets (deg):", {j: round(v, 2) for j, v in w["joint_offsets_deg"].items()})
-    spread = offset_spread(sc["wrist"], wl["K"], wl["dist"])
-    if spread:
-        print("  each anchor left out in turn:")
-        for anchor, off in spread["without"].items():
-            print(f"    without {anchor:12s}", {j: round(v, 2) for j, v in off.items()})
-        print("  spread (max - min, deg):", {j: round(v, 2) for j, v in spread["spread_deg"].items()})
-    f = solve_front([fr["boards"] for fr in sc["front"]], fl["K"], fl["dist"], w["boards"])
+    spread = None
+    if args.fit_offsets:
+        print("joint zero offsets (deg):", {j: round(v, 2) for j, v in w["joint_offsets_deg"].items()})
+        spread = offset_spread(sc["wrist"], wl["K"], wl["dist"])
+        if spread:
+            print("  each anchor left out in turn:")
+            for anchor, off in spread["without"].items():
+                print(f"    without {anchor:12s}", {j: round(v, 2) for j, v in off.items()})
+            print("  spread (max - min, deg):", {j: round(v, 2) for j, v in spread["spread_deg"].items()})
+    f = solve_front(
+        [fr["boards"] for fr in sc["front"]], fl["K"], fl["dist"], {FRONT_VIA: w["boards"][FRONT_VIA]}
+    )
+    tilt = float(np.degrees(np.arcsin(-f["T_base_cam"][2, 2])))
     print(
-        f"front camera in the arm's frame: {np.round(f['T_base_cam'][:3, 3] * 1000, 1).tolist()} mm "
-        f"({f['views']} views, spread {1000 * f['spread_m']:.1f} mm)"
+        f"front camera in the arm's frame: {np.round(f['T_base_cam'][:3, 3] * 1000, 1).tolist()} mm, "
+        f"{tilt:.1f} deg down ({f['views']} views of the {FRONT_VIA} board, spread {1000 * f['spread_m']:.1f} mm)"
     )
     if args.write:
         calib = json.loads(CALIB.read_text())
@@ -329,13 +346,14 @@ def main() -> None:
                     "dist": fl["dist"].tolist(),
                     "T_base_cam": f["T_base_cam"].tolist(),
                 },
-                "boards_in_base": {n: T.tolist() for n, T in w["boards"].items()},
                 "joint_offsets_deg": w["joint_offsets_deg"],
             },
-            "meaning": "camera intrinsics (K, dist: OpenCV), the wrist camera's pose in the TCP frame, the front camera's "
-            "pose in the arm base frame, and the zero offsets of the gripper-tilting joints (deg, added to the "
-            "measured angle)",
-            "method": "solve_cameras.py: calibrateCamera; Park-Martin hand-eye refined with every corner's reprojection",
+            "meaning": "camera intrinsics (K, dist: OpenCV), the wrist camera's pose in the TCP frame and the front "
+            "camera's pose in the arm base frame (metres); joint_offsets_deg: the zero offsets the solve assumed "
+            "(deg, added to the measured angle; empty = none, the arm's own zeros)",
+            "method": "solve_cameras.py on a capture_cameras.py scene: calibrateCamera (the front lens with the base "
+            "sweep); Park-Martin hand-eye refined with every corner's reprojection; the front camera through the "
+            f"{FRONT_VIA} board",
             "date": datetime.date.today().isoformat(),
             "log": [
                 str(p.resolve().relative_to(ROOT))
