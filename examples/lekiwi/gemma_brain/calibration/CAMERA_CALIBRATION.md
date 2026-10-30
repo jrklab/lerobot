@@ -50,19 +50,16 @@ about 10 cm behind that edge). By eye: the solve measures every board's real pos
 ```
                  TOP VIEW (robot facing up the page)
 
-          ┌──── FRONT board ────┐ ┌──── SIDE board ────┐   both upright, facing the robot,
-          └─────────────────────┘ └────────────────────┘   ~50-55 cm out, side by side;
-                                                            the front camera sees both whole
+              ┌──── FRONT board ────┐     upright, facing the robot, ~50-55 cm out;
+              └─────────────────────┘     the front camera sees it whole
 
                  ┌─────────────────────────────┐
-                 │                             │
-                 │      WRIST board (flat)     │   ~17 cm deep
-                 │       25 cm across          │
-                 │                             │
+                 │      WRIST board (flat)     │   ~17 cm deep, 25 cm across
                  └─────────────────────────────┘   near edge ~6 cm from the robot
          ═══════════════════ robot front edge ═══════════════════
-                         [ arm ]   [front camera]
-                          LeKiwi
+                         [ arm ]   [front camera]           ║ SIDE board: upright, facing
+                          LeKiwi            ~50-60 cm  →    ║ the robot's side, level with
+                                                            ║ its centre (either side)
 ```
 
 1. **Wrist board, flat on the floor**, printed side up, its 25 cm side left to right, centred on
@@ -71,13 +68,14 @@ about 10 cm behind that edge). By eye: the solve measures every board's real pos
 2. **Front board, upright**, facing the robot, ~50-55 cm from the front edge, roughly centred,
    bottom edge on the floor, propped so it can't tip. At ~32 cm its top was above the front
    camera's view (the camera sits low and tilts down).
-3. **Side board, upright**, next to the front board, turned toward the robot. The front camera
-   sees only about +/-30 deg, so 20-30 cm off to the side is outside its view.
+3. **Side board, upright**, beside the robot, facing its side, level with its centre, ~50-60 cm
+   from its side edge, on either side (the capture finds it). The floor between must be clear:
+   the robot drives to 30 cm from it.
 4. **Keep ~30 cm clear behind the robot** for the base sweep.
 
-Then check a frame from each camera (no motion): the front camera should see all three boards,
-the front board whole; the wrist camera (arm folded) the floor board. Part of a board is fine
-(a view counts from 6 corners); the front board whole matters most.
+Then check a frame from each camera (no motion): the front camera sees the front board whole and
+the floor board; the wrist camera (arm folded) the floor board. Part of a board is fine (a view
+counts from 6 corners).
 
 What matters more than position: the print scale, flat and rigid boards, no glare, and
 **nothing moving during the capture** (no board shifts, nobody bumps the robot).
@@ -90,30 +88,38 @@ From `examples/lekiwi/gemma_brain`, robot connected and free to drive.
 
        .venv/bin/python calibration/capture_cameras.py scene --plan-only
 
-   Every arm pose's joint targets from the live calibration (or why one is refused), and the
-   base sweep's moves.
-2. **The capture** (arm and base motion, after approval; about 6 minutes):
+   Every arm pose's joint targets from the live calibration (or why one is refused), the base
+   sweep's moves and the close-up.
+2. **The capture** (arm and base motion, after approval; about 8 minutes):
 
-       .venv/bin/python calibration/capture_cameras.py scene
+       .venv/bin/python calibration/capture_cameras.py scene [--reverse]
 
    - the front camera takes 3 frames, the arm folded;
    - the arm visits 38 poses (35 deg/s joint moves, each checked for floor and body clearance;
      the base still): at each, a wrist frame and the measured joint angles;
    - the arm folds; the base sweep: at 0, 10 and 20 cm back, the base turns -20, -10, 0, +10,
      +20 deg and the front camera takes a frame at each of the 15 stops. Never forward (the
-     floor board is 6 cm ahead); the robot ends 20 cm back, at heading 0.
+     floor board is 6 cm ahead);
+   - back to the start, closed loop on the front camera's view of the boards against the run's
+     first frame (turn, then drive, until within the base's own tolerances: 1 cm, 2 deg);
+   - the side board close-up: a 90 deg turn right (then left if it isn't there) at 12 deg/s,
+     driving in to 30 cm from it (closed loop on its measured distance, at most 15 cm a drive),
+     frames at -15, 0, +15 deg, back out, turn back, back to the start.
 
-   Frames and `scene.json` under `runs/<time>-scene/`.
-3. **The solve** (offline):
+   `--reverse` visits the arm poses in the opposite order. Frames and `scene.json` under
+   `runs/<time>-scene/`. Needs the measured front camera in `calib.json` for the return and the
+   close-up; on a first calibration the robot stays 20 cm back and skips the close-up.
+3. **The solve** (offline), one or more scenes together:
 
-       .venv/bin/python calibration/solve_cameras.py --scene runs/<t>-scene
+       .venv/bin/python calibration/solve_cameras.py --scene runs/<t1>-scene runs/<t2>-scene ...
 
    Prints the results; `--write` stores them in `data/calib.json` "cameras", after they're
-   reviewed.
+   reviewed. Runs in both pose orders (one with `--reverse`) average out the arm's play.
 
-The hand-held lens capture (`capture_cameras.py lens --cam wrist|front`, then `--lens-wrist` /
-`--lens-front` for the solve) is only a fallback for a camera the robot can't point at the
-boards. Hold the board 30 cm or more away; closer, too few corners fit.
+Also: `capture_cameras.py home --scene runs/<t>-scene` drives the robot back to where that scene
+started; `capture_cameras.py closeup` runs only the close-up (frames under `runs/<t>-closeup/`,
+for the solve's `--closeup`). The hand-held lens capture (`capture_cameras.py lens --cam
+wrist|front`) is only a fallback for a camera the robot can't point at the boards.
 
 ## The arm poses
 
@@ -136,30 +142,49 @@ lowest arm point is 35 mm above the floor.
 
 ## Results (2026-10-29)
 
-Scene `runs/20261029T224146-scene`, written to `data/calib.json` (commit 149ea7b3).
+Four scenes (runs 0, A and C in the usual pose order, B reversed) and one side board close-up,
+solved together and written to `data/calib.json` (commit 2679a902).
 
 | Quantity | Result |
 |---|---|
-| wrist lens | f 553 px; rms 0.41 px over 47 board views |
-| front lens | f 550 px; rms 0.53 px over 43 views (the sweep: the optical centre now agrees within 8 px between lens models, 48 px apart without it) |
-| wrist camera mount | 92 mm behind the TCP, 61 mm off the jaw axis, looking along the jaws; the same within 3 mm in two scenes |
-| front camera pose | 82 mm ahead of the arm's base, 48 mm below it (~6 cm above the floor), 7.6 deg down; its 3 views agree within 0.3 mm |
-| arm model fit | rms 3.8 px over 38 poses (2-6 px by arm shape: about 1-3 mm at the board) |
+| wrist lens | f 547 px, radial k1 k2; rms 0.41 px over 194 board views |
+| front lens | f 549 px, radial k1 k2; rms 0.53 px over 171 views |
+| wrist camera mount | 90 mm behind the TCP, 61 mm off the jaw axis, looking along the jaws |
+| front camera pose | 82 mm ahead of the arm's base, 48 mm below it (~6 cm above the floor), 8.1 deg down; the four scenes within 2.7 mm of their mean, tilts 7.4-8.5 deg |
+| arm model fit | rms 4.0 px over 152 poses (2-6 px by arm shape: about 1-3 mm at the board) |
 
-**The front camera is placed through the floor board.** The upright boards stand ~65 cm out in
-the arm's frame and are located only from the forward poses; through them the front camera came
-out up to 20 mm and 3 deg apart.
+**Repeatability.** Run to run, the arm returns to the same place very consistently: in the same
+pose order the camera-seen TCP repeats within 0.55 mm and 0.2 deg (median), the encoder readings
+within 0.09 deg. Approached from the other side (run B), the encoders read 1.6 deg apart for the
+same commanded pose (gearbox backlash and the servos' stopping band: seen, so the solve accounts
+for it), and the camera sees a further 1.6-1.8 mm and ~0.5 deg (up to 2.9 mm) that the encoders
+don't: play past the output shafts (horns, brackets, links). That play is most of the 1-3 mm the
+rigid arm model can't fit, and why the calibration combines runs in both orders.
+
+**The lens model is radial k1, k2 only.** With the tangential terms and k3 the fit was 0.01-0.02
+px better, but the optical centre wandered between runs (front: 15 px across, 8 px down; without
+them 1.5 and 4.8 px). Residuals don't grow toward the image edges with two terms (front: 0.48 px
+in the outer ring; wrist 0.50 against 0.39 px with the full model, a ring the jaws mostly block).
+
+**The front camera is placed through the floor board.** The upright boards stand ~65 cm out and
+are located only from the forward poses; through them the front camera came out up to 20 mm and
+3 deg apart.
 
 **Joint zero offsets are not applied.** The arm's zeros were set by eye at the Oct 29
-recalibration. Fitted, the offsets came out small (lift +0.8, elbow -0.9, wrist flex -1.0 deg)
-but moved up to 2.6 deg when one arm shape was left out: the rigid arm model misses 1-3 mm of
-shape-dependent bending or play (worst in the low and near shapes), which the offsets can't
-remove, and fitting them lowered the error only from 3.8 to 3.1 px. So the by-eye zeros are as
-good as this method can tell. `--fit-offsets` reports them and their spread. Pan and wrist roll
-offsets can't be measured here at all; for camera-guided moves their errors cancel.
+recalibration. Fitted, the offsets came out small (lift +0.9, elbow -1.0, wrist flex -1.1 deg),
+repeatable run to run within ~0.5 deg, but moved up to 2.7 deg when one arm shape was left out:
+the play above, which the offsets can't remove. Fitting them lowered the error only from 4.0 to
+3.3 px. So the by-eye zeros are as good as this method can tell. For an arm whose zeros are set
+less carefully the fit does catch them: adding 5-10 deg errors to the recorded readings of a run,
+the solve found each again within 0.01 deg (`--fit-offsets` reports them and their spread).
+
+**The base.** The sweep's turns came out 3-8% short, more so turning left than right: wheel
+slip or friction more than a wrong base radius (5.0 cm wheels and 12.5 cm base radius are
+LeRobot's defaults, not measured); its drives were within 1-2%. The calibration doesn't depend
+on them: it returns to its start closed loop on the cameras.
 
 Before `--write` on a new run, look at: lens rms under ~0.6 px; the wrist mount physically
-sensible; the front camera's views agreeing within a few mm.
+sensible; the scenes' front camera estimates agreeing within a few mm.
 
 Next: the geometry switches to these cameras (wrist first, then front), each checked on logged
 frames against the current fitted calibrations; then phase E re-measures what depends on them.
