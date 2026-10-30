@@ -76,10 +76,10 @@ GRIPPER_EMPTY_MAX = Param(5.0, "SPEC", "mm: a close that stops wider holds somet
 
 # --- RULE ---
 GRASP_LIFT_M = Param(0.004, "RULE", "jaw tips above the floor when closing: inside the brick's lower half")
-SERVO_GAIN = Param(0.8, "RULE", "fraction of the measured error corrected per look: 0.5 until Oct 28; with the re-measured Jacobian (fit 2.7 px) less damping is needed, and the simulated servo converges at 0.8 with the Jacobian 30% off either way")
+SERVO_GAIN = Param(0.8, "RULE", "fraction of the measured error corrected per look: 0.5 until Oct 28; with a measured image Jacobian (the fitted one until Oct 30, the camera model's since, within 3 px of each other on logged moves) less damping is needed, and the simulated servo converges at 0.8 with the Jacobian 30% off either way")
 STEP_IN_VIEW_FRACTION = Param(0.25, "RULE", "one move may shift the target by at most this share of the image, so it stays in view")
 REACH_POINT_X_M = Param(0.25, "RULE", "where the base parks the object (arm x): vertical reach at 10 cm is 0.14-0.28 m; owner: 0.22 sat too close to the base")
-HOVER_HEIGHT_M = Param(0.10, "RULE", "line-up and first servo height: where the image Jacobian was measured (9.4 cm) and the object fills a small part of the view")
+HOVER_HEIGHT_M = Param(0.10, "RULE", "line-up and first servo height: the object fills a small part of the view, with room to line up (the fitted image Jacobian was measured at 9.4 cm; the camera model holds at any height)")
 FINAL_LOOK_HEIGHT_M = Param(0.03, "RULE", "last servo height: jaws clear of the brick's top (11.4 mm) by more than the floor fit's error")
 PLACE_APPROACH_TOL_M = Param(0.05, "RULE", "the approach to a container is done this close (its near edge is a rough mark; the wrist step after it centres it): at the brick's 1.5 cm a cup approach ran out of looks (Oct 28)")
 PLACE_TOL_M = Param(0.002, "RULE", "how centred over a container before lowering: as tight as the grasp servo (SERVO_TOL_M); at 1 cm, measured at the floor, the brick landed in the cup near the rim (the rim is nearer the camera: ~1.5x the error; Oct 27)")
