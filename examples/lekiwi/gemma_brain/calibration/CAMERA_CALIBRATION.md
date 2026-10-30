@@ -1,19 +1,20 @@
 # Camera calibration with ChArUco boards
 
-One session with three printed ChArUco boards measures both cameras and three joint zeros,
-replacing hand-tuned camera constants. Phase D of the measured-parameters work (branch
-`lekiwi-measured-params`, 2026-10-29).
+One session with three printed ChArUco boards measures both cameras, with nobody holding anything:
+the boards stay put and the robot moves (its arm, then its base). Phase D of the
+measured-parameters work (branch `lekiwi-measured-params`); first run 2026-10-29.
 
-What it measures:
+What it measures (`data/calib.json` "cameras"):
 
 - **each lens**: focal length, optical centre, distortion (wrist and front camera);
 - **the wrist camera's mount**: its pose on the gripper (TCP frame);
 - **the front camera's pose** in the arm's frame (it sits higher and tilted down compared with
-  the stock design, so no model has it);
-- **joint zero errors** of shoulder lift, elbow flex and wrist flex. Shoulder pan and wrist
-  roll can't be told apart from where the boards lie and how the camera is mounted; they stay 0.
+  the stock design, so no model has it).
 
-Tools, in this folder: `boards.py` (detection), `capture_cameras.py` (lens and scene captures),
+It can also fit the zero offsets of shoulder lift, elbow and wrist flex (`--fit-offsets`), but
+doesn't by default: see [Results](#results-2026-10-29).
+
+Tools, in this folder: `boards.py` (detection), `capture_cameras.py` (the capture),
 `solve_cameras.py` (the solve). The boards: `targets/` (PDFs; `make_boards.py` regenerates them).
 Tests: `tests/test_camera_calibration.py`.
 
@@ -26,36 +27,37 @@ Each board has its own marker IDs, so a camera can see several at once. Dictiona
 |---|---|---|---|---|---|
 | wrist | 10 x 7 | 25 mm / 18 mm | 0-34 | 25 x 17.5 cm | flat on the floor |
 | front | 7 x 5 | 35 mm / 26 mm | 35-51 | 24.5 x 17.5 cm | upright, in front |
-| side | 7 x 5 | 35 mm / 26 mm | 52-68 | 24.5 x 17.5 cm | upright, to one side |
+| side | 7 x 5 | 35 mm / 26 mm | 52-68 | 24.5 x 17.5 cm | upright, beside the front board |
 
 Preparing them:
 
 1. Print at 100% / actual size, no "fit to page".
 2. Measure the 100 mm scale bar under each board: 99.5-100.5 mm is fine. Off by more: note the
    measured length (the solve can be scaled to it; no need to reprint).
-3. Glue or tape each print flat on stiff card or foam board. A curled or bowed sheet bends the
-   corner grid, and that error goes straight into the result.
+3. Glue each print flat on stiff card (spread the glue evenly; a few mm of thickness or a black
+   backing don't matter). A curled or bowed sheet bends the corner grid, and that error goes
+   straight into the result.
 4. Matte paper, or lamps off to the side: glare hides corners.
 
-Also: tape for the floor board, something heavy (a box, books) to prop each upright board.
+Any rotation of a board is fine (every corner is identified by its markers); only face down
+isn't.
 
 ## Board placement
 
-Distances from the front edge of the robot's body, straight ahead of the arm (the arm's base
-is about 10 cm behind that edge: `BODY_FRONT_X_M`, the planner's body keep-out, not a
-measurement).
+Distances from the front edge of the robot's body, straight ahead of the arm (the arm's base is
+about 10 cm behind that edge). By eye: the solve measures every board's real pose.
 
 ```
                  TOP VIEW (robot facing up the page)
 
-                 ┌──────── FRONT board ────────┐   upright, facing the robot,
-                 └─────────────────────────────┘   32 cm from the edge, centred
-                                                       ╲
-                                                        ╲  SIDE board: upright,
-                 ┌─────────────────────────────┐         ╲ 25-40 cm out, 20-30 cm
-                 │                             │          ╲ to one side, turned
-                 │      WRIST board (flat)     │   ~17 cm  ╲ 30-45 deg to face the
-                 │       25 cm across          │   deep     robot
+          ┌──── FRONT board ────┐ ┌──── SIDE board ────┐   both upright, facing the robot,
+          └─────────────────────┘ └────────────────────┘   ~50-55 cm out, side by side;
+                                                            the front camera sees both whole
+
+                 ┌─────────────────────────────┐
+                 │                             │
+                 │      WRIST board (flat)     │   ~17 cm deep
+                 │       25 cm across          │
                  │                             │
                  └─────────────────────────────┘   near edge ~6 cm from the robot
          ═══════════════════ robot front edge ═══════════════════
@@ -63,123 +65,101 @@ measurement).
                           LeKiwi
 ```
 
-1. **Wrist board, flat on the floor**, printed side up, its 25 cm side left to right, centred
-   on the arm. Near edge ~6 cm from the robot's front edge, far edge ~24 cm out: its centre is
-   15 cm out (25 cm from the arm's base), where a brick is usually picked. Tape it down.
-2. **Front board, upright**, its printed face straight back at the robot, ~32 cm from the
-   front edge (42 cm from the arm's base), centred, ~8 cm beyond the floor board. Bottom edge on
-   the floor: the pattern runs from near the floor to ~19 cm up. Propped so it can't tip.
-   Both cameras must see it: the front camera with the arm folded, the wrist camera from the
-   forward poses. It ties the front camera to the arm.
-3. **Side board, upright**, 25-40 cm out and 20-30 cm to the left or right, turned 30-45 deg
-   toward the robot, not hiding the front board from the front camera. It only adds views for
-   the front camera's lens.
+1. **Wrist board, flat on the floor**, printed side up, its 25 cm side left to right, centred on
+   the arm, near edge ~6 cm from the front edge (its centre 15 cm out, where a brick is usually
+   picked). Tape it down.
+2. **Front board, upright**, facing the robot, ~50-55 cm from the front edge, roughly centred,
+   bottom edge on the floor, propped so it can't tip. At ~32 cm its top was above the front
+   camera's view (the camera sits low and tilts down).
+3. **Side board, upright**, next to the front board, turned toward the robot. The front camera
+   sees only about +/-30 deg, so 20-30 cm off to the side is outside its view.
+4. **Keep ~30 cm clear behind the robot** for the base sweep.
 
-## How accurate the placement must be
+Then check a frame from each camera (no motion): the front camera should see all three boards,
+the front board whole; the wrist camera (arm folded) the floor board. Part of a board is fine
+(a view counts from 6 corners); the front board whole matters most.
 
-By eye: a few centimetres don't matter. The solve measures each board's real pose as an
-unknown; the positions only make sure each camera sees the right board from the planned poses.
-
-| Board | Tolerance | Why |
-|---|---|---|
-| wrist (flat) | +/-3-5 cm, any small rotation | each view needs only part of it (6 corners or more); far off, the arm's poses move to it (`--board-x`), not the board |
-| front (upright) | +/-5 cm in distance and sideways, facing the robot within ~15 deg | the one that matters most: in simulation the wrist camera saw it from only 7 of the 23 poses; keep it near centre |
-| side (upright) | anywhere the front camera sees it whole | lens views only |
-
-What does matter:
-
-- **print scale**: the squares really 25 and 35 mm; every distance in the result comes from them;
-- **flat and rigid** boards;
-- **nothing moves during the scene capture**: no board shifts, the robot isn't bumped;
-- **no glare** on the patterns.
-
-Before any motion, a live frame from each camera checks the setup; a board cut off or hidden
-gets moved then.
+What matters more than position: the print scale, flat and rigid boards, no glare, and
+**nothing moving during the capture** (no board shifts, nobody bumps the robot).
 
 ## Capture and solve
 
-From `examples/lekiwi/gemma_brain`, robot connected. Each capture saves its frames and a JSON
-file under `runs/<time>-<kind>/`. Only step 4 moves the robot, after the owner approves the plan.
+From `examples/lekiwi/gemma_brain`, robot connected and free to drive.
 
-1. **Wrist lens** (no motion; the robot isn't taken over):
-
-       .venv/bin/python calibration/capture_cameras.py lens --cam wrist
-
-   Hold any board in front of the wrist camera and move it slowly: near and far, every corner
-   of the image, tilted every way. A view is kept when the board has been still for two frames
-   and is somewhere new (position or size). Stops at 25 views (`--views`); Ctrl-C ends early.
-2. **Front lens** (no motion): the same with `--cam front`.
-3. **Place the boards**, check a live frame from each camera, then print the plan (moves
-   nothing):
+1. **The plan** (moves nothing):
 
        .venv/bin/python calibration/capture_cameras.py scene --plan-only
 
-   The 23 poses with their joint targets from the live calibration, or why one is refused.
-4. **Scene capture** (arm motion, after approval; the base is locked):
+   Every arm pose's joint targets from the live calibration (or why one is refused), and the
+   base sweep's moves.
+2. **The capture** (arm and base motion, after approval; about 6 minutes):
 
        .venv/bin/python calibration/capture_cameras.py scene
 
-   The arm folds and the front camera takes 3 frames; then the arm visits each planned pose (a
-   joint move, 0.5 s to settle, a wrist frame and the measured joint angles) and folds at the
-   end, even after an error.
-5. **Solve** (offline):
+   - the front camera takes 3 frames, the arm folded;
+   - the arm visits 38 poses (35 deg/s joint moves, each checked for floor and body clearance;
+     the base still): at each, a wrist frame and the measured joint angles;
+   - the arm folds; the base sweep: at 0, 10 and 20 cm back, the base turns -20, -10, 0, +10,
+     +20 deg and the front camera takes a frame at each of the 15 stops. Never forward (the
+     floor board is 6 cm ahead); the robot ends 20 cm back, at heading 0.
 
-       .venv/bin/python calibration/solve_cameras.py --lens-wrist runs/<t>-lens-wrist \
-           --lens-front runs/<t>-lens-front --scene runs/<t>-scene
+   Frames and `scene.json` under `runs/<time>-scene/`.
+3. **The solve** (offline):
 
-   Prints the results; `--write` stores them in `data/calib.json` under `"cameras"`, only after
-   they're reviewed.
+       .venv/bin/python calibration/solve_cameras.py --scene runs/<t>-scene
 
-## The scene's arm poses
+   Prints the results; `--write` stores them in `data/calib.json` "cameras", after they're
+   reviewed.
 
-23 poses in joint space around three anchors. Each anchor is a TCP pose solved once; each pose
-turns one joint (two for a height change), so every joint's zero is seen on its own and the
-views rotate about several axes. Every move from the previous pose is checked for floor and
-body clearance and for the joint limits less 1.5 deg.
+The hand-held lens capture (`capture_cameras.py lens --cam wrist|front`, then `--lens-wrist` /
+`--lens-front` for the solve) is only a fallback for a camera the robot can't point at the
+boards. Hold the board 30 cm or more away; closer, too few corners fit.
 
-| Anchor | TCP pose | Joint changes around it (deg) | Poses |
-|---|---|---|---|
-| down, 11 cm | over the floor board's centre, 11 cm above the floor, pointing straight down | none; wrist flex +/-12; wrist roll +/-45; pan +/-10; lift -6 with wrist flex +6 | 8 |
-| down, 14 cm | the same, 14 cm up | the same | 8 |
-| forward | 26 cm out, 18 cm above the floor, 30 deg down | none; wrist flex +/-6; pan +/-8; wrist roll +/-30 | 7 |
+## The arm poses
 
-The anchors come from an offline plan check with the Oct 29 limits: higher vertical poses
-(17-21 cm) are outside the arm's vertical reach, and "ready" is too high and too close to the
-upright board to see it. `--plan-only` confirms the plan against the live calibration.
+38 poses in joint space around six anchors. Each anchor is a TCP pose solved once; each pose
+turns one joint (two for a height change), so the views rotate about several axes. Every move
+from the previous pose is checked for floor and body clearance and the joint limits less 1.5 deg.
 
-In simulation every pose sees the floor board and 7 also see the upright board, with a guessed
-wrist camera mount (along the jaws, 6 cm behind the TCP). If the real camera misses the upright
-board, the forward poses change.
+| Anchor | TCP pose | Arm shape (lift / elbow / wrist flex, deg) | Changes around it (deg) | Poses |
+|---|---|---|---|---|
+| down 11 cm | over the floor board's centre, 11 cm up, straight down | 20 / 6 / 64 | wrist flex +/-12, roll +/-45, pan +/-10, lift -6 with wrist flex +6 | 8 |
+| down 14 cm | the same, 14 cm up | 16 / 0 / 75 | the same | 8 |
+| forward | 26 cm out, 18 cm up, 30 deg down, at the upright boards | -48 / 76 / 2 | wrist flex +/-6, pan +/-8, roll +/-30 | 7 |
+| low | 3 cm past the board centre, 6 cm up, 50 deg down | 27 / 49 / -26 | wrist flex +/-8, pan +/-10 | 5 |
+| far | 11 cm past the centre, 9 cm up, 70 deg down | 58 / -46 / 58 | the same | 5 |
+| near | 9 cm short of the centre, 16 cm up, 70 deg down | -66 / 63 / 73 | the same | 5 |
 
-## Results and checks
+The low, far and near anchors spread the arm's shapes, so a joint-offset fit can tell lift from
+elbow (their predicted correlation -0.75 with the first three anchors, -0.34 with all six). The
+lowest arm point is 35 mm above the floor.
 
-On simulated views of the same 23 poses (0.3 px corner noise; OpenCV 4.13 and 5.0):
+## Results (2026-10-29)
 
-| Quantity | Recovered within |
+Scene `runs/20261029T224146-scene`, written to `data/calib.json` (commit 149ea7b3).
+
+| Quantity | Result |
 |---|---|
-| joint zero offsets (lift, elbow, wrist flex) | 0.03 deg |
-| wrist camera mount on the gripper | 0.5 mm / 0.09 deg |
-| front camera pose in the arm's frame | 1.6 mm / 0.11 deg |
-| wrist lens focal length | 1 px of 480 |
+| wrist lens | f 553 px; rms 0.41 px over 47 board views |
+| front lens | f 550 px; rms 0.53 px over 43 views (the sweep: the optical centre now agrees within 8 px between lens models, 48 px apart without it) |
+| wrist camera mount | 92 mm behind the TCP, 61 mm off the jaw axis, looking along the jaws; the same within 3 mm in two scenes |
+| front camera pose | 82 mm ahead of the arm's base, 48 mm below it (~6 cm above the floor), 7.6 deg down; its 3 views agree within 0.3 mm |
+| arm model fit | rms 3.8 px over 38 poses (2-6 px by arm shape: about 1-3 mm at the board) |
 
-How it solves:
+**The front camera is placed through the floor board.** The upright boards stand ~65 cm out in
+the arm's frame and are located only from the forward poses; through them the front camera came
+out up to 20 mm and 3 deg apart.
 
-1. each lens: OpenCV's `calibrateCamera` over every board view, hand-held and scene;
-2. the wrist camera's mount: a Park-Martin hand-eye solution, then a least-squares fit of every
-   corner's reprojection that refines the mount, the boards' poses and the three joint offsets
-   together (a NumPy Levenberg-Marquardt: no SciPy here, and OpenCV 5.0 has no
-   `calibrateHandEye`);
-3. the front camera: from its view of the upright board, whose pose step 2 found.
+**Joint zero offsets are not applied.** The arm's zeros were set by eye at the Oct 29
+recalibration. Fitted, the offsets came out small (lift +0.8, elbow -0.9, wrist flex -1.0 deg)
+but moved up to 2.6 deg when one arm shape was left out: the rigid arm model misses 1-3 mm of
+shape-dependent bending or play (worst in the low and near shapes), which the offsets can't
+remove, and fitting them lowered the error only from 3.8 to 3.1 px. So the by-eye zeros are as
+good as this method can tell. `--fit-offsets` reports them and their spread. Pan and wrist roll
+offsets can't be measured here at all; for camera-guided moves their errors cancel.
 
-Before `--write`, look at:
+Before `--write` on a new run, look at: lens rms under ~0.6 px; the wrist mount physically
+sensible; the front camera's views agreeing within a few mm.
 
-- **reprojection rms**: under about 0.6 px for each lens and the scene; more points to a bent
-  board, a board that moved, or a wrong print scale;
-- **joint offsets**: a few degrees at most after the Oct 29 recalibration; more needs a second
-  look;
-- **front camera spread**: its frames agree within a few mm;
-- **wrist mount**: physically sensible (the camera a few cm behind and beside the TCP).
-
-After `--write`, the geometry switches to the measured cameras, wrist first then front, each
-checked on logged frames against the current fitted calibrations. Re-measuring what depends on
-them (floor, grasp target) is phase E.
+Next: the geometry switches to these cameras (wrist first, then front), each checked on logged
+frames against the current fitted calibrations; then phase E re-measures what depends on them.
