@@ -215,7 +215,34 @@ Positions in `calib.json` are in the arm model's frame (so101_kinematics, the UR
 `base_link`): its origin is on the arm's mounting surface, 3.9 cm behind the pan axis, so the
 front camera's T_base_cam reads x 82 mm there.
 
-Since Oct 30 the brain's geometry (brain/geometry.py) works from these cameras instead of the fitted
-image-space values, after checking both on logged runs (see the README's calibration table).
-Next: a robot check of the switched geometry; then phase E re-measures what depends on the
-cameras (the floor, the grasp target).
+## The brain's geometry from these cameras (Oct 30)
+
+The brain's geometry (`brain/geometry.py`, `brain/cameras.py`) works from these cameras instead of
+fitted image-space values: the wrist camera's image motion, descent and one-look locate are
+projections at any height and roll; the front approach turns the degrees and drives the metres
+the camera model gives, about the base's measured turning centre (4.6 cm behind the arm frame's
+origin, centred: `base_turn_centre`); horizon, view width and object heights likewise, on the
+floor plane the cameras see (`floor_z`, the floor board's, -0.1058). Kept: the floor touches,
+the taught grasp spot, and a brick's stopping row at the reach point (`front_camera` near_bottom).
+
+Checked on logged runs before switching (predicting a still object's box after each logged move):
+
+| | Camera model | Fitted values |
+|---|---|---|
+| front, turns (253) | 16 px median | 27 px (the turn rate 41% off: the camera 12.8 cm ahead of the turning centre) |
+| front, drives near the reach point (134) | 3.3 px | 4.2 px |
+| front, drives from far (99) | 23 px median, 70 at the 90th percentile | 27 px, 53 |
+| wrist (37) | 14 px | 11 px (within half a millimetre at the brick; the model also through roll turns) |
+
+The model's straight ahead matched the logs: every line-up after a fitted approach first moved
+the base ~2 cm left (107 approaches); the model put the fitted column 3.1 cm left. And the
+cup's height came out 5.8-5.9 cm, against the fitted formula's 4.3 cm (biased low by the same
+parallax).
+
+On the robot (Oct 30): 3/3 driven picks (74, 59, 58 s; the line-up's first sideways move -0.6,
++0.8, +1.0 cm, mean +0.4 against +2.1 before; two approaches needed no turn) and the full cup
+task in 63 s, the brick centred in the cup, the cup measured 6.2 cm. Still weak: distance from
+far away (one approach from 52 cm stopped 5 cm past its target; a pixel of the box's bottom is
+~1 cm there); the line-up recovers it.
+
+Next: phase E re-measures what depends on the cameras (the floor, the grasp target).
