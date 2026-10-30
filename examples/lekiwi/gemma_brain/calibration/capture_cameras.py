@@ -76,7 +76,7 @@ from common.arm import (
 )
 
 from calibration import boards
-from calibration.solve_cameras import board_in_camera, inv
+from calibration.solve_cameras import base_offset, board_in_camera
 
 # A lens view is new when its board's centre moved this share of the image width from every
 # kept view of that board, or its size changed by this share; still when no corner moved more
@@ -361,13 +361,6 @@ def capture_sweep(robot, out: Path, moves: list[dict]) -> list[dict]:
         if rec["boards"]:
             frames.append(rec)
     return frames
-
-
-def base_offset(T_cam_board_ref, T_cam_board_now, T_base_cam) -> tuple[float, float, float]:
-    """Where the base is now against where it was in the reference frame, in the reference
-    base frame: (x m, y m, heading deg). The board is fixed and the camera rides the base."""
-    move = T_base_cam @ T_cam_board_ref @ inv(T_cam_board_now) @ inv(T_base_cam)
-    return float(move[0, 3]), float(move[1, 3]), float(np.degrees(np.arctan2(move[1, 0], move[0, 0])))
 
 
 def front_measure(robot, ref_boards: dict, cams: dict):

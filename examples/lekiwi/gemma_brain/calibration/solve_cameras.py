@@ -81,6 +81,9 @@ LENS_FLAGS = cv2.CALIB_FIX_K3 | cv2.CALIB_ZERO_TANGENT_DIST  # both cameras' fra
 # from every arm pose. The upright boards stand ~65 cm out, located only from the forward poses:
 # through them the front camera came out up to 20 mm and 3 deg apart (Oct 29 scene).
 FRONT_VIA = "wrist"
+# A board view counts for the turning centre from this many corners: a partial view of an
+# upright board 60 cm away (fewer) moved the estimate by a few mm (convention).
+MIN_TURN_CORNERS = 12
 # The joints whose zero offsets the scene can tell: they tilt the gripper.
 OFFSET_JOINTS = ["arm_shoulder_lift", "arm_elbow_flex", "arm_wrist_flex"]
 
@@ -303,6 +306,46 @@ def solve_front(views: list[dict], K, dist, boards_in_base: dict[str, np.ndarray
     return {"T_base_cam": T, "views": len(est), "spread_m": spread}
 
 
+def base_offset(T_cam_board_ref, T_cam_board_now, T_base_cam) -> tuple[float, float, float]:
+    """Where the base is now against where it was in the reference frame, in the reference
+    base frame: (x m, y m, heading deg). The board is fixed and the camera rides the base."""
+    move = T_base_cam @ T_cam_board_ref @ inv(T_cam_board_now) @ inv(T_base_cam)
+    return float(move[0, 3]), float(move[1, 3]), float(np.degrees(np.arctan2(move[1, 0], move[0, 0])))
+
+
+def turn_centre(scenes: list[dict], K, dist, T_base_cam) -> tuple[np.ndarray, float]:
+    """The point the base turns about, (x, y) in the arm's frame, from the base sweeps' turns in
+    place (0 cm back): each turn moves the front camera along an arc about it, measured by the
+    boards against the scene's first frame; least squares over all. Returns it and the median
+    residual (m). Oct 29: 4.6 cm behind the arm frame's origin, centred, 0.2 cm residual over 20
+    turns; it puts the front camera 12.8 cm ahead of the turn, the parallax that made a fitted
+    image-widths-per-degree 23% larger than the lens alone gives."""
+    A, b = [], []
+    for sc in scenes:
+        if not sc["front"]:
+            continue
+        ref = {n: board_in_camera(K, dist, n, d) for n, d in sc["front"][0]["boards"].items()}
+        for fr in sc.get("sweep", []):
+            if fr["base"]["back_m"] != 0.0:
+                continue
+            est = [
+                base_offset(ref[n], board_in_camera(K, dist, n, d), T_base_cam)
+                for n, d in fr["boards"].items()
+                if n in ref and len(d["ids"]) >= MIN_TURN_CORNERS
+            ]
+            if not est:
+                continue
+            x, y, th = np.median(np.asarray(est), axis=0)
+            a = np.radians(th)
+            A.append(np.eye(2) - np.array([[np.cos(a), -np.sin(a)], [np.sin(a), np.cos(a)]]))
+            b.append([x, y])
+    if len(A) < 2:  # convention: two turns pin a point in the plane
+        raise ValueError("no base sweep turns to find the turning centre from")
+    c, *_ = np.linalg.lstsq(np.vstack(A), np.concatenate(b), rcond=None)
+    resid = np.linalg.norm((np.vstack(A) @ c - np.concatenate(b)).reshape(-1, 2), axis=1)
+    return c, float(np.median(resid))
+
+
 # --- the captures ---
 
 
@@ -386,6 +429,10 @@ def main() -> None:
         f"of their mean, tilts {min(np.degrees(np.arcsin(-T[2, 2])) for T in fronts):.1f}-"
         f"{max(np.degrees(np.arcsin(-T[2, 2])) for T in fronts):.1f} deg)"
     )
+    centre, centre_rms = turn_centre(scenes, fl["K"], fl["dist"], f["T_base_cam"])
+    print(
+        f"the base turns about ({100 * centre[0]:.1f}, {100 * centre[1]:.1f}) cm in the arm's frame (residual {100 * centre_rms:.2f} cm)"
+    )
     ahead, left, below = f["T_base_cam"][:3, 3] - PAN_AXIS_BASE
     print(
         f"  i.e. {100 * ahead:.1f} cm ahead of the arm's pan axis, {100 * left:.1f} cm to its left, "
@@ -406,9 +453,11 @@ def main() -> None:
                     "T_base_cam": f["T_base_cam"].tolist(),
                 },
                 "joint_offsets_deg": w["joint_offsets_deg"],
+                "base_turn_centre": centre.tolist(),
             },
             "meaning": "camera intrinsics (K, dist: OpenCV), the wrist camera's pose in the TCP frame and the front "
-            "camera's pose in the arm base frame (metres); joint_offsets_deg: the zero offsets the solve assumed "
+            "camera's pose in the arm base frame (metres); base_turn_centre: (x, y) the base turns about (m); "
+            "joint_offsets_deg: the zero offsets the solve assumed "
             "(deg, added to the measured angle; empty = none, the arm's own zeros)",
             "method": "solve_cameras.py on capture_cameras.py scenes: calibrateCamera, radial k1 k2 only (the front "
             "lens with the base sweep and the side board close-up); Park-Martin hand-eye refined with every "
