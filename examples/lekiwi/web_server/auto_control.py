@@ -678,18 +678,30 @@ class AutoController:
         cmd["probe_meas"] = meas
         if cmd["probe_phase"] == "drive":
             target = cmd["probe_start"] + d * cmd["probe_speed"] * t
-            if abs(target - cmd["probe_start"]) > cmd["probe_max"]:
-                targets[j] = meas
-                with self._lock:
-                    cmd["result"] = {"travelled_deg": round(d * (meas - cmd["probe_meas_start"]), 1)}
-                    self._finish_locked("failed", f"no end within {cmd['probe_max']:.0f} deg")
-                return
+            # At the end of its travel the target holds. A joint short of it and stuck there is at
+            # its end, pushing hard or not: no slow start so far along (Oct 30: the pan's end lay
+            # 6 deg before the travel's, too little lead for its load to reach the limit). One
+            # that reaches the target, or keeps creeping for a settle time, has no end in reach.
+            held = abs(target - cmd["probe_start"]) >= cmd["probe_max"]
+            if held:
+                target = cmd["probe_start"] + d * cmd["probe_max"]
+                cmd.setdefault("probe_held_t", t)
+                if d * (target - meas) < SETTLED_DEG or t - cmd["probe_held_t"] > SETTLE_TIMEOUT_S:
+                    targets[j] = meas
+                    with self._lock:
+                        cmd["result"] = {"travelled_deg": round(d * (meas - cmd["probe_meas_start"]), 1)}
+                        self._finish_locked("failed", f"no end within {cmd['probe_max']:.0f} deg")
+                    return
             targets[j] = target
             hist = cmd["probe_hist"]
             hist.append((t, target, meas))
             while hist and t - hist[0][0] > CONTACT_FOLLOW_S:
                 hist.pop(0)
-            if t > PROBE_WARMUP_S and hist:
+            if held and hist and t - cmd["probe_held_t"] >= CONTACT_FOLLOW_S:
+                gap_then = d * (hist[0][1] - hist[0][2])
+                closed = d * (meas - hist[0][2])
+                cmd["probe_confirm"] = cmd["probe_confirm"] + 1 if closed < CONTACT_FOLLOW_FRACTION * gap_then else 0
+            elif t > PROBE_WARMUP_S and hist:
                 commanded = abs(target - hist[0][1])
                 followed = d * (meas - hist[0][2])
                 # An end: not following and pushing at the torque limit. A joint only slow to get

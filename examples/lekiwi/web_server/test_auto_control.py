@@ -600,3 +600,27 @@ def test_a_joint_slow_to_start_under_its_weight_is_not_an_end():
     _probe(sim, "arm_elbow_flex", -1)
     st = sim.run_until_done()
     assert st["state"] == "done" and abs(st["result"]["stop_deg"] + 60.0) < 1.0, st["result"]
+
+
+def test_an_end_just_before_the_travel_runs_out_is_found_without_full_push():
+    """The pan Oct 30: the end 6 deg before the travel's, the load short of the limit."""
+    sim = Sim()
+    sim.walls["arm_shoulder_pan"] = (-119.0, 200.0)
+    orig = sim.joint_state
+
+    def state():
+        st = orig()
+        st["arm_shoulder_pan"]["load"] = min(st["arm_shoulder_pan"]["load"], 200.0)  # below 0.9 x 300
+        return st
+
+    sim.joint_state = state
+    _probe(sim, "arm_shoulder_pan", -1, max_travel=125.0)
+    st = sim.run_until_done()
+    assert st["state"] == "done" and abs(st["result"]["stop_deg"] + 119.0) < 1.0, st
+
+
+def test_a_joint_reaching_the_end_of_its_travel_has_no_end():
+    sim = Sim()
+    _probe(sim, "arm_wrist_flex", 1, max_travel=20.0)
+    st = sim.run_until_done()
+    assert st["state"] == "failed" and "no end within 20" in st["reason"]
