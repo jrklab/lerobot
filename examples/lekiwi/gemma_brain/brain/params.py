@@ -78,7 +78,7 @@ PLACE_HOVER_M = Param(_demo("above_target_z_above_floor_m", 0.10), "DEMO",
 # middle grip) comes from the owner's midpoint teach: geometry.grasp_target(); not here yet.
 
 # --- SPEC ---
-BRICK_HEIGHT_M = Param(0.0114, "SPEC", "2x4 brick body height")
+TAUGHT_OBJECT_HEIGHT_M = Param(0.0114, "SPEC", "the grasp teach's object, a red 2x4 brick (11.4 mm body): the taught grasp target was seen on its top face; any object's height until the front camera measures it (Skills.object_height)")
 BASE_STOP_SHORT_M = Param(0.01, "SPEC", "the Pi ends a base drive within this of its goal (auto_control.BASE_POS_TOL_M): drives under it didn't move, longer ones stopped ~1 cm short (Oct 27 trials)")
 BASE_TURN_MAX_DEG = Param(180.0, "SPEC", "the Pi refuses a base turn over this in one command (auto_control: 1 m per axis, 180 deg)")
 BASE_TURN_STOP_SHORT_DEG = Param(2.0, "SPEC", "the Pi ends a base turn within this of its goal (auto_control.BASE_THETA_TOL_DEG): turns stopped ~2 deg short")
@@ -91,7 +91,8 @@ SERVO_GAIN = Param(0.8, "RULE", "fraction of the measured error corrected per lo
 STEP_IN_VIEW_FRACTION = Param(0.25, "RULE", "one move may shift the target by at most this share of the image, so it stays in view")
 REACH_POINT_X_M = Param(0.25, "RULE", "where the base parks the object (arm x): vertical reach at 10 cm is 0.14-0.28 m; owner: 0.22 sat too close to the base")
 HOVER_HEIGHT_M = Param(0.10, "RULE", "line-up and first servo height: the object fills a small part of the view, with room to line up (the fitted image Jacobian was measured at 9.4 cm; the camera model holds at any height)")
-FINAL_LOOK_HEIGHT_M = Param(0.03, "RULE", "last servo height: jaws clear of the brick's top (11.4 mm) by more than the floor fit's error")
+LOOK_CLEARANCE_M = Param(0.02, "RULE", "jaw tips above the object's measured top at the last look (Skills.final_look_height): more than the front camera's height error (~2 mm over 149 approaches) and the servo's jitter; the fixed 3 cm before Oct 31 left 1.9 cm over the 11.4 mm brick, 7 mm over the 23 mm light green block")
+FINAL_LOOK_HEIGHT_M = Param(TAUGHT_OBJECT_HEIGHT_M.value + LOOK_CLEARANCE_M.value, "RULE", "the last look height for the taught object, where no object's height applies (the lift's least rise, setting down beside another object)")
 PLACE_APPROACH_TOL_M = Param(0.05, "RULE", "the approach to a container is done this close (its near edge is a rough mark; the wrist step after it centres it): at the brick's 1.5 cm a cup approach ran out of looks (Oct 28)")
 PLACE_TOL_M = Param(0.002, "RULE", "how centred over a container before lowering: as tight as the grasp servo (SERVO_TOL_M); at 1 cm, measured at the floor, the brick landed in the cup near the rim (the rim is nearer the camera: ~1.5x the error; Oct 27)")
 NEXT_GAP_FRACTION = Param(0.5, "RULE", "gap left beside the reference object, as a share of the held brick's width in the image")

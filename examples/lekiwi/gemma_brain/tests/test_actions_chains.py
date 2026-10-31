@@ -18,9 +18,10 @@ container, the place checks, and the chains' order of steps."""
 from pathlib import Path
 
 import numpy as np
-from brain import actions, params as prm
+import pytest
+from brain import actions, chains, params as prm
 from brain.goals import Detection
-from brain.primitives import Skills
+from brain.primitives import Result, Skills
 from helpers import (
     _chain_sk,
     geom,
@@ -225,6 +226,7 @@ def test_pick_chain_runs_its_steps_in_order_and_stops_at_the_first_failure(monke
     for name in ("approach", "hover", "line_up", "align", "land", "lift"):
         monkeypatch.setattr(chains.actions, name, ok(name))
     sk = Skills.__new__(Skills)
+    sk.log, sk.heights, sk._height_fallbacks = None, {}, set()
     sk.servo = lambda obj, goal, part=None: (calls.append(type(goal).__name__), Result(True))[1]
     sk.move = lambda part, **k: (calls.append("down"), Result(True))[1]
     sk.grip = lambda how, **k: (calls.append(how), Result(True))[1]
@@ -308,3 +310,44 @@ def test_the_approachs_first_drive_uses_the_main_models_look():
     assert actions.approach(S("main"), "red block").ok and used == ["main"] and len(looks) == 1  # no second look
     looks.clear(), used.clear()
     assert actions.approach(S("fast"), "red block").ok and used == ["main"] and looks == [True, False]
+
+
+def _height_sk(heights):
+    sk = Skills.__new__(Skills)
+    sk.log, sk.heights, sk._height_fallbacks = None, dict(heights), set()
+    sk.events = []
+    sk.ev = lambda name, **k: sk.events.append((name, k))
+    return sk
+
+
+def test_an_objects_measured_height_sets_its_last_look_and_servo_plane(monkeypatch):
+    """Oct 31: the light green block measures ~23 mm, twice the brick the values were set for."""
+    calls = []
+    for name in ("approach", "hover", "line_up", "align", "land", "lift"):
+        monkeypatch.setattr(chains.actions, name, lambda *a, **k: Result(True))
+    sk = _height_sk({"light green block": 0.023})
+    sk.servo = lambda obj, goal, part=None: (calls.append(("servo", goal.plane_h)), Result(True))[1]
+    sk.move = lambda part, **k: (calls.append(("down", k["height"])), Result(True))[1]
+    sk.grip = lambda how, **k: Result(True)
+    assert chains.pick(sk, "light green block").ok
+    look = 0.023 + prm.LOOK_CLEARANCE_M.value
+    assert calls == [("servo", 0.023), ("down", pytest.approx(look)), ("servo", 0.023)]
+
+
+def test_an_unmeasured_object_takes_the_taught_height_noted_once():
+    sk = _height_sk({"red block": 0.0})  # 0.0: the front camera couldn't place its bottom edge
+    for _ in range(2):
+        assert sk.object_height("red block") == prm.TAUGHT_OBJECT_HEIGHT_M.value
+    assert [e for e, _ in sk.events] == ["object_height_fallback"]
+    assert sk.final_look_height(None) == pytest.approx(prm.FINAL_LOOK_HEIGHT_M.value)
+
+
+@pytest.mark.parametrize("height, above, refused", [(0.0114, 0.008, True), (0.023, 0.008, False), (0.023, 0.014, True)])
+def test_the_landing_refuses_a_contact_over_half_the_objects_height(height, above, refused):
+    sk = _height_sk({"block": height})
+    sk.height = lambda: 0.0
+    sk.tcp = lambda: np.array([0.25, 0.0, -0.10])
+    sk.frame = lambda *a, **k: None
+    sk.move = lambda part, **k: Result(True, data={"contact": True, "contact_z": -0.10 + above, "floor": -0.10})
+    r = actions.land(sk, "block")
+    assert (not r.ok) == refused

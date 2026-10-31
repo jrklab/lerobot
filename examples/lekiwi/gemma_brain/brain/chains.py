@@ -53,10 +53,10 @@ def pick(sk: Skills, obj: str, drive: bool = True, start: str | None = None) -> 
         ("align", lambda: actions.align(sk, obj)),
         # coarse at 10 cm (the line-up's tolerance), precise at 3 cm: the 10 cm stage spent 4-5
         # looks on precision the 3 cm stage redoes in 1-2 (Oct 28 speed check)
-        ("centre_high", lambda: sk.servo(obj, JawGoal(tol_m=prm.REACH_TOL_M))),
-        ("down", lambda: sk.move("arm", height=prm.FINAL_LOOK_HEIGHT_M.value)),
-        ("centre_low", lambda: sk.servo(obj, JawGoal())),
-        ("land", lambda: actions.land(sk)),
+        ("centre_high", lambda: sk.servo(obj, JawGoal(tol_m=prm.REACH_TOL_M, plane_h=sk.object_height(obj)))),
+        ("down", lambda: sk.move("arm", height=sk.final_look_height(obj))),
+        ("centre_low", lambda: sk.servo(obj, JawGoal(plane_h=sk.object_height(obj)))),
+        ("land", lambda: actions.land(sk, obj)),
         ("close", lambda: sk.grip("close")),
         ("lift", lambda: actions.lift(sk)),
     ]

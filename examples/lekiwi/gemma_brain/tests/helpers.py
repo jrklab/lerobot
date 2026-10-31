@@ -97,6 +97,7 @@ class FrameRobot:
 def finder(jpeg, main, fast):
     sk = Skills.__new__(Skills)
     sk.robot, sk.log, sk.main, sk.fast, sk.seen, sk.looks = FrameRobot(jpeg), None, main, fast, {}, {}
+    sk.heights, sk._height_fallbacks = {}, set()
     return sk
 
 class SimServo:
@@ -151,6 +152,7 @@ def _chain_sk(calls, held=True):
     sk.grip = lambda how, **k: (calls.append(how), Result(True))[1]
     sk.held = lambda: held
     sk.log, sk.find, sk.seen = None, lambda *a, **k: None, {}  # the place check sees nothing: passes, unchecked
+    sk.heights, sk._height_fallbacks = {}, set()
     return sk
 
 def _real_cal():

@@ -97,7 +97,7 @@ def test_locate_from_one_view_recovers_a_cup_placed_in_a_simulated_view():
     g = jaw_geom()
     g.grasp_box, g.grasp_target_height = [0.411, 0.613, 0.545, 0.927], 0.0015
     rim, true, h = 0.044, np.array([0.012, -0.020]), 0.106
-    taught = g.wrist_point(((0.411 + 0.545) / 2, (0.613 + 0.927) / 2), 0.0015, prm.BRICK_HEIGHT_M.value)
+    taught = g.wrist_point(((0.411 + 0.545) / 2, (0.613 + 0.927) / 2), 0.0015, prm.TAUGHT_OBJECT_HEIGHT_M.value)
     under = (g.tcp_pose(h) @ np.linalg.inv(g.tcp_pose(0.0015)) @ np.append(taught, 1.0))[:2]
     c = g.wrist_image([*(under + true), g.floor_seen_z + rim], h)
     assert np.allclose(locate_from_one_view(g, c, h, rim), true, atol=1e-6)

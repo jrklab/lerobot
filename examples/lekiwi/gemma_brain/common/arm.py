@@ -81,7 +81,10 @@ EE_ACCEL_MPS2 = 0.15  # straight-line moves speed up and slow down at this rate
 # at 40). Was 35 units/s (31-53 deg/s).
 FREE_JOINT_SPEED = 35.0
 # A body keep-out for the clearance check: arm points past the elbow may not come back over
-# the robot (x below BODY_FRONT_X in the arm base frame) lower than BODY_TOP_Z.
+# the robot (x below BODY_FRONT_X in the arm base frame) lower than BODY_TOP_Z. Observed, not
+# derived (Oct 31): consistent with the front camera at the base's front (8.5 cm out, calibrated)
+# and with floor touches at 18 cm reaching the floor; it doesn't know a raised part the folded
+# gripper rests on (~20 cm out, 2 cm up) or that the wrist-flex probe met (~15 cm, 5 cm up).
 BODY_FRONT_X_M = 0.10
 BODY_TOP_Z_M = 0.03
 MAX_EE_SPEED = 0.08

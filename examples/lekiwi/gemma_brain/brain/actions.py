@@ -41,15 +41,17 @@ from brain.params import Param
 from brain.primitives import Result, Skills
 
 
-def land(sk: Skills) -> Result:
+def land(sk: Skills, obj: str | None = None) -> Result:
     """Down to GRASP_LIFT_M above the predicted floor without pressing into it (v1's touch
     pushed into the floor and slid 8-10 mm, Oct 27); the contact stop stays as the safety. A
-    contact more than half a brick above the floor may be the brick's edge: refused. From higher
-    up it first goes freely to FINAL_LOOK_HEIGHT_M: the Pi's contact watch learns the arm's
+    contact more than half the object's height above the floor may be its edge: refused (its
+    measured height, Skills.object_height). From higher up it first goes freely to the last
+    look height: the Pi's contact watch learns the arm's
     droop at the start, and over a 10 cm descent the droop changes by more than its 1.5 mm
     threshold (Oct 27: "held up" 83 mm above the floor, runs 20261027T181003 and later -v2-land)."""
-    if sk.height() > prm.FINAL_LOOK_HEIGHT_M.value:
-        r = sk.move("arm", height=prm.FINAL_LOOK_HEIGHT_M.value)
+    look = sk.final_look_height(obj)
+    if sk.height() > look:
+        r = sk.move("arm", height=look)
         if not r.ok:
             return r
     r = sk.move("arm", height=prm.GRASP_LIFT_M.value, until_contact=True)
@@ -58,7 +60,7 @@ def land(sk: Skills) -> Result:
     above = r.data["contact_z"] - r.data["floor"]
     sk.frame("wrist", "contact")  # what the jaws met, for the record (Oct 27 trial 5: 11 mm up)
     sk.ev("land_contact", above_floor_m=round(above, 4), detector=r.data.get("detector"))
-    if above > prm.BRICK_HEIGHT_M.value / 2:
+    if above > sk.object_height(obj) / 2:
         return Result(False, f"met something {above:.3f} m above the floor", r.data)
     # The floor, a little higher than predicted: back up to the grasp lift above it.
     return sk.move("arm", delta=(0.0, 0.0, r.data["contact_z"] + prm.GRASP_LIFT_M.value - sk.tcp()[2]))

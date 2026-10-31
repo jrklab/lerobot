@@ -244,7 +244,7 @@ def locate_from_one_view(geom: Geometry, c, h: float, height: float, roll_deg: f
     the TCP to this height and roll."""
     x0, y0, x1, y1 = geom.grasp_box
     taught = geom.wrist_point(
-        ((x0 + x1) / 2, (y0 + y1) / 2), geom.grasp_target_height, prm.BRICK_HEIGHT_M.value
+        ((x0 + x1) / 2, (y0 + y1) / 2), geom.grasp_target_height, prm.TAUGHT_OBJECT_HEIGHT_M.value
     )
     in_tcp = np.linalg.inv(geom.tcp_pose(geom.grasp_target_height)) @ np.append(taught, 1.0)
     under = (geom.tcp_pose(h, roll_deg) @ in_tcp)[:2]

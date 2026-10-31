@@ -59,15 +59,17 @@ def _cap(d: np.ndarray, image_shift: np.ndarray, cap: float) -> np.ndarray:
 
 class _WristPointGoal:
     """The object's (right edge u, middle v) on its taught spot, carried to the current height
-    along a vertical descent of its top face (BRICK_HEIGHT_M up)."""
+    along a vertical descent of its top face (TAUGHT_OBJECT_HEIGHT_M up: the teach's brick). plane_h:
+    the height of the object's own features, for the image Jacobian (its measured height)."""
 
     cam = "wrist"
     tol_m = prm.SERVO_TOL_M
     part = "arm"
 
-    def __init__(self, tol_m=None):
+    def __init__(self, tol_m=None, plane_h: float | None = None):
         if tol_m is not None:  # a looser tolerance, e.g. REACH_TOL_M for the base's line-up
             self.tol_m = tol_m
+        self.plane_h = plane_h
 
     def target(self, sk, height: float) -> np.ndarray:
         return self._carry(sk, require_grasp_target(sk.geom), height)  # the taught (right edge, middle)
@@ -76,11 +78,12 @@ class _WristPointGoal:
         """A top-face image point seen at the taught height, as it appears at `height`."""
         g = sk.geom
         h_taught = g.grasp_target_height if g.grasp_target_height is not None else prm.GRASP_LIFT_M.value
-        return g.carry(point, prm.BRICK_HEIGHT_M.value, h_taught, height)
+        return g.carry(point, prm.TAUGHT_OBJECT_HEIGHT_M.value, h_taught, height)
 
     def _jac(self, sk, height: float) -> np.ndarray:
-        # Image motion of a point on the top face (nearer the camera than the floor).
-        return sk.geom.jacobian(height, sk.roll, plane_h=prm.BRICK_HEIGHT_M.value)
+        # Image motion of a point on the object's top face (nearer the camera than the floor).
+        plane_h = self.plane_h if self.plane_h is not None else prm.TAUGHT_OBJECT_HEIGHT_M.value
+        return sk.geom.jacobian(height, sk.roll, plane_h=plane_h)
 
     def error(self, det: Detection, sk) -> np.ndarray:
         h = sk.height()

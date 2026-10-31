@@ -78,6 +78,7 @@ class Skills:
         self.roll = 0.0
         self.seen: dict[str, Detection] = {}  # the last detection of each object, per camera
         self.heights: dict[str, float] = {}  # object heights measured side-on by the front camera
+        self._height_fallbacks: set[str] = set()  # objects whose height wasn't measured (logged once)
         # Each object's colour per camera, sampled from the main model's boxes (vision.Look):
         # the fast model's boxes must match it.
         self.looks: dict[str, Look | None] = {}
@@ -101,6 +102,23 @@ class Skills:
         """The commanded TCP: where moves start from. The measured one hangs ~1 cm off it at
         reach (Oct 27: a land planned from it moved 9 mm sideways and tripped the contact stop)."""
         return self.arm.calib.fk(self.arm.targets())[:3, 3]
+
+    def object_height(self, obj: str | None) -> float:
+        """An object's height above the floor: as the front camera measured it on the approach
+        (actions.approach), else the taught object's (logged once per object). Oct 31: the
+        light green and light blue blocks measure ~22 mm, twice the brick the values were set
+        for; the measurement scatters ~2 mm."""
+        h = self.heights.get(obj) if obj else None
+        if h is not None and h > 0.0:
+            return h
+        if obj and obj not in self._height_fallbacks:
+            self._height_fallbacks.add(obj)
+            self.ev("object_height_fallback", obj=obj, height_m=prm.TAUGHT_OBJECT_HEIGHT_M.value)
+        return prm.TAUGHT_OBJECT_HEIGHT_M.value
+
+    def final_look_height(self, obj: str | None) -> float:
+        """Jaw tips this high above the floor for the last look at `obj`: clear of its top."""
+        return self.object_height(obj) + prm.LOOK_CLEARANCE_M.value
 
     def height(self) -> float:
         """Jaw tips above the floor under the gripper (vertical gripper: TCP above floor TCP)."""
