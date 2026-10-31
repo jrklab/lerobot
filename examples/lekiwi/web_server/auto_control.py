@@ -166,6 +166,9 @@ HOLD_PUBLIC = ("state", "pos", "squeeze", "temp", "events")
 # what its target did, CONTACT_CONFIRM_TICKS ticks running, so a joint that lags under its own
 # weight but keeps moving isn't an end. It ignores the joint's limits: an end lies past them.
 PROBE_MAX_SPEED = 20.0  # deg/s: an end is met slowly (owner: press gently)
+# Present_Load at a probe's end reaches its Torque_Limit (the same 0.1 % units) and stays there
+# (Oct 30: the wrist roll read 150 of 150 and 300 of 300); this much of it is "at the limit".
+PROBE_PUSH_FRACTION = 0.9
 PROBE_WARMUP_S = 0.5  # the joint gets moving before its following is judged
 PROBE_BACKOFF_DEG = 3.0  # off the end once it's found, so nothing presses on it
 PROBE_MAX_TRAVEL_DEG = 360.0  # one probe never asks for more than a turn
@@ -689,7 +692,12 @@ class AutoController:
             if t > PROBE_WARMUP_S and hist:
                 commanded = abs(target - hist[0][1])
                 followed = d * (meas - hist[0][2])
-                cmd["probe_confirm"] = cmd["probe_confirm"] + 1 if followed < CONTACT_FOLLOW_FRACTION * commanded else 0
+                # An end: not following and pushing at the torque limit. A joint only slow to get
+                # going (Oct 30: the elbow lifting its forearm from rest, which stopped a probe 1 deg
+                # in) isn't yet: its lag, and with it the motor's effort, grows until it moves.
+                pushing = (st.get("load") or 0.0) >= PROBE_PUSH_FRACTION * cmd["probe_torque"] * TORQUE_LIMIT_FULL
+                stuck = followed < CONTACT_FOLLOW_FRACTION * commanded
+                cmd["probe_confirm"] = cmd["probe_confirm"] + 1 if stuck and pushing else 0
             if cmd["probe_confirm"] >= CONTACT_CONFIRM_TICKS:
                 cmd["probe_phase"], cmd["probe_back_t"] = "backoff", t
                 cmd["probe_back"] = meas - d * PROBE_BACKOFF_DEG

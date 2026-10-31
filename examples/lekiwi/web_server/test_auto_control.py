@@ -574,3 +574,29 @@ def test_bad_probes_are_refused():
             _probe(sim, **{"joint": "arm_elbow_flex", "direction": 1, **bad})
     with pytest.raises(CommandRefused):  # degrees only, like every joint command
         sim.auto.submit({"cmd": "probe", "joint": "arm_elbow_flex", "direction": 1, "torque": 0.3})
+
+
+def test_a_joint_slow_to_start_under_its_weight_is_not_an_end():
+    """Stuck for a second, the motor below its torque limit (load 100 of 300), then moving."""
+    sim = Sim()
+    sim.walls["arm_elbow_flex"] = (-60.0, 100.0)
+    orig_run, orig_state = sim.run, sim.joint_state
+    held = {"until": 1.0}
+
+    def state():
+        st = orig_state()
+        if sim.t < held["until"]:
+            st["arm_elbow_flex"]["load"] = 100.0
+        return st
+
+    def run(seconds, heartbeat=True):
+        for _ in range(max(1, round(seconds / PERIOD))):
+            pos = sim.pos["arm_elbow_flex"]
+            orig_run(PERIOD, heartbeat)
+            if sim.t < held["until"]:
+                sim.pos["arm_elbow_flex"] = pos  # gravity holds it
+
+    sim.joint_state, sim.run = state, run
+    _probe(sim, "arm_elbow_flex", -1)
+    st = sim.run_until_done()
+    assert st["state"] == "done" and abs(st["result"]["stop_deg"] + 60.0) < 1.0, st["result"]
