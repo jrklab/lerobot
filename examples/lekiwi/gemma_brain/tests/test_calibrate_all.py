@@ -145,8 +145,24 @@ def test_the_floor_stage_writes_the_plane_and_the_check(tmp_path, monkeypatch):
     out = ca.floor(None, cams, 0.00125, log)
     touches = json.loads((tmp_path / "floor_touches.json").read_text())["points"]
     assert [p["how"] for p in touches] == ["probe on the floor", "probe on the floor", "probe on the board"]
-    assert touches[-1]["z"] == pytest.approx(-0.1039 - 0.00125, abs=1e-4)  # the board's thickness off (0.1 mm rounding)
-    assert out["touched_minus_seen_mm"] == pytest.approx(
-        1000 * (-0.1039 - ca.JAW_TIP_OFFSET_M + 0.1077), abs=0.1
-    )
+    assert touches[-1]["z"] == pytest.approx(
+        -0.1039 - 0.00125, abs=1e-4
+    )  # the board's thickness off (0.1 mm rounding)
+    ck = out["check"]
+    want = 1000 * (-0.1039 - ca.JAW_TIP_OFFSET_M) - 1000 * ca.board_top_at(cams["floor_board_pose"], 0.3)
+    assert ck["made"] and [q["x"] for q in ck["points"]] == [0.3]
+    assert ck["points"][0]["diff_mm"] == pytest.approx(want, abs=0.1)
+    assert ck["pass"] == (abs(want) <= ca.CHECK_BAND_MM)
     assert json.loads((tmp_path / "calib.json").read_text())["floor_tcp_z_m"]["value"] == out["floor_tcp_z"]
+
+
+def test_the_board_top_is_read_where_it_was_touched():
+    pose = _board_at(0.442)
+    assert ca.board_top_at([pose], 0.30) == pytest.approx(-0.104)  # level: the same everywhere
+    tilted = pose.copy()
+    a = np.radians(1.0)  # a board tilted 1 deg about the arm's y axis
+    tilted[:3, :3] = (
+        np.array([[np.cos(a), 0, np.sin(a)], [0, 1, 0], [-np.sin(a), 0, np.cos(a)]]) @ pose[:3, :3]
+    )
+    near, far = ca.board_top_at([tilted], 0.25), ca.board_top_at([tilted], 0.35)
+    assert abs(abs(far - near) - 0.10 * np.tan(a)) < 1e-4  # 1.7 mm over 10 cm

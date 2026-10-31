@@ -76,6 +76,7 @@ TOUCH_CLEAR_M = 0.03  # convention: off the board's edge and its backing, for th
 FLOOR_BOARD = "wrist"
 CHECK_FRAMES = 5  # convention
 FIRST_SCENE_POSE_STEP = 2  # the first scene's poses: every other one
+CHECK_BAND_MM = 3.0  # convention: the touch's own scatter (1.5 mm) and step bracket, with room
 TOUCH_START_Z_M = -0.05  # the TCP height the touches descend from (calibrate_floor.py --start-z)
 
 
@@ -233,6 +234,44 @@ def fine(robot: Robot, thickness: float, log: dict) -> dict:
             return final | {"scenes": scenes}
 
 
+def board_top_at(poses: list, x: float, y: float = 0.0) -> float:
+    """The floor board's top at (x, y) as the cameras placed it: its plane in each scene, averaged
+    (the board isn't level to the millimetre: Oct 30, ~1-2 mm across the touch points)."""
+    zs = []
+    for pose in poses:
+        pose = np.asarray(pose)
+        n, o = pose[:3, 2], pose[:3, 3]
+        zs.append(o[2] - (n[0] * (x - o[0]) + n[1] * (y - o[1])) / n[2])
+    return float(np.mean(zs))
+
+
+def board_check(probes: list[dict], board_poses: list) -> dict:
+    """The run's verification: at each touch on the board, the jaw tips' height (the touch's TCP
+    less JAW_TIP_OFFSET_M) against the board's top the cameras saw there. The two routes share
+    only the arm model; within CHECK_BAND_MM they agree (Oct 30: within 1.2 mm, by hand)."""
+    points = [
+        {
+            "x": p["x"],
+            "touched_mm": round(1000 * (p["floor_tcp_z"] - JAW_TIP_OFFSET_M), 1),
+            "camera_mm": round(1000 * board_top_at(board_poses, p["x"]), 1),
+        }
+        for p in probes
+        if p["on"] == "board"
+    ]
+    for q in points:
+        q["diff_mm"] = round(q["touched_mm"] - q["camera_mm"], 1)
+    if not points:
+        return {"made": False, "why": "no touch on the floor board"}
+    worst = max(abs(q["diff_mm"]) for q in points)
+    return {
+        "made": True,
+        "points": points,
+        "worst_mm": worst,
+        "band_mm": CHECK_BAND_MM,
+        "pass": worst <= CHECK_BAND_MM,
+    }
+
+
 def floor(robot: Robot, cams: dict, thickness: float, log: dict) -> dict:
     """The floor plane from touches on the bare floor and on the board (less its thickness); the
     board's top as touched against as seen by the cameras is the run's check."""
@@ -261,14 +300,7 @@ def floor(robot: Robot, cams: dict, thickness: float, log: dict) -> dict:
         for p in probes
     ]
     out = {"touches": probes, "floor_tcp_z": round(float(np.mean([q["z"] for q in points])), 4)}
-    on_board = [p for p in probes if p["on"] == "board"]
-    if on_board:
-        touched_top = float(np.mean([p["floor_tcp_z"] for p in on_board])) - JAW_TIP_OFFSET_M  # the jaw tips
-        out.update(
-            board_top_touched_z=touched_top,
-            board_top_seen_z=cams["board_top_z"],
-            touched_minus_seen_mm=round(1000 * (touched_top - cams["board_top_z"]), 1),
-        )
+    out["check"] = board_check(probes, cams["floor_board_pose"])
     calib = json.loads(CALIB.read_text())
     calib["floor_tcp_z_m"] = {
         "value": out["floor_tcp_z"],
@@ -339,8 +371,15 @@ def main() -> None:
     if log["state"] == "done":
         print(f"  corrections applied: {log['corrections'] or 'none'}")
         print(f"  final offsets (within their spread): {log['solves'][-1]['joint_offsets_deg']}")
-        if "touched_minus_seen_mm" in fl:
-            print(f"  the board's top touched vs seen by the cameras: {fl['touched_minus_seen_mm']:+.1f} mm")
+        ck = fl["check"]
+        if ck["made"]:
+            diffs = ", ".join(f"{q['x']:.2f} m {q['diff_mm']:+.1f}" for q in ck["points"])
+            print(
+                f"  check, the board's top touched vs seen by the cameras: {diffs} mm -> "
+                f"{'PASS' if ck['pass'] else 'FAIL'} (within {ck['band_mm']:.0f} mm)"
+            )
+        else:
+            print(f"  check not made: {ck['why']}")
     print(f"  to put back the calibration from before: self_calibrate.py --state {sc.STATE} restore")
 
 
