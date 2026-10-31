@@ -62,7 +62,7 @@ sys.path[:0] = [str(ROOT), str(ROOT.parent / "web_server")]
 from auto_control import JAW_TIP_OFFSET_M
 from brain import params as prm
 from common.arm import Arm, Calibration
-from common.robot import Robot, RobotError
+from common.robot import Robot
 
 from calibration import boards, calibrate_floor, capture_cameras, self_calibrate as sc, solve_cameras
 
@@ -283,9 +283,13 @@ def main() -> None:
             print("\n=== 4. the floor ===")
             fl = floor(robot, cams, args.board_thickness, log)
             log["state"] = "done"
-        except (RobotError, RuntimeError, sc.PlanError) as e:
-            log["state"], log["reason"] = "stopped", str(e)
-            print(f"\nstopped: {e}")
+        except Exception as e:  # noqa: BLE001 -- whatever stops it, the run ends with its summary and the arm down
+            log["state"], log["reason"] = "stopped", f"{type(e).__name__}: {e}"
+            print(f"\nstopped: {log['reason']}")
+            try:
+                lay_down(robot)
+            except Exception as e2:  # noqa: BLE001
+                print(f"laying the arm down failed too: {e2} -- it holds where it is")
         finally:
             log["minutes"] = round((time.monotonic() - t0) / 60, 1)
             (out / "summary.json").write_text(json.dumps(log, indent=1, default=str) + "\n")

@@ -416,15 +416,25 @@ def solve(
                 or "none: the arm's zeros are as good as this can tell",
             )
     # The front camera: one estimate per scene, through that scene's floor board, then their mean.
-    fronts = [
-        solve_front(
-            [fr["boards"] for fr in sc["front"]],
-            fl["K"],
-            fl["dist"],
-            {FRONT_VIA: w["boards"][f"{i}/{FRONT_VIA}"]},
-        )["T_base_cam"]
-        for i, sc in enumerate(scenes)
-    ]
+    # A scene whose first front frames missed the floor board (Oct 30: it lay at the view's edge
+    # and the robot came back 1.6 deg turned) places nothing: the others do.
+    fronts = []
+    for i, sc in enumerate(scenes):
+        try:
+            fronts.append(
+                solve_front(
+                    [fr["boards"] for fr in sc["front"]],
+                    fl["K"],
+                    fl["dist"],
+                    {FRONT_VIA: w["boards"][f"{i}/{FRONT_VIA}"]},
+                )["T_base_cam"]
+            )
+        except ValueError as e:
+            print(f"scene {scene_dirs[i]}: {e}: not used for the front camera")
+    if not fronts:
+        raise ValueError(
+            f"no scene's front frames saw the {FRONT_VIA} board: the front camera can't be placed"
+        )
     f = {"T_base_cam": mean_pose(fronts)}
     tilt = float(np.degrees(np.arcsin(-f["T_base_cam"][2, 2])))
     across = max(np.linalg.norm(T[:3, 3] - f["T_base_cam"][:3, 3]) for T in fronts)
