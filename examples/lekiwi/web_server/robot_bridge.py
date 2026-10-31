@@ -23,6 +23,7 @@ the real robot or a MockLeKiwi that only logs actions and produces synthetic cam
 so the web app can be developed/tested end-to-end before hardware is involved.
 """
 
+import dataclasses
 import logging
 import math
 import threading
@@ -91,6 +92,12 @@ VR_MOTION_SCALE = {"slow": 0.3, "medium": 0.6, "fast": 1.0}
 # full 0-4095 tick range).
 MOTOR_RESOLUTION = 4096
 HOMING_TICK = MOTOR_RESOLUTION // 2 - 1  # 2047: where calibration homes "middle of range" (the URDF zero)
+# Feetech stores Homing_Offset in 11-bit sign-magnitude (joint_angles.shifted_calibration).
+HOMING_OFFSET_MAX = MOTOR_RESOLUTION // 2 - 1
+CALIBRATION_KEYS = ("homing_offset", "range_min", "range_max")
+# Where a register auto mode lowered (AutoController.take_bus_writes) is put back from: the
+# motor's power-on value.
+REGISTER_DEFAULTS = {"Torque_Limit": "Max_Torque_Limit"}
 
 # The 5 arm joints that make up so101_kinematics's chain, in the same order as
 # so101_kinematics.JOINT_NAMES (i.e. base -> tip). Excludes arm_gripper, which doesn't
@@ -273,9 +280,18 @@ class RobotBridge:
     background thread.
     """
 
-    def __init__(self, robot: RobotLike, recorder: EpisodeRecorder | None = None):
+    def __init__(self, robot: RobotLike, recorder: EpisodeRecorder | None = None, allow_uncalibrated: bool = False):
+        """allow_uncalibrated: when the motors don't match the calibration file (or there is
+        none), start anyway on a provisional calibration (see _register_provisional_calibration)
+        instead of LeKiwi's keyboard prompt, for the arm to calibrate itself over /auto."""
         self._robot = robot
         self._recorder = recorder
+        self._allow_uncalibrated = allow_uncalibrated
+        # "calibrated" (the motors match the saved file), "provisional" (in memory only: an
+        # uncalibrated start or a calibration written without saving), None (no motor bus: mock).
+        self._arm_calibration: str | None = None
+        # A calibration write the control loop makes between two ticks (write_arm_calibration).
+        self._pending_calibration: dict | None = None
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
@@ -351,7 +367,23 @@ class RobotBridge:
         self._camera_reconnect_in_progress = False
 
     def start(self) -> None:
-        self._robot.connect()
+        bus = getattr(self._robot, "bus", None)
+        if bus is not None and self._allow_uncalibrated:
+            self._robot.connect(calibrate=False)
+            if self._robot.is_calibrated:
+                self._arm_calibration = "calibrated"
+            else:
+                logger.warning("the motors don't match a calibration file: starting on a provisional one")
+                self._register_provisional_calibration()
+        else:
+            self._robot.connect()
+            if bus is not None:
+                self._arm_calibration = "calibrated"
+        if bus is not None:
+            # Torque_Limit is RAM: a probe cut short by a crash would otherwise leave its
+            # lowered limit in place until the next power cycle.
+            for joint in ARM_JOINTS:
+                bus.write("Torque_Limit", joint, bus.read("Max_Torque_Limit", joint, normalize=False), normalize=False)
 
         if self._recorder is not None:
             try:
@@ -701,13 +733,115 @@ class RobotBridge:
 
     def get_arm_calibration(self) -> dict[str, dict]:
         """Per-joint calibration the planner needs to convert normalized joint units to
-        radians exactly like _joint_norm_to_rad() does. Empty when uncalibrated (mock)."""
+        radians exactly like _joint_norm_to_rad() does, and the motors' homing offsets (for a
+        calibration computed on the Mac, write_arm_calibration). Empty when uncalibrated (mock)."""
         calib = getattr(self._robot, "calibration", None) or {}
         return {
-            j: {"range_min": c.range_min, "range_max": c.range_max, "drive_mode": c.drive_mode}
+            j: {
+                "range_min": c.range_min,
+                "range_max": c.range_max,
+                "drive_mode": c.drive_mode,
+                "homing_offset": c.homing_offset,
+            }
             for j, c in calib.items()
             if j in ARM_JOINTS
         }
+
+    def arm_calibration_state(self) -> str | None:
+        return self._arm_calibration
+
+    def write_arm_calibration(self, joints: dict[str, dict], save: bool, timeout_s: float = 5.0) -> dict:
+        """Writes these arm joints' calibration ({joint: {homing_offset, range_min, range_max}},
+        motor ticks) to the motors between two control ticks, and to the calibration file when
+        save. The arm's torque is off for the write (the motors' EEPROM is locked while it is
+        on): the arm should be resting. Its targets are then set to where it reads in the new
+        calibration, so nothing moves when the torque comes back. Raises ValueError when
+        refused or failed."""
+        if getattr(self._robot, "bus", None) is None:
+            raise ValueError("no motor bus (mock robot)")
+        for joint, c in joints.items():
+            if joint not in ARM_JOINTS:
+                raise ValueError(f"not an arm joint: {joint!r}")
+            try:
+                off, lo, hi = int(c["homing_offset"]), int(c["range_min"]), int(c["range_max"])
+            except (KeyError, TypeError, ValueError):
+                raise ValueError(f"{joint}: needs integer homing_offset, range_min, range_max") from None
+            if abs(off) > HOMING_OFFSET_MAX or not 0 <= lo < hi <= MOTOR_RESOLUTION - 1:
+                raise ValueError(f"{joint}: offset {off} or range {lo}..{hi} outside what the motor holds")
+        req = {"joints": joints, "save": bool(save), "done": threading.Event(), "error": None, "result": None}
+        with self._lock:
+            if self._pending_calibration is not None:
+                raise ValueError("a calibration write is already pending")
+            self._pending_calibration = req
+        if not req["done"].wait(timeout_s):
+            raise ValueError(f"the control loop didn't make the write within {timeout_s:.0f} s")
+        if req["error"] is not None:
+            raise ValueError(req["error"])
+        return req["result"]
+
+    def _register_provisional_calibration(self) -> None:
+        """A calibration in memory only, from the motors' own offsets with each arm joint's
+        range the whole turn, so readings work (and don't clamp) before the arm has a range.
+        The motors' position limits stay as they are until a calibration is written."""
+        calib = self._robot.bus.read_calibration()
+        for joint in ARM_JOINTS:
+            calib[joint] = dataclasses.replace(calib[joint], range_min=0, range_max=MOTOR_RESOLUTION - 1)
+        self._robot.calibration = calib
+        self._robot.bus.calibration = calib
+        self._arm_calibration = "provisional"
+
+    def _write_calibration_now(self, req: dict) -> None:
+        """Control-loop thread only (write_arm_calibration)."""
+        robot = self._robot
+        bus = robot.bus
+        try:
+            new = {j: dataclasses.replace(robot.calibration[j], **{k: int(c[k]) for k in CALIBRATION_KEYS})
+                   for j, c in req["joints"].items()}
+            bus.disable_torque(ARM_JOINTS)
+            try:
+                bus.write_calibration(new, cache=False)
+                calib = {**robot.calibration, **new}
+                robot.calibration = calib
+                bus.calibration = calib
+                if req["save"]:
+                    robot._save_calibration()
+                matches = bus.is_calibrated
+                # The motors' goal registers count from the old offsets: set them to where the
+                # arm is now, before the torque comes back, or it would jump by the change.
+                pos = bus.sync_read("Present_Position", ARM_JOINTS)
+                bus.sync_write("Goal_Position", pos)
+                with self._lock:
+                    for joint, v in pos.items():
+                        self._joint_targets[joint] = v
+                        self._latest_joint_state[joint]["pos"] = v
+            finally:
+                bus.enable_torque(ARM_JOINTS)
+            self._auto.calibration_changed()
+            self._arm_calibration = "calibrated" if req["save"] and matches else "provisional"
+            req["result"] = {"motors_match": matches, "saved": req["save"], "state": self._arm_calibration,
+                             "joints": self.get_arm_calibration()}
+            logger.info("calibration written for %s (saved: %s, motors match: %s)", ", ".join(new), req["save"], matches)
+        except Exception as e:
+            logger.exception("calibration write failed")
+            req["error"] = f"calibration write failed: {e}"
+        finally:
+            req["done"].set()
+
+    def _apply_bus_writes(self, writes: list[tuple[str, str, int | None]]) -> None:
+        """Control-loop thread only: the register writes auto mode asked for
+        (AutoController.take_bus_writes); value None puts the register back to its default.
+        A write that fails ends the auto command: a probe must not press at full torque."""
+        bus = getattr(self._robot, "bus", None)
+        for reg, joint, value in writes:
+            if bus is None:
+                continue
+            try:
+                if value is None:
+                    value = bus.read(REGISTER_DEFAULTS[reg], joint, normalize=False)
+                bus.write(reg, joint, value, normalize=False)
+            except Exception as e:
+                logger.exception("writing %s=%s to %s failed", reg, value, joint)
+                self._auto.abort(f"writing {reg} to {joint} failed: {e}")
 
     # --- recording / playback (thread-safe; see episode_recorder.py for the dataset side) ---
 
@@ -902,6 +1036,11 @@ class RobotBridge:
             loop_start = time.monotonic()
 
             with self._lock:
+                calibration_req, self._pending_calibration = self._pending_calibration, None
+            if calibration_req is not None:
+                self._write_calibration_now(calibration_req)
+
+            with self._lock:
                 playback_frame = None
                 if self._playback_actions is not None:
                     if self._playback_index < len(self._playback_actions):
@@ -987,6 +1126,10 @@ class RobotBridge:
 
                 for joint, target in self._joint_targets.items():
                     action[f"{joint}.pos"] = target
+
+            # Every tick whatever the mode (a probe aborted by a mode switch still has its torque
+            # limit to put back), and before the action: a probe's limit is in before it moves.
+            self._apply_bus_writes(self._auto.take_bus_writes())
 
             try:
                 self._robot.send_action(action)

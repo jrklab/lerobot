@@ -272,6 +272,13 @@ class AutoController:
             out, self._bus_writes = self._bus_writes, []
         return out
 
+    def calibration_changed(self) -> None:
+        """The arm's calibration was rewritten (RobotBridge.write_arm_calibration): degrees
+        held from before it (the gripper's hold) no longer mean the same pose."""
+        with self._lock:
+            self._hold = None
+            self._targets = {}
+
     def abort(self, reason: str) -> None:
         with self._lock:
             self._finish_locked("aborted", reason)

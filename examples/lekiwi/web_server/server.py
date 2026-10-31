@@ -203,13 +203,39 @@ def auto_status():
         **bridge.auto.status(measured),
         # deg C, read every ~2 s (LeKiwi.get_observation).
         "gripper_sensors": {"temp": grip.get("temp")},
+        # "calibrated", "provisional" (the arm calibrating itself) or None (mock).
+        "arm_calibration": bridge.arm_calibration_state(),
     }
 
 
 @app.get("/auto/calibration")
 def auto_calibration():
     """Per-joint calibration, so the planner's IK uses the same unit conversion as the Pi."""
-    return {"motor_resolution": MOTOR_RESOLUTION, "joints": bridge.get_arm_calibration()}
+    return {
+        "motor_resolution": MOTOR_RESOLUTION,
+        "joints": bridge.get_arm_calibration(),
+        "state": bridge.arm_calibration_state(),
+    }
+
+
+@app.post("/auto/calibration")
+def auto_write_calibration(body: dict = Body(...)):
+    """{"joints": {joint: {homing_offset, range_min, range_max}}, "save": bool}: the arm
+    calibrating itself (gemma_brain/calibration/self_calibrate.py) writes its motors' zeros and
+    ranges, in auto mode with no command running and the arm resting (its torque is off for
+    the write). save false: the motors only (a provisional calibration); true: the file too."""
+    if bridge.get_control_mode() != "auto":
+        return JSONResponse({"ok": False, "reason": "not in auto mode"}, status_code=409)
+    running = (bridge.auto.status({}).get("command") or {}).get("state") == "running"
+    if running:
+        return JSONResponse({"ok": False, "reason": "a command is running"}, status_code=409)
+    bridge.auto.heartbeat()
+    try:
+        result = bridge.write_arm_calibration(body.get("joints") or {}, bool(body.get("save")))
+    except ValueError as e:
+        logger.warning("auto: calibration write refused: %s", e)
+        return JSONResponse({"ok": False, "reason": str(e)}, status_code=409)
+    return {"ok": True, **result}
 
 
 @app.get("/auto/frame/{cam_name}")
@@ -437,6 +463,13 @@ def main():
     parser.add_argument("--mock", action="store_true", help="Use a mocked robot (no hardware required).")
     parser.add_argument("--robot-id", default="kiwi_sn_0", help="LeKiwi robot id (calibration file name).")
     parser.add_argument("--port-name", default="/dev/ttyUSB0", help="Serial port for the motor bus.")
+    parser.add_argument(
+        "--allow-uncalibrated",
+        action="store_true",
+        help="Start even when the motors don't match the calibration file (or there is none), on a "
+        "provisional calibration, for the arm to calibrate itself over /auto "
+        "(gemma_brain/calibration/self_calibrate.py) instead of LeKiwi's keyboard prompt.",
+    )
     parser.add_argument("--host", default="0.0.0.0", help="Bind address for the web server.")
     parser.add_argument("--port", type=int, default=8000, help="Bind port for the web server.")
     parser.add_argument(
@@ -493,7 +526,7 @@ def main():
     if not args.no_recording:
         recorder = EpisodeRecorder(repo_id=args.repo_id, root=args.dataset_root, fps=FPS)
 
-    bridge = RobotBridge(robot, recorder=recorder)
+    bridge = RobotBridge(robot, recorder=recorder, allow_uncalibrated=args.allow_uncalibrated)
     bridge.start()
 
     if not args.no_gamepad:
