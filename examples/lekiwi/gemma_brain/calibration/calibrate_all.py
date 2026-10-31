@@ -117,6 +117,15 @@ def check(robot: Robot) -> dict:
     }
 
 
+def lay_down(robot: Robot) -> None:
+    """The arm down onto the base: the rest pose, clipped to the joints' limits (Oct 30: the
+    calibrated elbow may be commanded to 91.1 deg, its folded end less the back-off; it lies at
+    the rest pose's 94.4 in the bootstrap's own readings, a few degrees past)."""
+    calib = Calibration.from_robot(robot)
+    pose = {j: min(max(sc.REST[j], calib.limits(j)[0]), calib.limits(j)[1]) for j in sc.IK_ARM_JOINTS}
+    sc._move(Arm(robot), pose, "down to rest")
+
+
 def touch_points(board_pose: np.ndarray) -> tuple[list[float], float | None]:
     """Where to touch along the arm's x axis (y = 0): FLOOR_TOUCHES on the bare floor between
     the robot and the floor board, from the near end of TOUCH_REACH_M to TOUCH_CLEAR_M short of
@@ -191,7 +200,7 @@ def floor(robot: Robot, cams: dict, thickness: float, log: dict) -> dict:
             probes.append({**calibrate_floor.probe(arm, x), "on": "floor" if x in floor_xs else "board"})
     finally:
         arm.reset()
-        sc._move(arm, sc.REST, "down to rest")  # lying, as the next run starts from
+        lay_down(robot)  # lying, as the next run starts from
     points = [
         {
             "x": p["x"],
@@ -257,7 +266,7 @@ def main() -> None:
         t0 = time.monotonic()
         try:
             if checked["off_rest"]:
-                sc._move(Arm(robot), sc.REST, "down to rest")
+                lay_down(robot)
             print("\n=== 1. coarse: the joints' ends ===")
             coarse(robot, log)
             print("\n=== 2-3. fine: the cameras and the joint zeros ===")
