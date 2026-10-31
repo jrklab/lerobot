@@ -32,7 +32,34 @@
         "free_air_sag_mm": 6.8,
         "on": "board"
       }
-    ]
+    ],
+    "check": {
+      "made": true,
+      "points": [
+        {
+          "x": 0.233,
+          "touched_mm": -109.1,
+          "camera_mm": -110.0,
+          "diff_mm": 0.9
+        },
+        {
+          "x": 0.24,
+          "touched_mm": -109.5,
+          "camera_mm": -109.9,
+          "diff_mm": 0.4
+        },
+        {
+          "x": 0.3,
+          "touched_mm": -110.1,
+          "camera_mm": -109.5,
+          "diff_mm": -0.6
+        }
+      ],
+      "worst_mm": 0.9,
+      "band_mm": 3.0,
+      "pass": true,
+      "note": "computed Oct 31 from the run's own touches and its final scenes (20261030T225836-calibrate_all), with the 6.3 mm jaw tips; the run predates the check"
+    }
   },
   "wrist_image_jacobian": {
     "value": [

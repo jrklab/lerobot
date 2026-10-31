@@ -322,6 +322,9 @@ def floor(robot: Robot, cams: dict, thickness: float, log: dict) -> dict:
         "method": f"calibrate_all.py: touches on the floor (and on the floor board less its {1000 * thickness:.2f} mm)",
         "date": datetime.date.today().isoformat(),
         "probes": probes,
+        # The touch-vs-camera check: the floor known to within its band when it passed
+        # (brain/params.py LAND_SEARCH_M reads it).
+        "check": out["check"],
     }
     CALIB.write_text(json.dumps(calib, indent=2) + "\n")
     touches = json.loads(TOUCHES.read_text()) if TOUCHES.exists() else {}

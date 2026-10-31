@@ -30,6 +30,7 @@ HERE = Path(__file__).resolve().parent.parent
 # Committed (data/demos/): the raw recording under demos/ is not, and without this file a
 # fresh checkout silently fell back to the defaults below (a 9 cm lift, no place view).
 DEMO_EXTRACT = HERE / "data" / "demos" / "pick_cup" / "extract-ep0.json"
+CALIB_FILE = HERE / "data" / "calib.json"
 
 
 @dataclass(frozen=True)
@@ -43,6 +44,16 @@ def _demo(key: str, fallback: float) -> float:
     try:
         return float(json.loads(DEMO_EXTRACT.read_text())[key])
     except (OSError, KeyError, ValueError):
+        return fallback
+
+
+def _floor_accuracy(fallback: float) -> float:
+    """How well the floor under the reach is known: the last calibrate_all.py run's check band (m)
+    when its touches and the cameras agreed within it, else the fallback."""
+    try:
+        ck = json.loads(CALIB_FILE.read_text())["floor_tcp_z_m"]["check"]
+        return ck["band_mm"] / 1000.0 if ck.get("made") and ck.get("pass") else fallback
+    except (OSError, KeyError, ValueError, TypeError):
         return fallback
 
 
@@ -87,7 +98,13 @@ NEXT_GAP_FRACTION = Param(0.5, "RULE", "gap left beside the reference object, as
 LOOK_OVERLAP = Param(0.5, "RULE", "look-around: consecutive front views overlap by this share of the view (turn step = the rest of the view's width, from the front camera's calibration)")
 CLOSE_CHOICE_M = Param(0.5, "RULE", "front-camera looks this close to the object go to the main model (26B), whatever is tracked: on Oct 30 it chose the named block among several in all 15 asks at 0.4-0.5 m (red, pink, blue, light blue, green, light green), but 4 of 7 at ~1 m (15-30 px blocks: a wrong block, a miss, a false find)")
 LOOK_BACK_M = Param(0.3, "RULE", "look-around: back up this far once if a full turn didn't find it (it may be too close to the front camera)")
-LAND_SEARCH_M = Param(0.008, "RULE", "how far past its goal a contact-stop move may go: the old floor fit's worst error (8.4 mm)")
+LAND_SEARCH_M = Param(
+    _floor_accuracy(0.008),
+    "CALIB",
+    "how far past its goal a contact-stop move may go: the floor's verified accuracy, the band within which "
+    "calibrate_all.py's touches and cameras agreed (3 mm; Oct 30: 1.2 mm worst); 8.4 mm, an old floor fit's "
+    "worst error, if no check passed",
+)
 SERVO_TOL_M = Param(0.002, "RULE", "servo position tolerance at the object: under the last descent's landing scatter (2.5 mm), so the servo isn't what limits a grasp")
 REACH_TOL_M = Param(0.015, "RULE", "line-up: close enough for the arm to take the rest, with room: vertical reach at the hover goes 3 cm past the reach point, half of it (at 3 cm the arm then needed 4.4 cm after a large roll and was refused, Oct 27; v1's ARM_REACH_M was 1.5 cm)")
 ANGLE_TOL_DEG = Param(12.0, "RULE", "roll tolerance: squeezing jaws square up a brick that far off (v1, Oct 23)")
