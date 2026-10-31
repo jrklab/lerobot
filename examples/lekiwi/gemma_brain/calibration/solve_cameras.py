@@ -124,7 +124,12 @@ def lens(views: list[dict], image_size: tuple[int, int]) -> dict:
     obj, img = [], []
     for v in views:
         for name, d in v.items():
-            obj.append(boards.object_points(name, d["ids"]).astype(np.float32))
+            o = boards.object_points(name, d["ids"]).astype(np.float32)
+            # A view of one row of corners isn't a plane: calibrateCamera can't start from it
+            # (Oct 30: two 7-corner wrist views, OpenCV's initIntrinsicParams2D assertion).
+            if np.linalg.matrix_rank(o[:, :2] - o[:, :2].mean(0), tol=1e-6) < 2:
+                continue
+            obj.append(o)
             img.append(np.asarray(d["px"], np.float32).reshape(-1, 1, 2))
     if len(obj) < 3:  # convention: calibrateCamera needs a few views to separate focal length from pose
         raise ValueError(f"only {len(obj)} board views: capture more")

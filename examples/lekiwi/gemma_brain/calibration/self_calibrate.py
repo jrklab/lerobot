@@ -81,7 +81,7 @@ from common.arm import (
     arm_points,
 )
 from common.robot import Robot, RobotError
-from joint_angles import GRIPPER, URDF_LIMITS_DEG
+from joint_angles import GRIPPER, URDF_LIMITS_DEG, shifted_calibration
 
 STATE = ROOT / "data" / "self_calibration.json"
 RESOLUTION = 4096
@@ -413,6 +413,17 @@ def probe_joint(robot: Robot, joint: str) -> dict[str, float]:
     return found
 
 
+def _to_rest_for_a_write(robot: Robot) -> None:
+    """A write turns the torque off for a moment: the arm should lie at rest. Not moved when it's
+    already within REST_TOLERANCE_DEG of rest on every joint: a corrected zero moves where rest
+    reads, and commanding the nominal angles would press the resting arm into the base (Oct 30:
+    the shoulder lift, 2.5 deg)."""
+    at = _at(robot)
+    if all(abs(at[j] - REST[j]) <= REST_TOLERANCE_DEG for j in IK_ARM_JOINTS):
+        return
+    _move(Arm(robot), REST, "to rest for the write")
+
+
 def write(robot: Robot, dry_run: bool) -> None:
     state = _load()
     missing = [j for j in ORDER if j not in state.get("ends", {})]
@@ -428,7 +439,7 @@ def write(robot: Robot, dry_run: bool) -> None:
     if dry_run:
         print("(dry run)")
         return
-    _move(Arm(robot), REST, "to rest for the write")
+    _to_rest_for_a_write(robot)
     robot.write_calibration(new, save=True)
     state.update(final=new, zeros=zeros, written=datetime.datetime.now().isoformat())
     _save(state)
@@ -441,12 +452,32 @@ def write(robot: Robot, dry_run: bool) -> None:
     )
 
 
+def correct(robot: Robot, offsets: dict[str, float]) -> None:
+    """The fine stage: zero offsets the camera calibration measured (solve_cameras.py
+    --fit-offsets "to apply"), written to the motors and the file through the Pi, as
+    web_server/apply_joint_offsets.py does with the service stopped."""
+    cal = robot.calibration()
+    if cal.get("state") != "calibrated":
+        raise SystemExit("write the coarse calibration first")
+    keys = ("homing_offset", "range_min", "range_max")
+    new = shifted_calibration({j: cal["joints"][j] for j in offsets}, offsets, RESOLUTION)
+    for j, c in new.items():
+        print(f"  {j:18s} {offsets[j]:+.2f} deg: offset {cal['joints'][j]['homing_offset']} -> {c['homing_offset']}, "
+              f"range {c['range_min']}..{c['range_max']}")
+    _to_rest_for_a_write(robot)
+    robot.write_calibration({j: {k: c[k] for k in keys} for j, c in new.items()}, save=True)
+    state = _load()
+    state.setdefault("corrections", []).append({"offsets": offsets, "date": datetime.datetime.now().isoformat()})
+    _save(state)
+    print("saved; next: a confirming capture (capture_cameras.py scene --reverse, solve_cameras.py --fit-offsets)")
+
+
 def restore(robot: Robot) -> None:
     before = _load().get("before")
     if not before:
         raise SystemExit(f"nothing to restore in {STATE}")
     keys = ("homing_offset", "range_min", "range_max")
-    _move(Arm(robot), REST, "to rest for the write")
+    _to_rest_for_a_write(robot)
     robot.write_calibration({j: {k: c[k] for k in keys} for j, c in before["joints"].items()}, save=True)
     print(f"restored the calibration from {before['date']}")
 
@@ -460,6 +491,8 @@ def main() -> None:
     p.add_argument("joints", nargs="+", help="e.g. gripper wrist_roll (in ORDER)")
     w = sub.add_parser("write")
     w.add_argument("--dry-run", action="store_true")
+    c = sub.add_parser("correct")
+    c.add_argument("offsets", nargs="+", metavar="JOINT=DEG", help="e.g. elbow_flex=-4.12")
     sub.add_parser("restore")
     args = ap.parse_args()
     logging.basicConfig(level=logging.WARNING)
@@ -473,6 +506,12 @@ def main() -> None:
                 probe_joint(robot, name if name.startswith("arm_") else f"arm_{name}")
         elif args.step == "write":
             write(robot, args.dry_run)
+        elif args.step == "correct":
+            offsets = {}
+            for item in args.offsets:
+                name, _, deg = item.partition("=")
+                offsets[name if name.startswith("arm_") else f"arm_{name}"] = float(deg)
+            correct(robot, offsets)
         else:
             restore(robot)
 
