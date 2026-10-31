@@ -35,9 +35,8 @@ the floor clear to the side board; the Pi's service with --allow-uncalibrated. T
      together: the verdict always rests on two scenes under the same calibration (at most
      MAX_CORRECTIONS)
   3. the cameras written from those two scenes
-  4. the floor: touches on the bare floor between the robot and the floor board, and one on
-     the board within reach (where the cameras placed it), less its thickness, for the floor
-     plane. The board's top as touched and as the cameras saw it is the same surface: their
+  4. the floor: touches spread over the reach, on the bare floor before the floor board or on
+     its printed area (where the cameras placed it; less its thickness), for the floor plane. The board's top as touched and as the cameras saw it is the same surface: their
      difference is the run's check
   5. a summary, runs/<time>-calibrate_all/summary.json
 
@@ -72,7 +71,7 @@ TOUCHES = ROOT / "data" / "floor_touches.json"
 MAX_CORRECTIONS = 3  # convention: the zeros settle in one or two (Oct 30: one)
 SCENES_PER_VERDICT = 2  # both pose orders under one calibration (CAMERA_CALIBRATION.md)
 TOUCH_REACH_M = (0.18, 0.30)  # where the floor touches have run, gripper vertical (Oct 29-30)
-FLOOR_TOUCHES = 3  # convention: a plane needs 3
+TOUCHES = 3  # convention: a plane needs 3
 TOUCH_CLEAR_M = 0.03  # convention: off the board's edge and its backing, for the jaws
 FLOOR_BOARD = "wrist"
 
@@ -126,11 +125,11 @@ def lay_down(robot: Robot) -> None:
     sc._move(Arm(robot), pose, "down to rest")
 
 
-def touch_points(board_pose: np.ndarray) -> tuple[list[float], float | None]:
-    """Where to touch along the arm's x axis (y = 0): FLOOR_TOUCHES on the bare floor between
-    the robot and the floor board, from the near end of TOUCH_REACH_M to TOUCH_CLEAR_M short of
-    the board's edge; and one on the board's printed area if it's within reach (None if not).
-    The board as the cameras placed it (Oct 30: its printed area 29-42 cm out, the reach 30)."""
+def touch_points(board_pose: np.ndarray) -> list[tuple[float, str]]:
+    """TOUCHES points along the arm's x axis (y = 0), spread over TOUCH_REACH_M, each on the
+    bare floor or on the floor board's printed area: one that would land on the board's edge
+    (from TOUCH_CLEAR_M before it to its printed area) moves to the nearer of the two. The board
+    as the cameras placed it (Oct 30: its edge 23-27 cm out, the reach 18-30)."""
     board = boards.BOARDS[FLOOR_BOARD]
     corners = boards.object_points(FLOOR_BOARD, np.arange(len(board.getChessboardCorners())))
     pts = (board_pose[:3, :3] @ corners.T).T + board_pose[:3, 3]
@@ -138,13 +137,21 @@ def touch_points(board_pose: np.ndarray) -> tuple[list[float], float | None]:
         raise RuntimeError(
             f"the floor board isn't across the arm's centre line (y {pts[:, 1].min():.2f}-{pts[:, 1].max():.2f} m)"
         )
-    edge = pts[:, 0].min() - board.getSquareLength()  # the outer edge: one square past the inner corners
-    hi = min(edge - TOUCH_CLEAR_M, TOUCH_REACH_M[1])
-    if hi - TOUCH_REACH_M[0] < 0.03:  # convention: a slope needs a few cm between touches
-        raise RuntimeError(f"too little bare floor before the floor board (its edge {edge:.2f} m out)")
-    floor_xs = [round(float(x), 3) for x in np.linspace(TOUCH_REACH_M[0], hi, FLOOR_TOUCHES)]
-    on = max(pts[:, 0].min(), TOUCH_REACH_M[0])
-    return floor_xs, (round(float(on), 3) if on <= TOUCH_REACH_M[1] else None)
+    printed = pts[:, 0].min()  # the inner corners' near row
+    bare_to = printed - board.getSquareLength() - TOUCH_CLEAR_M  # the edge is a square nearer
+    out = []
+    for x in np.linspace(*TOUCH_REACH_M, TOUCHES):
+        if bare_to < x < printed:
+            x = bare_to if x - bare_to < printed - x else printed
+        if not TOUCH_REACH_M[0] <= x <= TOUCH_REACH_M[1]:
+            continue
+        out.append((round(float(x), 3), "board" if x >= printed else "floor"))
+    out = sorted(set(out))
+    if len(out) < TOUCHES or out[-1][0] - out[0][0] < 0.03:  # convention: a slope needs a few cm
+        raise RuntimeError(
+            f"no {TOUCHES} touch points along the reach (the board's printed area from {printed:.2f} m)"
+        )
+    return out
 
 
 def coarse(robot: Robot, log: dict) -> None:
@@ -191,13 +198,13 @@ def fine(robot: Robot, thickness: float, log: dict) -> dict:
 def floor(robot: Robot, cams: dict, thickness: float, log: dict) -> dict:
     """The floor plane from touches on the bare floor and on the board (less its thickness); the
     board's top as touched against as seen by the cameras is the run's check."""
-    floor_xs, board_x = touch_points(np.asarray(cams["floor_board_pose"][-1]))
+    where = touch_points(np.asarray(cams["floor_board_pose"][-1]))
     arm = Arm(robot)
     probes = []
     try:
         arm.pose("ready", speed=20)
-        for x in floor_xs + ([board_x] if board_x is not None else []):
-            probes.append({**calibrate_floor.probe(arm, x), "on": "floor" if x in floor_xs else "board"})
+        for x, on in where:
+            probes.append({**calibrate_floor.probe(arm, x), "on": on})
     finally:
         arm.reset()
         lay_down(robot)  # lying, as the next run starts from
@@ -214,7 +221,7 @@ def floor(robot: Robot, cams: dict, thickness: float, log: dict) -> dict:
     out = {"touches": probes, "floor_tcp_z": round(float(np.mean([q["z"] for q in points])), 4)}
     on_board = [p for p in probes if p["on"] == "board"]
     if on_board:
-        touched_top = on_board[0]["floor_tcp_z"] - JAW_TIP_OFFSET_M  # the jaw tips on the board
+        touched_top = float(np.mean([p["floor_tcp_z"] for p in on_board])) - JAW_TIP_OFFSET_M  # the jaw tips
         out.update(
             board_top_touched_z=touched_top,
             board_top_seen_z=cams["board_top_z"],

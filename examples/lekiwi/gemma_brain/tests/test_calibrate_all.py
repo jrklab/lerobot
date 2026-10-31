@@ -91,21 +91,20 @@ def test_corrections_stop_at_the_limit(fake):
     assert len(f.corrections) == ca.MAX_CORRECTIONS == len(log["corrections"])
 
 
-def test_touches_on_the_bare_floor_before_the_board_and_one_on_it():
-    # As the cameras placed it Oct 30: the board's x axis along the arm's -y, its y along -x.
-    pose = np.array(
-        [[0.0, -1.0, 0.0, 0.442], [-1.0, 0.0, 0.0, 0.127], [0.0, 0.0, -1.0, -0.104], [0, 0, 0, 1]]
+def _board_at(x_corner, y_corner=0.127):
+    # As the cameras placed it Oct 30: the board's x axis along the arm's -y, its y along -x; its
+    # inner corners from 0.025 to 0.15 m along its y, so the printed area starts at x_corner - 0.15.
+    return np.array(
+        [[0.0, -1.0, 0.0, x_corner], [-1.0, 0.0, 0.0, y_corner], [0.0, 0.0, -1.0, -0.104], [0, 0, 0, 1]]
     )
-    floor_xs, board_x = ca.touch_points(pose)
-    edge = 0.442 - 0.15 - 0.025  # the inner corners reach 0.292; the edge a square nearer
-    assert floor_xs[0] == ca.TOUCH_REACH_M[0] and floor_xs[-1] == pytest.approx(
-        edge - ca.TOUCH_CLEAR_M, abs=1e-3
-    )
-    assert len(floor_xs) == ca.FLOOR_TOUCHES and board_x == pytest.approx(0.292, abs=1e-3)
-    far = pose.copy()
-    far[0, 3] = 0.55  # the board's printed area out of reach: no touch on it
-    assert ca.touch_points(far)[1] is None
-    off = pose.copy()
-    off[1, 3] = -0.15  # all to the right of the arm's centre line
+
+
+def test_touches_spread_over_the_reach_off_the_boards_edge():
+    # The first placement: printed area from 0.292, edge 0.267: two on the floor, one on the board.
+    assert ca.touch_points(_board_at(0.442)) == [(0.18, "floor"), (0.237, "floor"), (0.3, "board")]
+    # The second, nearer: printed area from 0.255, edge 0.23: one on the floor, two on the board.
+    assert ca.touch_points(_board_at(0.405)) == [(0.18, "floor"), (0.255, "board"), (0.3, "board")]
+    # Out of reach altogether: all on the floor.
+    assert [on for _, on in ca.touch_points(_board_at(0.60))] == ["floor"] * 3
     with pytest.raises(RuntimeError, match="centre line"):
-        ca.touch_points(off)
+        ca.touch_points(_board_at(0.442, y_corner=-0.15))
