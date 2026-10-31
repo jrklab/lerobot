@@ -110,6 +110,7 @@ SHORT_DEG = 2 * REST_TOLERANCE_DEG  # an end further inside the URDF's limit tha
 SWEEP_CLEARANCE_M = 0.05  # convention: floor clearance of a probe's sweep, for a joint sagging
 #                           at a low torque limit and the rest placement's error
 GRIPPER_TRAVEL_DEG = 200.0  # convention: more than a gripper opens
+GRIPPER_CLOSED_MARGIN_DEG = 1.0  # convention: closed without squeezing the jaws together
 MOVE_SPEED = 20.0  # deg/s between poses, as the other calibration scripts
 PROBE_SPEED = 10.0  # deg/s
 PROBE_TORQUE = 0.3  # of the motor's maximum
@@ -167,6 +168,17 @@ def _sweep_clear(pose: dict[str, float], joint: str, end: float, floor_z: float)
     return lowest
 
 
+def in_line_wrist_flex() -> float:
+    """The wrist flex (degrees, whole) that points the gripper along the forearm in the arm model."""
+    def bend(w: float) -> float:
+        pts = arm_points(np.radians([{**REST, "arm_wrist_flex": w}[j] for j in IK_ARM_JOINTS]))
+        fore, grip = pts[3] - pts[2], pts[5] - pts[3]
+        return float(np.dot(fore, grip) / np.linalg.norm(fore) / np.linalg.norm(grip))
+
+    lo, hi = URDF_LIMITS_DEG["arm_wrist_flex"]
+    return float(max(range(math.ceil(lo), math.floor(hi) + 1), key=bend))
+
+
 def sweep_end(joint: str, direction: int) -> float:
     lo, hi = URDF_LIMITS_DEG[joint]
     return hi + PAST_URDF_DEG if direction > 0 else lo - PAST_URDF_DEG
@@ -175,15 +187,20 @@ def sweep_end(joint: str, direction: int) -> float:
 def probe_pose(joint: str, direction: int, floor_z: float = DEFAULT_FLOOR_Z_M) -> dict[str, float]:
     """The pose (degrees) to probe this end from: rest when the sweep from it is clear, else
     the clear pose on a POSE_GRID_DEG grid of the other weight-bearing joints nearest rest.
-    The gripper's ends are probed at rest."""
+    The gripper's ends are probed at rest. The wrist roll's with the gripper in line with the
+    forearm (in_line_wrist_flex): bent towards it, as at rest, whatever sticks out of the
+    gripper (the wrist camera's mount) meets the forearm as it rolls (Oct 30: 80 deg short)."""
     rest = {j: REST[j] for j in IK_ARM_JOINTS}
     if joint == GRIPPER:
         return rest
     end = sweep_end(joint, direction)
+    others = [j for j in ("arm_shoulder_lift", "arm_elbow_flex", "arm_wrist_flex") if j != joint]
+    if joint == "arm_wrist_roll":
+        rest = {**rest, "arm_wrist_flex": in_line_wrist_flex()}
+        others.remove("arm_wrist_flex")
     clear = _sweep_clear(rest, joint, end, floor_z)
     if clear is not None and clear >= SWEEP_CLEARANCE_M:
         return rest
-    others = [j for j in ("arm_shoulder_lift", "arm_elbow_flex", "arm_wrist_flex") if j != joint]
     best = None
     grid = {
         j: np.arange(
@@ -303,6 +320,13 @@ def probe_joint(robot: Robot, joint: str) -> dict[str, float]:
         raise RobotError("bootstrap first: the arm isn't on a provisional calibration")
     arm = Arm(robot)
     found = {}
+    if joint != GRIPPER:
+        # Closed, the jaws can't catch the wrist's cable or anything else as the joint turns
+        # (Oct 30: the roll probed with the gripper open stopped 80 deg short).
+        closed = _load().get("ends", {}).get(GRIPPER, {}).get("-")
+        if closed is None:
+            raise RobotError("probe the gripper first: the others are probed with it closed")
+        robot.gripper(closed + GRIPPER_CLOSED_MARGIN_DEG, speed=MOVE_SPEED)
     try:
         for d in (-1, +1):
             _move(arm, probe_pose(joint, d, arm.floor_z), f"to probe {joint}")

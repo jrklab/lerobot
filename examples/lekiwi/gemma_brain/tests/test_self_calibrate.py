@@ -127,6 +127,9 @@ class NewArm:
             raise RobotError(f"{cmd['cmd']} {st['state']}: {st['reason']}", st)
         return st
 
+    def gripper(self, pos, speed=None):
+        return self.run({"cmd": "gripper", "pos": pos, "speed": speed})
+
     def joints(self, targets, speed=None, z_min=None):
         return self.run({"cmd": "joints", "targets": targets, "speed": speed, "z_min": z_min})
 
@@ -183,6 +186,8 @@ def test_a_joint_short_of_the_urdf_is_probed_again_then_kept(state, monkeypatch,
     monkeypatch.setitem(ENDS, "arm_wrist_roll", (-150.0, 120.0))  # a cable stops it early
     robot = NewArm()
     sc.bootstrap(robot)
+    sc.probe_joint(robot, GRIPPER)
+    capsys.readouterr()
     ends = sc.probe_joint(robot, "arm_wrist_roll")
     assert "again at torque 0.30" in capsys.readouterr().out
     assert abs(ends["+"] - (120.0 - REST_ERROR["arm_wrist_roll"])) < 1.0  # read from the rest placement
