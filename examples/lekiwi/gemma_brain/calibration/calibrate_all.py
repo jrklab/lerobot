@@ -104,9 +104,11 @@ def check(robot: Robot) -> dict:
             }
     found = {cam: {b: len(d["ids"]) for b, d in v.items()} for cam, v in seen.items()}
     problems = []
-    for board in ("front", FLOOR_BOARD):  # the front camera is placed through the floor board
-        if board not in seen["front"]:
-            problems.append(f"the front camera doesn't see the {board} board")
+    if "front" not in seen["front"]:
+        problems.append("the front camera doesn't see the front board")
+    if FLOOR_BOARD not in seen["front"]:
+        # It places the front camera best; without it the upright board does (solve_cameras).
+        print("note: the front camera doesn't see the floor board: it will be placed through the upright board")
     if FLOOR_BOARD not in seen["wrist"]:
         problems.append("the wrist camera (the arm at rest) doesn't see the floor board")
     if st.get("arm_calibration") == "calibrated":

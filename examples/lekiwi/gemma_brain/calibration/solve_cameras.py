@@ -81,6 +81,7 @@ LENS_FLAGS = cv2.CALIB_FIX_K3 | cv2.CALIB_ZERO_TANGENT_DIST  # both cameras' fra
 # from every arm pose. The upright boards stand ~65 cm out, located only from the forward poses:
 # through them the front camera came out up to 20 mm and 3 deg apart (Oct 29 scene).
 FRONT_VIA = "wrist"
+FRONT_FALLBACK = "front"  # the upright board, when no start frame saw the floor board
 # A board view counts for the turning centre from this many corners: a partial view of an
 # upright board 60 cm away (fewer) moved the estimate by a few mm (convention).
 MIN_TURN_CORNERS = 12
@@ -424,42 +425,65 @@ def solve(
                 {j: round(v, 2) for j, v in apply.items()}
                 or "none: the arm's zeros are as good as this can tell",
             )
-    # The front camera: one estimate per scene, through that scene's floor board, then their mean.
-    # A scene whose first front frames missed the floor board (Oct 30: it lay at the view's edge
-    # and the robot came back 1.6 deg turned) places nothing: the others do.
-    fronts = []
-    for i, sc in enumerate(scenes):
-        try:
-            fronts.append(
-                solve_front(
-                    [fr["boards"] for fr in sc["front"]],
-                    fl["K"],
-                    fl["dist"],
-                    {FRONT_VIA: w["boards"][f"{i}/{FRONT_VIA}"]},
-                )["T_base_cam"]
-            )
-        except ValueError as e:
-            print(f"scene {scene_dirs[i]}: {e}: not used for the front camera")
-    if not fronts:
-        raise ValueError(
-            f"no scene's front frames saw the {FRONT_VIA} board: the front camera can't be placed"
-        )
-    f = {"T_base_cam": mean_pose(fronts)}
-    tilt = float(np.degrees(np.arcsin(-f["T_base_cam"][2, 2])))
-    across = max(np.linalg.norm(T[:3, 3] - f["T_base_cam"][:3, 3]) for T in fronts)
-    print(
-        f"front camera in the arm's frame: {np.round(f['T_base_cam'][:3, 3] * 1000, 1).tolist()} mm, "
-        f"{tilt:.1f} deg down (through the {FRONT_VIA} board; the scenes' estimates within {1000 * across:.1f} mm "
-        f"of their mean, tilts {min(np.degrees(np.arcsin(-T[2, 2])) for T in fronts):.1f}-"
-        f"{max(np.degrees(np.arcsin(-T[2, 2])) for T in fronts):.1f} deg)"
-    )
-    centre, centre_rms = turn_centre(scenes + extra, fl["K"], fl["dist"], f["T_base_cam"])
     board_top = float(np.mean([w["boards"][f"{i}/{FRONT_VIA}"][2, 3] for i in range(len(scenes))]))
     floor_seen = board_top - floor_board_thickness
     print(
         f"the floor board's top lies at z {1000 * board_top:.1f} mm in the arm's frame; the floor under it "
         f"{1000 * floor_seen:.1f} mm (the board {1000 * floor_board_thickness:.2f} mm thick)"
     )
+    result = {
+        "joint_offsets_deg": w["joint_offsets_deg"],
+        "spread_deg": spread["spread_deg"] if spread else None,
+        "to_apply_deg": offsets_to_apply(w["joint_offsets_deg"], spread["spread_deg"]) if spread else {},
+        "board_top_z": board_top,
+        "floor_z": floor_seen,
+        "floor_board_pose": [w["boards"][f"{i}/{FRONT_VIA}"].tolist() for i in range(len(scenes))],
+        "rms_px": {"wrist_lens": wl["rms_px"], "front_lens": fl["rms_px"], "wrist_scene": w["rms_px"]},
+    }
+    # The front camera: one estimate per scene, through that scene's floor board, then their mean.
+    # A scene whose first front frames missed the floor board (Oct 30: it lay at the view's edge
+    # and the robot came back 1.6 deg turned) places nothing: the others do. With none, and only
+    # when writing, the upright front board places it (less exact: FRONT_VIA); otherwise the
+    # solve goes without it (the correction rounds only need the zero offsets).
+    via = FRONT_VIA
+    fronts = []
+    for name in (FRONT_VIA, FRONT_FALLBACK) if write else (FRONT_VIA,):
+        for i, sc in enumerate(scenes):
+            if f"{i}/{name}" not in w["boards"]:
+                continue
+            try:
+                fronts.append(
+                    solve_front(
+                        [fr["boards"] for fr in sc["front"]],
+                        fl["K"],
+                        fl["dist"],
+                        {name: w["boards"][f"{i}/{name}"]},
+                    )["T_base_cam"]
+                )
+            except ValueError as e:
+                print(f"scene {scene_dirs[i]}: {e} ({name} board): not used for the front camera")
+        if fronts:
+            via = name
+            break
+    if not fronts:
+        if write:
+            raise ValueError(
+                "no scene's front frames saw a board the wrist camera located: the front camera can't be placed"
+            )
+        print(f"the front camera isn't placed in this solve (no start frame saw the {FRONT_VIA} board)")
+        return result
+    if via != FRONT_VIA:
+        print(f"note: the front camera placed through the {via} board, less exact than the {FRONT_VIA} board")
+    f = {"T_base_cam": mean_pose(fronts)}
+    tilt = float(np.degrees(np.arcsin(-f["T_base_cam"][2, 2])))
+    across = max(np.linalg.norm(T[:3, 3] - f["T_base_cam"][:3, 3]) for T in fronts)
+    print(
+        f"front camera in the arm's frame: {np.round(f['T_base_cam'][:3, 3] * 1000, 1).tolist()} mm, "
+        f"{tilt:.1f} deg down (through the {via} board; the scenes' estimates within {1000 * across:.1f} mm "
+        f"of their mean, tilts {min(np.degrees(np.arcsin(-T[2, 2])) for T in fronts):.1f}-"
+        f"{max(np.degrees(np.arcsin(-T[2, 2])) for T in fronts):.1f} deg)"
+    )
+    centre, centre_rms = turn_centre(scenes + extra, fl["K"], fl["dist"], f["T_base_cam"])
     print(
         f"the base turns about ({100 * centre[0]:.1f}, {100 * centre[1]:.1f}) cm in the arm's frame (residual {100 * centre_rms:.2f} cm)"
     )
@@ -496,7 +520,7 @@ def solve(
             "method": "solve_cameras.py on capture_cameras.py scenes: calibrateCamera, radial k1 k2 only (the front "
             "lens with the base sweep and the side board close-up); Park-Martin hand-eye refined with every "
             "corner's reprojection over all scenes, each with its own board poses; the front camera through each "
-            f"scene's {FRONT_VIA} board, averaged",
+            f"scene's {via} board, averaged",
             "date": datetime.date.today().isoformat(),
             "log": [
                 str(p.resolve().relative_to(ROOT))
@@ -511,15 +535,7 @@ def solve(
         }
         CALIB.write_text(json.dumps(calib, indent=2) + "\n")
         print(f"wrote {CALIB}")
-    return {
-        "joint_offsets_deg": w["joint_offsets_deg"],
-        "spread_deg": spread["spread_deg"] if spread else None,
-        "to_apply_deg": offsets_to_apply(w["joint_offsets_deg"], spread["spread_deg"]) if spread else {},
-        "board_top_z": board_top,
-        "floor_z": floor_seen,
-        "floor_board_pose": [w["boards"][f"{i}/{FRONT_VIA}"].tolist() for i in range(len(scenes))],
-        "rms_px": {"wrist_lens": wl["rms_px"], "front_lens": fl["rms_px"], "wrist_scene": w["rms_px"]},
-    }
+    return result
 
 
 def main() -> None:
