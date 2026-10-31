@@ -75,6 +75,7 @@ TOUCHES = 3  # convention: a plane needs 3
 TOUCH_CLEAR_M = 0.03  # convention: off the board's edge and its backing, for the jaws
 FLOOR_BOARD = "wrist"
 CHECK_FRAMES = 5  # convention
+TOUCH_START_Z_M = -0.05  # the TCP height the touches descend from (calibrate_floor.py --start-z)
 
 
 def _run_dir() -> Path:
@@ -210,6 +211,10 @@ def floor(robot: Robot, cams: dict, thickness: float, log: dict) -> dict:
     """The floor plane from touches on the bare floor and on the board (less its thickness); the
     board's top as touched against as seen by the cameras is the run's check."""
     where = touch_points(np.asarray(cams["floor_board_pose"][-1]))
+    # Pointing straight down, the far end of the reach (30 cm) isn't reachable from the probe's
+    # usual start 3 cm up (the wrist flex past its limit, Oct 30); from 5 cm below the arm base
+    # it is, as the Oct 29-30 touches out to 30 cm started.
+    calibrate_floor.START_Z_M = TOUCH_START_Z_M
     arm = Arm(robot)
     probes = []
     try:
