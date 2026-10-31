@@ -108,7 +108,9 @@ def check(robot: Robot) -> dict:
         problems.append("the front camera doesn't see the front board")
     if FLOOR_BOARD not in seen["front"]:
         # It places the front camera best; without it the upright board does (solve_cameras).
-        print("note: the front camera doesn't see the floor board: it will be placed through the upright board")
+        print(
+            "note: the front camera doesn't see the floor board: it will be placed through the upright board"
+        )
     if FLOOR_BOARD not in seen["wrist"]:
         problems.append("the wrist camera (the arm at rest) doesn't see the floor board")
     if st.get("arm_calibration") == "calibrated":
@@ -157,8 +159,11 @@ def touch_points(board_pose: np.ndarray) -> list[tuple[float, str]]:
     out = []
     for x in np.linspace(*TOUCH_REACH_M, TOUCH_COUNT):
         if bare_to < x < printed:
-            x = bare_to if x - bare_to < printed - x else printed
-        if not TOUCH_REACH_M[0] <= x <= TOUCH_REACH_M[1]:
+            # The nearer side of the edge that's within reach (Oct 30: the board from 22 cm left
+            # no bare floor in reach: the 18 cm touch goes onto the board).
+            sides = sorted((bare_to, printed), key=lambda e: abs(e - x))
+            x = next((e for e in sides if TOUCH_REACH_M[0] <= e <= TOUCH_REACH_M[1]), x)
+        if not TOUCH_REACH_M[0] <= x <= TOUCH_REACH_M[1] or bare_to < x < printed:
             continue
         out.append((round(float(x), 3), "board" if x >= printed else "floor"))
     out = sorted(set(out))

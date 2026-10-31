@@ -112,6 +112,8 @@ def test_touches_spread_over_the_reach_off_the_boards_edge():
     assert ca.touch_points(_board_at(0.442)) == [(0.18, "floor"), (0.237, "floor"), (0.3, "board")]
     # The second, nearer: printed area from 0.255, edge 0.23: one on the floor, two on the board.
     assert ca.touch_points(_board_at(0.405)) == [(0.18, "floor"), (0.255, "board"), (0.3, "board")]
+    # Nearer still (Oct 30: printed from 0.22, the edge 0.195): no bare floor in reach, all on the board.
+    assert ca.touch_points(_board_at(0.37)) == [(0.22, "board"), (0.24, "board"), (0.3, "board")]
     # Out of reach altogether: all on the floor.
     assert [on for _, on in ca.touch_points(_board_at(0.60))] == ["floor"] * 3
     with pytest.raises(RuntimeError, match="centre line"):
