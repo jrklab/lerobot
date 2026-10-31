@@ -19,9 +19,9 @@ writes. Run: uv run pytest -q web_server/test_robot_bridge.py (from examples/lek
 import time
 
 import pytest
+from robot_bridge import ARM_JOINTS, MockLeKiwi, RobotBridge
 
 from lerobot.motors import MotorCalibration
-from robot_bridge import ARM_JOINTS, MockLeKiwi, RobotBridge
 
 RES = 4096
 EEPROM = {"Homing_Offset", "Min_Position_Limit", "Max_Position_Limit"}
