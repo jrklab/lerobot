@@ -76,12 +76,15 @@ class OperatorTookOver(RobotError):
 
 
 class Robot:
-    def __init__(self, url: str | None = None, base_enabled: bool = True):
-        """url None: find the robot on whichever link is up (find_url)."""
+    def __init__(self, url: str | None = None, base_enabled: bool = True, require_calibrated: bool = True):
+        """url None: find the robot on whichever link is up (find_url). require_calibrated: enable()
+        refuses an arm on a provisional calibration (its motors don't match the saved file: tasks
+        would run on the wrong zeros); only the calibration itself turns it off."""
         self.url = (url or find_url()).rstrip("/")
         # False: every base (wheel) command is refused here, before it reaches the robot, e.g.
         # while the robot is tethered to power and must not drive.
         self.base_enabled = base_enabled
+        self.require_calibrated = require_calibrated
         self._hb_stop = threading.Event()
         self._hb_thread: threading.Thread | None = None
         # Pi clock minus Mac clock. The Pi has no RTC and often no internet, so after a reboot
@@ -118,7 +121,11 @@ class Robot:
         """Switch the robot into auto mode and start heartbeats. Refused, before anything
         changes, when the Pi's auto interface isn't in degrees (JOINT_UNITS): one on the version
         before Oct 29 would read this planner's degrees as its normalized units."""
-        units = self._json("GET", "/auto/status").get("joint_units")
+        st = self._json("GET", "/auto/status")
+        units = st.get("joint_units")
+        if self.require_calibrated and st.get("arm_calibration") == "provisional":
+            raise RobotError("the arm is on a provisional calibration (its motors don't match the saved file): "
+                             "run calibration/calibrate_all.py first")
         if units != JOINT_UNITS:
             raise RobotError(f"the Pi's auto interface reports joint units {units!r}, this planner sends "
                              f"{JOINT_UNITS!r}: deploy web_server to the Pi first")

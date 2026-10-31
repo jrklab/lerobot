@@ -138,11 +138,50 @@ A failed step folds the arm and the planner replans from what's done and why it 
 
 ## Calibrations (data/calib.json, this robot)
 
+### All of it in one run: calibration/calibrate_all.py
+
+The arm's joint zeros and ranges, the cameras and the floor, with no one touching the robot
+(Oct 30, 8.4 min). The arm needs no calibration to start from: a brand-new arm works too.
+
+    .venv/bin/python calibration/calibrate_all.py --board-thickness 0.00125 --check-only   # no motion
+    .venv/bin/python calibration/calibrate_all.py --board-thickness 0.00125
+
+Before it:
+
+- **The boards** placed as in [the camera calibration](calibration/CAMERA_CALIBRATION.md#board-placement).
+  The floor board stays on the floor for the whole run. The front camera has to read it (the
+  checks print how many corners: 15 or more is comfortable; under ~10 its view of it comes and goes):
+  if not, move it nearer the robot.
+- **The arm folded at rest** on the base, nothing within its reach; ~30 cm clear behind the robot,
+  the floor clear to the side board.
+- **The Mac awake and, best, plugged in.** The script holds a no-sleep assertion itself
+  (`caffeinate -w`), but on battery a closed lid or low charge still sleeps the Mac: every
+  request stops at once and the Pi aborts the arm on the lost heartbeat.
+- **No web page open on the Pi** during the run: its two video streams load the Pi.
+
+It runs: checks (no motion); the coarse calibration (each joint's two ends probed at a low
+torque limit, `self_calibrate.py`); scenes and zero corrections until none is larger than its
+spread over two scenes (`capture_cameras.py`, `solve_cameras.py --fit-offsets`); the cameras
+written; three floor touches. The run's check: at each touch on the floor board, the jaw tips'
+height against the board's top the cameras saw there, **PASS within 3 mm** (Oct 30: within 1.2 mm).
+The summary and the calibration from before the run go to `runs/<time>-calibrate_all/`; put the
+old one back with `calibration/self_calibrate.py --state runs/<time>-calibrate_all/self_calibration.json restore`.
+
+**On the Pi**, the web service starts on a provisional calibration when the motors don't match
+the saved file (or there is none) instead of LeKiwi's keyboard prompt, which a service can't
+answer (it crashed and restarted in a loop). It does so with `--allow-uncalibrated` (in the
+lekiwi-web unit file since Oct 30) and on its own whenever it has no terminal. `/auto/status`
+reports `arm_calibration`: `calibrated` or `provisional`. The planner (`common/robot.py`)
+refuses to run on a provisional arm: run `calibrate_all.py` first.
+
+### The parts
+
 | What | Script | When |
 |---|---|---|
-| cameras (lenses, wrist mount, front pose, base turning centre, floor they see; joint zeros if needed) | `calibration/capture_cameras.py` + `solve_cameras.py` with the ChArUco boards: [setup](calibration/CAMERA_CALIBRATION.md) | a camera moved, or an arm recalibration |
-| floor height (where the jaws touch) | `calibration/calibrate_floor.py` | new floor or arm calibration |
-| jaw-tip offset (`web_server/auto_control.py` JAW_TIP_OFFSET_M, 9.7 mm) | the floor touch's TCP at contact less the cameras' floor (`calibration/CAMERA_CALIBRATION.md`, phase E) | gripper changed |
+| cameras (lenses, wrist mount, front pose, base turning centre, floor they see; joint zeros if needed) | `calibration/capture_cameras.py` + `solve_cameras.py` with the ChArUco boards: [setup](calibration/CAMERA_CALIBRATION.md); within `calibrate_all.py` | a camera moved, or an arm recalibration |
+| floor height (where the jaws touch) | `calibration/calibrate_floor.py`; within `calibrate_all.py` | new floor or arm calibration |
+| arm joint zeros and ranges | `calibration/self_calibrate.py` (bootstrap, probe, write, correct, restore), within `calibrate_all.py` | new arm, or zeros in doubt |
+| jaw-tip offset (`web_server/auto_control.py` JAW_TIP_OFFSET_M, 6.3 mm) | the SO-101 URDF's jaw meshes: the fixed jaw's tip past `gripper_frame_link` (stock parts; it was 9.7 mm, fitted, Oct 30) | gripper parts changed |
 | front stop row (`front_camera` near_bottom: a brick at the reach point) | from `calibration/calibrate_front.py` (Oct 27; the script is otherwise superseded) | reach point changed |
 | grasp target | `calibration/teach_grasp.py` (the owner's midpoint teach) | gripper or wrist camera changed |
 | gripper opening (mm against angle) | `calibration/calibrate_gripper.py` | gripper recalibrated |

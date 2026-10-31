@@ -18,6 +18,17 @@ Tools, in this folder: `boards.py` (detection), `capture_cameras.py` (the captur
 `solve_cameras.py` (the solve). The boards: `targets/` (PDFs; `make_boards.py` regenerates them).
 Tests: `tests/test_camera_calibration.py`.
 
+**Since Oct 30 this is one part of `calibrate_all.py`**, which calibrates the arm's joints,
+these cameras and the floor in one unattended run (the brain's README, "Calibrations"). The board
+placement below is the same; in that run the floor board also takes some of the floor touches (its
+thickness, `--board-thickness`, a ruler's), and it has to be readable by the front camera from
+where the robot starts: nearer the robot rather than further (with its near edge 23-27 cm in
+front of the arm the front camera read 6-26 of its corners; the run needs 6, 15 or more is
+comfortable). Then, per run: the base sweep and the side board close-up only in the first scene
+(the front camera's views don't depend on the arm's zeros, later solves reuse them), and the
+front camera placed through the upright board if no start frame saw the floor board (less exact,
+noted in the output).
+
 ## What you need
 
 Three boards, each one Letter or A4 page from `targets/` (print the PDF, not the preview PNG).

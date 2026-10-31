@@ -50,6 +50,9 @@ import argparse
 import datetime
 import json
 import logging
+import os
+import shutil
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -78,6 +81,14 @@ CHECK_FRAMES = 5  # convention
 FIRST_SCENE_POSE_STEP = 2  # the first scene's poses: every other one
 CHECK_BAND_MM = 3.0  # convention: the touch's own scatter (1.5 mm) and step bracket, with room
 TOUCH_START_Z_M = -0.05  # the TCP height the touches descend from (calibrate_floor.py --start-z)
+
+
+def keep_awake() -> None:
+    """A macOS no-sleep assertion for as long as this process runs (caffeinate -w): asleep, the Mac
+    stops every request at once and the Pi aborts the arm on the lost heartbeat (Oct 30: idle
+    sleep on battery stopped runs). Battery still lets a closed lid or low charge sleep it."""
+    if shutil.which("caffeinate"):
+        subprocess.Popen(["caffeinate", "-dims", "-w", str(os.getpid())])
 
 
 def _run_dir() -> Path:
@@ -326,7 +337,8 @@ def main() -> None:
     args = ap.parse_args()
     logging.basicConfig(level=logging.WARNING)
 
-    robot = Robot()
+    keep_awake()
+    robot = Robot(require_calibrated=False)  # it makes the calibration
     with robot:
         checked = check(robot)
         print("checks:", checked)

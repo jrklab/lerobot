@@ -507,7 +507,7 @@ def main() -> None:
     logging.basicConfig(level=logging.WARNING)
     STATE = args.state
 
-    robot = Robot(base_enabled=False)
+    robot = Robot(base_enabled=False, require_calibrated=False)  # it makes the calibration
     with robot:
         if args.step == "bootstrap":
             bootstrap(robot, [n if n.startswith("arm_") else f"arm_{n}" for n in args.joints] or None)

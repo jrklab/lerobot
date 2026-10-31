@@ -529,7 +529,13 @@ def main():
     if not args.no_recording:
         recorder = EpisodeRecorder(repo_id=args.repo_id, root=args.dataset_root, fps=FPS)
 
-    bridge = RobotBridge(robot, recorder=recorder, allow_uncalibrated=args.allow_uncalibrated)
+    # As a service there's no keyboard for LeKiwi's calibration prompt: input() fails, the service
+    # crashes and restarts, again and again (214 restarts on the Pi, Oct 30). Without a terminal
+    # the server always starts as with --allow-uncalibrated; run by hand, it still asks.
+    allow_uncalibrated = args.allow_uncalibrated or not sys.stdin.isatty()
+    if allow_uncalibrated and not args.allow_uncalibrated:
+        logger.info("no terminal: a calibration mismatch starts on a provisional calibration, no prompt")
+    bridge = RobotBridge(robot, recorder=recorder, allow_uncalibrated=allow_uncalibrated)
     bridge.start()
 
     if not args.no_gamepad:
