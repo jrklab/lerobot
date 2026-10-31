@@ -160,6 +160,19 @@ GRIPPER_TEMP_HARD_C = 62.0
 HOLD_MAX_EVENTS = 5
 HOLD_PUBLIC = ("state", "pos", "squeeze", "temp", "events")
 
+# The stop probe (arm self-calibration): one joint driven slowly toward one end, under a reduced
+# torque limit, until it stops following its target; then backed off. The criterion is the
+# contact-stop's: over CONTACT_FOLLOW_S the joint moved less than CONTACT_FOLLOW_FRACTION of
+# what its target did, CONTACT_CONFIRM_TICKS ticks running, so a joint that lags under its own
+# weight but keeps moving isn't an end. It ignores the joint's limits: an end lies past them.
+PROBE_MAX_SPEED = 20.0  # deg/s: an end is met slowly (owner: press gently)
+PROBE_WARMUP_S = 0.5  # the joint gets moving before its following is judged
+PROBE_BACKOFF_DEG = 3.0  # off the end once it's found, so nothing presses on it
+PROBE_MAX_TRAVEL_DEG = 360.0  # one probe never asks for more than a turn
+PROBE_WRAP_DEG = 180.0  # a reading this far from the last tick's is the encoder wrapping
+PROBE_MIN_TORQUE, PROBE_MAX_TORQUE = 0.05, 0.6  # Torque_Limit fractions a probe may ask for
+TORQUE_LIMIT_FULL = 1000  # the register's scale: 1000 = the motor's full torque
+
 
 class CommandRefused(ValueError):
     """The command was rejected before anything moved; the message says why."""
@@ -195,6 +208,9 @@ class AutoController:
         self._odom = np.zeros(3)  # x, y (m), theta (rad), integrated from wheel velocities
         self._odom_time: float | None = None
         self._hold: dict | None = None  # the gripper's hold on an object (see HOLD_*)
+        # Motor register writes for the bridge to make between ticks: (register, joint, value),
+        # value None = put back what was there before (a probe's reduced Torque_Limit).
+        self._bus_writes: list[tuple[str, str, int | None]] = []
 
     # --- planner-facing (HTTP threads) ---
 
@@ -206,7 +222,7 @@ class AutoController:
         """Validates cmd and queues it to run. Raises CommandRefused (nothing moves) if it
         isn't safe. Returns the command id."""
         kind = cmd.get("cmd")
-        if kind in ("trajectory", "joints", "gripper") and cmd.get("units") != JOINT_UNITS:
+        if kind in ("trajectory", "joints", "gripper", "probe") and cmd.get("units") != JOINT_UNITS:
             raise CommandRefused(f"{kind}: joint positions must be in degrees (\"units\": \"deg\"); "
                                  "is the planner on the version before Oct 29?")
         with self._lock:
@@ -225,8 +241,10 @@ class AutoController:
             run = self._plan_gripper(start, cmd)
         elif kind == "base":
             run = self._plan_base(cmd)
+        elif kind == "probe":
+            run = self._plan_probe(start, cmd)
         else:
-            raise CommandRefused(f"unknown cmd {kind!r} (trajectory, joints, gripper, base)")
+            raise CommandRefused(f"unknown cmd {kind!r} (trajectory, joints, gripper, base, probe)")
 
         with self._lock:
             self._refuse_if_busy_locked()
@@ -247,6 +265,12 @@ class AutoController:
             }
         logger.info("auto: command %d (%s) accepted", cmd_id, kind)
         return cmd_id
+
+    def take_bus_writes(self) -> list[tuple[str, str, int | None]]:
+        """The register writes asked for since the last call, for the bridge to make."""
+        with self._lock:
+            out, self._bus_writes = self._bus_writes, []
+        return out
 
     def abort(self, reason: str) -> None:
         with self._lock:
@@ -322,6 +346,8 @@ class AutoController:
                 vel = self._step_base(cmd, t)
             elif cmd["kind"] == "gripper":
                 self._step_gripper(cmd, t, targets, joint_state)
+            elif cmd["kind"] == "probe":
+                self._step_probe(cmd, t, targets, joint_state)
             else:
                 self._step_trajectory(cmd, t, targets, joint_state, now)
         if GRIPPER in joint_state and (cmd is None or cmd["kind"] != "gripper"):
@@ -420,6 +446,29 @@ class AutoController:
             raise CommandRefused(f"gripper: 'pos' must be a number, degrees open, 0 (closed) .. {hi:.0f}") from None
         speed = _clamp(float(cmd.get("speed") or DEFAULT_GRIPPER_SPEED), MIN_GRIPPER_SPEED, MAX_GRIPPER_SPEED)
         return {"gripper_start": start[GRIPPER], "gripper_goal": goal, "gripper_speed": speed, "stall_ticks": 0}
+
+    def _plan_probe(self, start: dict[str, float], cmd: dict) -> dict:
+        """One joint toward one end: {"joint", "direction": +1 or -1, "speed" (deg/s), "torque"
+        (a fraction of full torque), "max_travel" (deg)}."""
+        joint = cmd.get("joint")
+        if joint not in start:
+            raise CommandRefused(f"probe: unknown joint {joint!r}")
+        try:
+            direction = float(cmd["direction"])
+            speed = float(cmd.get("speed") or PROBE_MAX_SPEED / 2)
+            torque = float(cmd["torque"])
+            max_travel = float(cmd.get("max_travel") or PROBE_MAX_TRAVEL_DEG)
+        except (KeyError, TypeError, ValueError):
+            raise CommandRefused("probe: 'direction' (+1/-1) and 'torque' (fraction) are required numbers") from None
+        if direction not in (1.0, -1.0):
+            raise CommandRefused("probe: 'direction' must be +1 or -1")
+        if not (PROBE_MIN_TORQUE <= torque <= PROBE_MAX_TORQUE):
+            raise CommandRefused(f"probe: 'torque' must be {PROBE_MIN_TORQUE}..{PROBE_MAX_TORQUE} of full torque")
+        if not (0.0 < speed <= PROBE_MAX_SPEED) or not (0.0 < max_travel <= PROBE_MAX_TRAVEL_DEG):
+            raise CommandRefused(f"probe: speed up to {PROBE_MAX_SPEED} deg/s, max_travel up to {PROBE_MAX_TRAVEL_DEG} deg")
+        return {"probe_joint": joint, "probe_dir": direction, "probe_speed": speed, "probe_torque": torque,
+                "probe_max": max_travel, "probe_start": start[joint], "probe_hist": [], "probe_confirm": 0,
+                "probe_phase": "drive", "probe_meas": None}
 
     def _plan_base(self, cmd: dict) -> dict:
         try:
@@ -600,6 +649,53 @@ class AutoController:
                 cmd["result"] = {"pos": round(meas, 1), "load": load, "stalled": False}
                 self._finish_locked("done", "")
 
+    def _step_probe(self, cmd: dict, t: float, targets: dict, joint_state: dict) -> None:
+        j, d = cmd["probe_joint"], cmd["probe_dir"]
+        st = joint_state.get(j)
+        if st is None:
+            return
+        meas = st["pos"]
+        if cmd["probe_meas"] is None:  # the first tick: lower the joint's torque limit
+            with self._lock:
+                self._bus_writes.append(("Torque_Limit", j, round(cmd["probe_torque"] * TORQUE_LIMIT_FULL)))
+            cmd["probe_meas_start"] = meas
+        elif abs(meas - cmd["probe_meas"]) > PROBE_WRAP_DEG:
+            targets[j] = cmd["probe_meas"]
+            with self._lock:
+                cmd["result"] = {"jump_deg": round(meas - cmd["probe_meas"], 1)}
+                self._finish_locked("failed", "the encoder wrapped: its range isn't centred (bootstrap first)")
+            return
+        cmd["probe_meas"] = meas
+        if cmd["probe_phase"] == "drive":
+            target = cmd["probe_start"] + d * cmd["probe_speed"] * t
+            if abs(target - cmd["probe_start"]) > cmd["probe_max"]:
+                targets[j] = meas
+                with self._lock:
+                    cmd["result"] = {"travelled_deg": round(d * (meas - cmd["probe_meas_start"]), 1)}
+                    self._finish_locked("failed", f"no end within {cmd['probe_max']:.0f} deg")
+                return
+            targets[j] = target
+            hist = cmd["probe_hist"]
+            hist.append((t, target, meas))
+            while hist and t - hist[0][0] > CONTACT_FOLLOW_S:
+                hist.pop(0)
+            if t > PROBE_WARMUP_S and hist:
+                commanded = abs(target - hist[0][1])
+                followed = d * (meas - hist[0][2])
+                cmd["probe_confirm"] = cmd["probe_confirm"] + 1 if followed < CONTACT_FOLLOW_FRACTION * commanded else 0
+            if cmd["probe_confirm"] >= CONTACT_CONFIRM_TICKS:
+                cmd["probe_phase"], cmd["probe_back_t"] = "backoff", t
+                cmd["probe_back"] = meas - d * PROBE_BACKOFF_DEG
+                cmd["result"] = {"stop_deg": round(meas, 2), "load": st.get("load"), "severity": st.get("severity"),
+                                 "travelled_deg": round(d * (meas - cmd["probe_meas_start"]), 1),
+                                 "lag_deg": round(d * (target - meas), 1)}
+                targets[j] = cmd["probe_back"]
+            return
+        targets[j] = cmd["probe_back"]
+        if abs(meas - cmd["probe_back"]) < SETTLED_DEG or t - cmd["probe_back_t"] > SETTLE_TIMEOUT_S + PROBE_BACKOFF_DEG / cmd["probe_speed"]:
+            with self._lock:
+                self._finish_locked("done", "")
+
     def _integrate_odom(self, now: float, base_vel: dict[str, float]) -> None:
         if self._odom_time is None:
             self._odom_time = now
@@ -707,5 +803,8 @@ class AutoController:
         cmd["finished"] = time.time()
         log = logger.info if state == "done" else logger.warning
         log("auto: command %d (%s) %s%s", cmd["id"], cmd["kind"], state, f": {reason}" if reason else "")
+        if cmd["kind"] == "probe" and cmd.get("probe_meas") is not None:
+            # However it ends (found, failed, aborted, heartbeat lost): the full torque back.
+            self._bus_writes.append(("Torque_Limit", cmd["probe_joint"], None))
         self._last = cmd
         self._cmd = None

@@ -496,3 +496,81 @@ def test_a_shifted_zero_reads_the_true_angle():
         shifted_calibration(joints, {"arm_gripper": 1.0})
     with pytest.raises(ValueError):
         shifted_calibration(joints, {"arm_elbow_flex": 90.0})  # range_max 3129 + 1024 > 4095
+
+
+# --- the stop probe (arm self-calibration) ---
+
+
+def _probe(sim, joint, direction, **kw):
+    return sim.submit(
+        {"cmd": "probe", "joint": joint, "direction": direction, "torque": 0.3, "speed": 10.0, **kw}
+    )
+
+
+def test_a_probe_finds_the_joints_end_backs_off_and_puts_its_torque_back():
+    sim = Sim()
+    sim.walls["arm_elbow_flex"] = (-90.0, 41.0)  # the end, past where the joint starts (0)
+    _probe(sim, "arm_elbow_flex", +1)
+    st = sim.run_until_done()
+    assert st["state"] == "done", st
+    assert abs(st["result"]["stop_deg"] - 41.0) < 1.0, st["result"]
+    assert abs(sim.pos["arm_elbow_flex"] - (41.0 - 3.0)) < 1.0  # backed off the end
+    writes = sim.auto.take_bus_writes()
+    assert writes == [("Torque_Limit", "arm_elbow_flex", 300), ("Torque_Limit", "arm_elbow_flex", None)]
+    assert all(abs(sim.pos[j]) < 1e-6 for j in IK_ARM_JOINTS if j != "arm_elbow_flex")  # one joint only
+
+
+def test_a_joint_lagging_under_its_weight_but_moving_is_not_an_end():
+    sim = Sim()
+    sim.walls["arm_shoulder_lift"] = (-100.0, 60.0)
+    lag = 6.0  # deg behind its target the whole way, as a loaded joint at a low torque limit
+    orig = sim.run
+
+    def lagging(seconds, heartbeat=True):
+        orig(seconds, heartbeat)
+        t = sim.targets["arm_shoulder_lift"]
+        sim.pos["arm_shoulder_lift"] = max(
+            -100.0,
+            min(60.0, t - lag if t - lag > sim.pos["arm_shoulder_lift"] else sim.pos["arm_shoulder_lift"]),
+        )
+
+    sim.run = lagging
+    _probe(sim, "arm_shoulder_lift", +1)
+    st = sim.run_until_done()
+    assert st["state"] == "done" and abs(st["result"]["stop_deg"] - 60.0) < 1.5, st["result"]
+    assert st["result"]["travelled_deg"] > 50  # it went the whole way, not stopping at the lag
+
+
+def test_a_probe_with_no_end_in_reach_fails_and_still_restores_the_torque():
+    sim = Sim()
+    _probe(sim, "arm_wrist_roll", -1, max_travel=20.0)
+    st = sim.run_until_done()
+    assert st["state"] == "failed" and "no end within 20" in st["reason"]
+    assert sim.auto.take_bus_writes()[-1] == ("Torque_Limit", "arm_wrist_roll", None)
+
+
+def test_a_probe_stops_on_an_encoder_wrap():
+    sim = Sim()
+    _probe(sim, "arm_shoulder_pan", +1)
+    sim.run(1.0)
+    sim.pos["arm_shoulder_pan"] -= 359.0  # the reading jumps a turn: the range crossed 4095 -> 0
+    st = sim.run_until_done()
+    assert st["state"] == "failed" and "wrapped" in st["reason"]
+
+
+def test_a_probe_losing_the_heartbeat_aborts_and_restores_the_torque():
+    sim = Sim()
+    _probe(sim, "arm_wrist_flex", +1)
+    sim.run(0.5)
+    sim.run(HEARTBEAT_TIMEOUT_S + 0.5, heartbeat=False)
+    assert sim.command()["state"] == "aborted"
+    assert sim.auto.take_bus_writes()[-1] == ("Torque_Limit", "arm_wrist_flex", None)
+
+
+def test_bad_probes_are_refused():
+    sim = Sim()
+    for bad in ({"joint": "arm_nose"}, {"direction": 0}, {"torque": 0.9}, {"torque": 0.0}, {"speed": 50.0}):
+        with pytest.raises(CommandRefused):
+            _probe(sim, **{"joint": "arm_elbow_flex", "direction": 1, **bad})
+    with pytest.raises(CommandRefused):  # degrees only, like every joint command
+        sim.auto.submit({"cmd": "probe", "joint": "arm_elbow_flex", "direction": 1, "torque": 0.3})
