@@ -71,7 +71,7 @@ TOUCHES = ROOT / "data" / "floor_touches.json"
 MAX_CORRECTIONS = 3  # convention: the zeros settle in one or two (Oct 30: one)
 SCENES_PER_VERDICT = 2  # both pose orders under one calibration (CAMERA_CALIBRATION.md)
 TOUCH_REACH_M = (0.18, 0.30)  # where the floor touches have run, gripper vertical (Oct 29-30)
-TOUCHES = 3  # convention: a plane needs 3
+TOUCH_COUNT = 3  # convention: a plane needs 3
 TOUCH_CLEAR_M = 0.03  # convention: off the board's edge and its backing, for the jaws
 FLOOR_BOARD = "wrist"
 CHECK_FRAMES = 5  # convention
@@ -139,7 +139,7 @@ def lay_down(robot: Robot) -> None:
 
 
 def touch_points(board_pose: np.ndarray) -> list[tuple[float, str]]:
-    """TOUCHES points along the arm's x axis (y = 0), spread over TOUCH_REACH_M, each on the
+    """TOUCH_COUNT points along the arm's x axis (y = 0), spread over TOUCH_REACH_M, each on the
     bare floor or on the floor board's printed area: one that would land on the board's edge
     (from TOUCH_CLEAR_M before it to its printed area) moves to the nearer of the two. The board
     as the cameras placed it (Oct 30: its edge 23-27 cm out, the reach 18-30)."""
@@ -153,16 +153,16 @@ def touch_points(board_pose: np.ndarray) -> list[tuple[float, str]]:
     printed = pts[:, 0].min()  # the inner corners' near row
     bare_to = printed - board.getSquareLength() - TOUCH_CLEAR_M  # the edge is a square nearer
     out = []
-    for x in np.linspace(*TOUCH_REACH_M, TOUCHES):
+    for x in np.linspace(*TOUCH_REACH_M, TOUCH_COUNT):
         if bare_to < x < printed:
             x = bare_to if x - bare_to < printed - x else printed
         if not TOUCH_REACH_M[0] <= x <= TOUCH_REACH_M[1]:
             continue
         out.append((round(float(x), 3), "board" if x >= printed else "floor"))
     out = sorted(set(out))
-    if len(out) < TOUCHES or out[-1][0] - out[0][0] < 0.03:  # convention: a slope needs a few cm
+    if len(out) < TOUCH_COUNT or out[-1][0] - out[0][0] < 0.03:  # convention: a slope needs a few cm
         raise RuntimeError(
-            f"no {TOUCHES} touch points along the reach (the board's printed area from {printed:.2f} m)"
+            f"no {TOUCH_COUNT} touch points along the reach (the board's printed area from {printed:.2f} m)"
         )
     return out
 

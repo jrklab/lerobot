@@ -15,6 +15,7 @@
 """calibration/calibrate_all.py's decisions, the robot and the solve stood in for: when to
 correct, when the verdict is in (two scenes under one calibration), where the board is touched."""
 
+import json
 from pathlib import Path
 
 import numpy as np
@@ -115,3 +116,35 @@ def test_touches_spread_over_the_reach_off_the_boards_edge():
     assert [on for _, on in ca.touch_points(_board_at(0.60))] == ["floor"] * 3
     with pytest.raises(RuntimeError, match="centre line"):
         ca.touch_points(_board_at(0.442, y_corner=-0.15))
+
+
+def test_the_floor_stage_writes_the_plane_and_the_check(tmp_path, monkeypatch):
+    """Oct 30: a name clash left the touches unwritten after all three had run."""
+    (tmp_path / "calib.json").write_text("{}")
+    monkeypatch.setattr(ca, "CALIB", tmp_path / "calib.json")
+    monkeypatch.setattr(ca, "TOUCHES", tmp_path / "floor_touches.json")
+
+    class Arm:
+        def __init__(self, robot):
+            pass
+
+        def pose(self, name, speed=None):
+            pass
+
+        def reset(self):
+            pass
+
+    monkeypatch.setattr(ca, "Arm", Arm)
+    monkeypatch.setattr(ca, "lay_down", lambda robot: None)
+    tcp = {0.18: -0.1036, 0.237: -0.1034, 0.3: -0.1039}
+    monkeypatch.setattr(ca.calibrate_floor, "probe", lambda arm, x: {"x": x, "floor_tcp_z": tcp[round(x, 3)]})
+    cams = {"floor_board_pose": [_board_at(0.442).tolist()], "board_top_z": -0.1077}
+    log = {}
+    out = ca.floor(None, cams, 0.00125, log)
+    touches = json.loads((tmp_path / "floor_touches.json").read_text())["points"]
+    assert [p["how"] for p in touches] == ["probe on the floor", "probe on the floor", "probe on the board"]
+    assert touches[-1]["z"] == pytest.approx(-0.1039 - 0.00125, abs=1e-4)  # the board's thickness off (0.1 mm rounding)
+    assert out["touched_minus_seen_mm"] == pytest.approx(
+        1000 * (-0.1039 - ca.JAW_TIP_OFFSET_M + 0.1077), abs=0.1
+    )
+    assert json.loads((tmp_path / "calib.json").read_text())["floor_tcp_z_m"]["value"] == out["floor_tcp_z"]
