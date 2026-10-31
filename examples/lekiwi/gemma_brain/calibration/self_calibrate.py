@@ -161,15 +161,29 @@ def provisional_calibration(
 # --- where each end is probed from ---
 
 
+def body_front_x() -> float:
+    """How far forward the base reaches under the arm: at rest the folded arm lies on it (Oct 30,
+    owner), so at least to the jaw tips' rest position, further than the planner's keep-out
+    (BODY_FRONT_X_M, for the arm in use, not lying down)."""
+    tips = arm_points(np.radians([REST[j] for j in IK_ARM_JOINTS]))[-1]
+    return max(BODY_FRONT_X_M, float(tips[0]))
+
+
 def _sweep_clear(pose: dict[str, float], joint: str, end: float, floor_z: float) -> float | None:
     """The sweep's lowest clearance above the floor, None when it passes within
     SWEEP_CLEARANCE_M of the body (Oct 30: the wrist flex's sweep kept just outside the body's
-    outline, and the jaws hit the base 7 deg before the joint's end)."""
+    outline, and the jaws hit the base 7 deg before the joint's end). The next joint's origin
+    isn't held to the body margin: the swept joint alone places it, no pose moves it (the
+    shoulder lift's forward sweep brings the elbow within ~4 cm of the base whatever the rest
+    of the arm does); the owner watches it."""
     lowest = math.inf
+    k = IK_ARM_JOINTS.index(joint) if joint in IK_ARM_JOINTS else -1
     for a in np.linspace(pose[joint], end, 40):
-        pts = arm_points(np.radians([{**pose, joint: a}[j] for j in IK_ARM_JOINTS]))[2:]
-        near_x, near_z = BODY_FRONT_X_M + SWEEP_CLEARANCE_M, BODY_TOP_Z_M + SWEEP_CLEARANCE_M
-        if np.any((pts[:, 0] < near_x) & (pts[:, 2] < near_z)):
+        pts = arm_points(np.radians([{**pose, joint: a}[j] for j in IK_ARM_JOINTS]))
+        held = np.delete(pts, k + 1, axis=0)[2:] if k >= 0 else pts[2:]
+        pts = pts[2:]
+        near_x, near_z = body_front_x() + SWEEP_CLEARANCE_M, BODY_TOP_Z_M + SWEEP_CLEARANCE_M
+        if np.any((held[:, 0] < near_x) & (held[:, 2] < near_z)):
             return None
         lowest = min(lowest, float(pts[:, 2].min()) - floor_z)
     return lowest
@@ -385,6 +399,9 @@ def probe_joint(robot: Robot, joint: str) -> dict[str, float]:
                 torque = min(2 * torque, 0.6)
                 print(f"  {SHORT_DEG:.0f}+ deg short of the URDF's limit: again at torque {torque:.2f}")
             found["+" if d > 0 else "-"] = stop
+            state = _load()  # each end as it's found: a failure at the other keeps it
+            state.setdefault("ends", {})[joint] = {**state["ends"].get(joint, {}), **found}
+            _save(state)
             _retrace(arm, joint, pose)
     finally:
         try:
@@ -393,9 +410,6 @@ def probe_joint(robot: Robot, joint: str) -> dict[str, float]:
             _move(arm, REST, "back to rest")
         except (RobotError, PlanError) as e:
             print(f"back to rest failed: {e} -- the arm is holding where it is")
-    state = _load()
-    state.setdefault("ends", {})[joint] = found
-    _save(state)
     return found
 
 
