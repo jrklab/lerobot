@@ -96,15 +96,17 @@ def check(robot: Robot) -> dict:
         problems.append("the front camera doesn't see the front board")
     if FLOOR_BOARD not in seen["wrist"]:
         problems.append("the wrist camera (the arm at rest) doesn't see the floor board")
-    far = {
-        j: round(st["joints"][j] - sc.REST[j], 1)
-        for j in sc.IK_ARM_JOINTS
-        if abs(st["joints"][j] - sc.REST[j]) > 30
-    }
-    if far:
-        # The coarse stage sets the zeros from this pose; this far off, the arm isn't at rest
-        # or its calibration is wildly off: only the owner can tell.
-        print(f"note: the arm reads far from rest on {far} deg (fine if it lies at rest)")
+    if st.get("arm_calibration") == "calibrated":
+        # The coarse stage takes its zeros from where the arm lies. Calibrated, its readings
+        # can tell whether it does: held in the planner's rest pose instead, the elbow sits 13 deg
+        # less folded and the bootstrap's elbow zero comes out that far off (Oct 30).
+        off = {
+            j: round(st["joints"][j] - sc.REST[j], 1)
+            for j in sc.IK_ARM_JOINTS
+            if abs(st["joints"][j] - sc.REST[j]) > sc.REST_TOLERANCE_DEG
+        }
+        if off:
+            problems.append(f"the arm doesn't lie at rest (deg from it: {off}): fold it down onto the base")
     return {"boards_seen": found, "problems": problems, "arm_calibration": st.get("arm_calibration")}
 
 
