@@ -223,7 +223,8 @@ def auto_write_calibration(body: dict = Body(...)):
     """{"joints": {joint: {homing_offset, range_min, range_max}}, "save": bool}: the arm
     calibrating itself (gemma_brain/calibration/self_calibrate.py) writes its motors' zeros and
     ranges, in auto mode with no command running and the arm resting (its torque is off for
-    the write). save false: the motors only (a provisional calibration); true: the file too."""
+    the write). save false: the motors only (a provisional calibration); true: the file too.
+    relax_s: the torque off that long first, for the arm to settle where it lies."""
     if bridge.get_control_mode() != "auto":
         return JSONResponse({"ok": False, "reason": "not in auto mode"}, status_code=409)
     running = (bridge.auto.status({}).get("command") or {}).get("state") == "running"
@@ -231,7 +232,9 @@ def auto_write_calibration(body: dict = Body(...)):
         return JSONResponse({"ok": False, "reason": "a command is running"}, status_code=409)
     bridge.auto.heartbeat()
     try:
-        result = bridge.write_arm_calibration(body.get("joints") or {}, bool(body.get("save")))
+        result = bridge.write_arm_calibration(
+            body.get("joints") or {}, bool(body.get("save")), relax_s=float(body.get("relax_s") or 0.0)
+        )
     except ValueError as e:
         logger.warning("auto: calibration write refused: %s", e)
         return JSONResponse({"ok": False, "reason": str(e)}, status_code=409)

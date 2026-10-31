@@ -287,3 +287,30 @@ def test_a_camera_stall_does_not_freeze_the_joint_readings():
         assert bridge.get_joint_state()["arm_elbow_flex"]["pos"] == pytest.approx(want)
     finally:
         bridge.stop()
+
+
+def test_a_relax_lets_the_arm_settle_before_the_write(started):
+    robot = _new_arm()
+    bridge = started(robot, allow_uncalibrated=True)
+    time.sleep(0.1)
+    real_sleep = time.sleep
+
+    def settle(s):  # gravity lays the elbow 6 deg further down while its torque is off
+        assert not robot.bus.torque["arm_elbow_flex"]
+        robot.bus.actual["arm_elbow_flex"] += round(6 * RES / 360)
+        real_sleep(s)
+
+    import robot_bridge
+
+    robot_bridge.time.sleep, orig = settle, robot_bridge.time.sleep
+    try:
+        bridge.write_arm_calibration({}, save=False, relax_s=0.2)
+    finally:
+        robot_bridge.time.sleep = orig
+    time.sleep(0.1)
+    assert all(robot.bus.torque.values())
+    assert (
+        abs(robot.bus.goal_actual("arm_elbow_flex") - robot.bus.actual["arm_elbow_flex"]) <= 1
+    )  # held where it lies
+    with pytest.raises(ValueError, match="relax_s"):
+        bridge.write_arm_calibration({}, save=False, relax_s=10.0)

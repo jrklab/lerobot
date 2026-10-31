@@ -106,6 +106,7 @@ REST = {**NAMED_POSES["rest"], "arm_elbow_flex": 94.4, GRIPPER: 0.0}  # the grip
 # The gripper closes towards "-": on the SO-101 its motor's ticks fall as it closes (its degrees
 # count up from closed, joint_angles.py, with drive_mode 0).
 
+RELAX_S = 1.5  # convention: the arm settles onto the base well within this
 REST_TOLERANCE_DEG = 5.0  # the owner's: the rest pose is placed by eye to within this
 PAST_URDF_DEG = 15.0  # how far past the URDF's limit a sweep is checked clear: the ends found
 #                       on this arm lay up to 11 deg past it (Oct 29), plus REST_TOLERANCE_DEG
@@ -323,6 +324,10 @@ def bootstrap(robot: Robot, joints: list[str] | None = None) -> dict:
             "state": cal.get("state"),
             "date": datetime.datetime.now().isoformat(),
         }
+    # The torque off for a moment first: the arm settles where it lies (Oct 30: held at a rest
+    # pose commanded in an earlier run's readings, its wrist flex read several degrees off, and
+    # its end fell outside the probe's sweep).
+    robot.write_calibration({}, save=False, relax_s=RELAX_S)
     new = provisional_calibration(cal["joints"], _at(robot))
     if joints:
         new = {j: new[j] for j in joints}

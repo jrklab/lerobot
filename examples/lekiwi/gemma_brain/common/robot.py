@@ -222,11 +222,13 @@ class Robot:
     def calibration(self) -> dict:
         return self._json("GET", "/auto/calibration")
 
-    def write_calibration(self, joints: dict[str, dict], save: bool) -> dict:
+    def write_calibration(self, joints: dict[str, dict], save: bool, relax_s: float = 0.0) -> dict:
         """The arm's motor calibration ({joint: {homing_offset, range_min, range_max}}, ticks),
         written by the Pi between two control ticks, the arm's torque briefly off (it should be
-        resting); save: to its calibration file too (calibration/self_calibrate.py)."""
-        return self._json("POST", "/auto/calibration", {"joints": joints, "save": save}, timeout=10.0)
+        resting); save: to its calibration file too (calibration/self_calibrate.py); relax_s: the
+        torque off that long first, for the arm to settle where it lies."""
+        body = {"joints": joints, "save": save, **({"relax_s": relax_s} if relax_s else {})}
+        return self._json("POST", "/auto/calibration", body, timeout=10.0 + relax_s)
 
     def trajectory(
         self, waypoints: list[dict], durations: list[float], z_min: float | None = None, contact_stop: bool = False

@@ -95,6 +95,7 @@ HOMING_TICK = MOTOR_RESOLUTION // 2 - 1  # 2047: where calibration homes "middle
 # Feetech stores Homing_Offset in 11-bit sign-magnitude (joint_angles.shifted_calibration).
 HOMING_OFFSET_MAX = MOTOR_RESOLUTION // 2 - 1
 CALIBRATION_KEYS = ("homing_offset", "range_min", "range_max")
+MAX_RELAX_S = 3.0  # convention: a resting arm settles within a second or two
 # Where a register auto mode lowered (AutoController.take_bus_writes) is put back from: the
 # motor's power-on value.
 REGISTER_DEFAULTS = {"Torque_Limit": "Max_Torque_Limit"}
@@ -750,13 +751,19 @@ class RobotBridge:
     def arm_calibration_state(self) -> str | None:
         return self._arm_calibration
 
-    def write_arm_calibration(self, joints: dict[str, dict], save: bool, timeout_s: float = 5.0) -> dict:
+    def write_arm_calibration(
+        self, joints: dict[str, dict], save: bool, relax_s: float = 0.0, timeout_s: float = 5.0
+    ) -> dict:
         """Writes these arm joints' calibration ({joint: {homing_offset, range_min, range_max}},
         motor ticks) to the motors between two control ticks, and to the calibration file when
         save. The arm's torque is off for the write (the motors' EEPROM is locked while it is
         on): the arm should be resting. Its targets are then set to where it reads in the new
-        calibration, so nothing moves when the torque comes back. Raises ValueError when
-        refused or failed."""
+        calibration, so nothing moves when the torque comes back. relax_s: the torque stays off
+        that long first (at most MAX_RELAX_S), for the arm to settle where it lies; joints may
+        then be empty (only the settle: a bootstrap reads where the arm lies, Oct 30). Raises
+        ValueError when refused or failed."""
+        if not 0.0 <= relax_s <= MAX_RELAX_S:
+            raise ValueError(f"relax_s must be 0..{MAX_RELAX_S:.0f} s")
         if getattr(self._robot, "bus", None) is None:
             raise ValueError("no motor bus (mock robot)")
         for joint, c in joints.items():
@@ -768,12 +775,13 @@ class RobotBridge:
                 raise ValueError(f"{joint}: needs integer homing_offset, range_min, range_max") from None
             if abs(off) > HOMING_OFFSET_MAX or not 0 <= lo < hi <= MOTOR_RESOLUTION - 1:
                 raise ValueError(f"{joint}: offset {off} or range {lo}..{hi} outside what the motor holds")
-        req = {"joints": joints, "save": bool(save), "done": threading.Event(), "error": None, "result": None}
+        req = {"joints": joints, "save": bool(save), "relax_s": float(relax_s), "done": threading.Event(),
+               "error": None, "result": None}
         with self._lock:
             if self._pending_calibration is not None:
                 raise ValueError("a calibration write is already pending")
             self._pending_calibration = req
-        if not req["done"].wait(timeout_s):
+        if not req["done"].wait(timeout_s + relax_s):
             raise ValueError(f"the control loop didn't make the write within {timeout_s:.0f} s")
         if req["error"] is not None:
             raise ValueError(req["error"])
@@ -797,8 +805,11 @@ class RobotBridge:
         try:
             new = {j: dataclasses.replace(robot.calibration[j], **{k: int(c[k]) for k in CALIBRATION_KEYS})
                    for j, c in req["joints"].items()}
+            self._robot.stop_base()  # the loop pauses for the relax: nothing may keep driving
             bus.disable_torque(ARM_JOINTS)
             try:
+                if req["relax_s"]:
+                    time.sleep(req["relax_s"])
                 bus.write_calibration(new, cache=False)
                 calib = {**robot.calibration, **new}
                 robot.calibration = calib

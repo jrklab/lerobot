@@ -109,7 +109,7 @@ class NewArm:
             "state": self.state,
         }
 
-    def write_calibration(self, joints, save):
+    def write_calibration(self, joints, save, relax_s=0.0):
         self.true = {j: self._true(j, u) for j, u in self.sim.pos.items()}
         for j, c in joints.items():
             assert abs(c["homing_offset"]) <= 2047 and 0 <= c["range_min"] < c["range_max"] <= RES - 1
