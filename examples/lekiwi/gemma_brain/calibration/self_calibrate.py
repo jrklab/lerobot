@@ -99,7 +99,10 @@ ORDER = [
 ]
 # Zeros from the two ends (the others keep the rest placement: see the module docstring).
 ZERO_FROM_ENDS = ("arm_shoulder_lift", "arm_elbow_flex", "arm_wrist_flex")
-REST = {**NAMED_POSES["rest"], GRIPPER: 0.0}  # the gripper rests closed
+# Where the SO-101 rests folded, placed by hand: the planner's rest pose, but with the elbow as
+# far folded as the arm lies when set down (Oct 30, this arm, read in its camera-checked
+# calibration: 94.4; the planner's commanded rest, 81.3, holds it 13 deg less folded).
+REST = {**NAMED_POSES["rest"], "arm_elbow_flex": 94.4, GRIPPER: 0.0}  # the gripper rests closed
 # The gripper closes towards "-": on the SO-101 its motor's ticks fall as it closes (its degrees
 # count up from closed, joint_angles.py, with drive_mode 0).
 
@@ -115,6 +118,7 @@ MOVE_SPEED = 20.0  # deg/s between poses, as the other calibration scripts
 PROBE_SPEED = 10.0  # deg/s
 PROBE_TORQUE = 0.3  # of the motor's maximum
 PROBE_BACKOFF_DEG = 3.0  # web_server/auto_control.py: where a probe parks after an end
+START_STEP_DEG = 15.0  # convention: the step a probed joint's own start moves by in the search
 POSE_GRID_DEG = 5.0  # convention: the step of the pose search (15 misses the shoulder lift's forward end)
 
 
@@ -158,11 +162,14 @@ def provisional_calibration(
 
 
 def _sweep_clear(pose: dict[str, float], joint: str, end: float, floor_z: float) -> float | None:
-    """The sweep's lowest clearance above the floor, None when it passes low over the body."""
+    """The sweep's lowest clearance above the floor, None when it passes within
+    SWEEP_CLEARANCE_M of the body (Oct 30: the wrist flex's sweep kept just outside the body's
+    outline, and the jaws hit the base 7 deg before the joint's end)."""
     lowest = math.inf
     for a in np.linspace(pose[joint], end, 40):
         pts = arm_points(np.radians([{**pose, joint: a}[j] for j in IK_ARM_JOINTS]))[2:]
-        if np.any((pts[:, 0] < BODY_FRONT_X_M) & (pts[:, 2] < BODY_TOP_Z_M)):
+        near_x, near_z = BODY_FRONT_X_M + SWEEP_CLEARANCE_M, BODY_TOP_Z_M + SWEEP_CLEARANCE_M
+        if np.any((pts[:, 0] < near_x) & (pts[:, 2] < near_z)):
             return None
         lowest = min(lowest, float(pts[:, 2].min()) - floor_z)
     return lowest
@@ -201,7 +208,6 @@ def probe_pose(joint: str, direction: int, floor_z: float = DEFAULT_FLOOR_Z_M) -
     clear = _sweep_clear(rest, joint, end, floor_z)
     if clear is not None and clear >= SWEEP_CLEARANCE_M:
         return rest
-    best = None
     grid = {
         j: np.arange(
             math.ceil(URDF_LIMITS_DEG[j][0] / POSE_GRID_DEG),
@@ -210,20 +216,25 @@ def probe_pose(joint: str, direction: int, floor_z: float = DEFAULT_FLOOR_Z_M) -
         * POSE_GRID_DEG
         for j in others
     }
-    for a in grid[others[0]]:
-        for b in grid[others[1]]:
-            pose = {**rest, others[0]: float(a), others[1]: float(b)}
-            clear = _sweep_clear(pose, joint, end, floor_z)
-            if clear is None or clear < SWEEP_CLEARANCE_M:
-                continue
-            dist = max(abs(pose[j] - rest[j]) for j in others)
-            if best is None or dist < best[0]:
-                best = (dist, pose)
-    if best is None:
-        raise PlanError(
-            f"no pose to probe {joint}'s {'+' if direction > 0 else '-'} end from clear of the floor"
-        )
-    return best[1]
+    # The joint itself may start part of the way to its end: the shoulder lift's forward end
+    # can't be swept from its rest angle without the arm first reaching back over the body.
+    lo, hi = URDF_LIMITS_DEG.get(joint, (-math.inf, math.inf))
+    start = rest[joint]
+    while lo <= start <= hi:
+        best = None
+        for a in grid[others[0]]:
+            for b in grid[others[1]]:
+                pose = {**rest, joint: start, others[0]: float(a), others[1]: float(b)}
+                clear = _sweep_clear(pose, joint, end, floor_z)
+                if clear is None or clear < SWEEP_CLEARANCE_M:
+                    continue
+                dist = max(abs(pose[j] - rest[j]) for j in others)
+                if best is None or dist < best[0]:
+                    best = (dist, pose)
+        if best is not None:
+            return best[1]
+        start += direction * START_STEP_DEG
+    raise PlanError(f"no pose to probe {joint}'s {'+' if direction > 0 else '-'} end from clear of the floor")
 
 
 # --- the final calibration ---
@@ -286,9 +297,10 @@ def _at(robot: Robot) -> dict[str, float]:
     return robot.status()["joints"]
 
 
-def bootstrap(robot: Robot) -> dict:
+def bootstrap(robot: Robot, joints: list[str] | None = None) -> dict:
     """The arm is at rest. Keeps the calibration the motors had (for restore), then writes the
-    provisional one to the motors only."""
+    provisional one to the motors only. joints: only these (their ends found so far are
+    dropped; the others' offsets and ends are kept)."""
     cal = robot.calibration()
     state = _load()
     if "before" not in state:
@@ -298,8 +310,14 @@ def bootstrap(robot: Robot) -> dict:
             "date": datetime.datetime.now().isoformat(),
         }
     new = provisional_calibration(cal["joints"], _at(robot))
+    if joints:
+        new = {j: new[j] for j in joints}
+        ends = {j: e for j, e in state.get("ends", {}).items() if j not in joints}
+        new_all = {**state.get("provisional", {}), **new}
+    else:
+        ends, new_all = {}, new
     reply = robot.write_calibration(new, save=False)
-    state.update(provisional=new, ends={}, bootstrapped=datetime.datetime.now().isoformat())
+    state.update(provisional=new_all, ends=ends, bootstrapped=datetime.datetime.now().isoformat())
     _save(state)
     print("provisional calibration written (motors only); the arm now reads:")
     for j, v in _at(robot).items():
@@ -312,6 +330,15 @@ def _move(arm: Arm, pose: dict[str, float], what: str) -> None:
     goal = {**cur, **{j: pose[j] for j in IK_ARM_JOINTS}}
     arm.check_clear(cur, goal, what)
     arm.robot.joints(goal, speed=MOVE_SPEED)
+
+
+def _retrace(arm: Arm, joint: str, pose: dict[str, float]) -> None:
+    """The probed joint back to the pose it was probed from, the sweep reversed (checked clear
+    by probe_pose), then on to rest the way the arm came. A direct move back to rest from an end
+    can cut low over the body (Oct 30, simulated: pan at its end, the elbow refolding)."""
+    if joint in IK_ARM_JOINTS and abs(_at(arm.robot)[joint] - pose[joint]) > 0.5:
+        arm.robot.joints({joint: pose[joint]}, speed=MOVE_SPEED)
+    _move(arm, pose, "back to the probe pose")
 
 
 def probe_joint(robot: Robot, joint: str) -> dict[str, float]:
@@ -327,9 +354,11 @@ def probe_joint(robot: Robot, joint: str) -> dict[str, float]:
         if closed is None:
             raise RobotError("probe the gripper first: the others are probed with it closed")
         robot.gripper(closed + GRIPPER_CLOSED_MARGIN_DEG, speed=MOVE_SPEED)
+    pose = None
     try:
         for d in (-1, +1):
-            _move(arm, probe_pose(joint, d, arm.floor_z), f"to probe {joint}")
+            pose = probe_pose(joint, d, arm.floor_z)
+            _move(arm, pose, f"to probe {joint}")
             start = _at(robot)[joint]
             travel = GRIPPER_TRAVEL_DEG if joint == GRIPPER else abs(sweep_end(joint, d) - start)
             torque = PROBE_TORQUE / 2 if joint == "arm_wrist_roll" else PROBE_TORQUE
@@ -356,8 +385,11 @@ def probe_joint(robot: Robot, joint: str) -> dict[str, float]:
                 torque = min(2 * torque, 0.6)
                 print(f"  {SHORT_DEG:.0f}+ deg short of the URDF's limit: again at torque {torque:.2f}")
             found["+" if d > 0 else "-"] = stop
+            _retrace(arm, joint, pose)
     finally:
         try:
+            if pose is not None:
+                _retrace(arm, joint, pose)
             _move(arm, REST, "back to rest")
         except (RobotError, PlanError) as e:
             print(f"back to rest failed: {e} -- the arm is holding where it is")
@@ -408,7 +440,8 @@ def restore(robot: Robot) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="step", required=True)
-    sub.add_parser("bootstrap")
+    b = sub.add_parser("bootstrap")
+    b.add_argument("joints", nargs="*", help="only these, e.g. elbow_flex (default: all)")
     p = sub.add_parser("probe")
     p.add_argument("joints", nargs="+", help="e.g. gripper wrist_roll (in ORDER)")
     w = sub.add_parser("write")
@@ -420,7 +453,7 @@ def main() -> None:
     robot = Robot(base_enabled=False)
     with robot:
         if args.step == "bootstrap":
-            bootstrap(robot)
+            bootstrap(robot, [n if n.startswith("arm_") else f"arm_{n}" for n in args.joints] or None)
         elif args.step == "probe":
             for name in args.joints:
                 probe_joint(robot, name if name.startswith("arm_") else f"arm_{name}")

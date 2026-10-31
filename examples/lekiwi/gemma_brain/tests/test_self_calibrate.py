@@ -19,7 +19,7 @@ simulation (test_auto_control.Sim), its units following whatever calibration was
 
 import pytest
 from calibration import self_calibrate as sc
-from common.arm import IK_ARM_JOINTS, NAMED_POSES
+from common.arm import IK_ARM_JOINTS
 from common.robot import RobotError
 from joint_angles import GRIPPER, URDF_LIMITS_DEG, JointAngles
 from test_auto_control import Sim
@@ -59,7 +59,7 @@ class NewArm:
     calibration: Feetech's Present = (Actual - Homing_Offset) mod 4096."""
 
     def __init__(self):
-        rest = {**NAMED_POSES["rest"], GRIPPER: 0.0}
+        rest = sc.REST
         self.true = {j: rest[j] + REST_ERROR[j] for j in rest}  # where the arm is placed
         self.calib = {
             j: {"homing_offset": 0, "range_min": 0, "range_max": RES - 1, "drive_mode": 0} for j in self.true
