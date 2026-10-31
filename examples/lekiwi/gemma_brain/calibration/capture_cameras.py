@@ -140,9 +140,9 @@ SWEEP_HEADINGS_DEG = (-20.0, -10.0, 0.0, 10.0, 20.0)
 # MAX_RETURN_FORWARD_M.
 RETURN_TOL_M = BASE_POS_TOL_M
 RETURN_TOL_DEG = BASE_THETA_TOL_DEG
-RETURN_TRIES = (
-    6  # Oct 30: 4 ran out 1.8 cm off (drive back, turn, turn, then the sideways drive wasn't reached)
-)
+# Oct 30: 4 ran out 1.8 cm off (drive back, turn, turn, then the sideways drive wasn't reached).
+RETURN_TRIES = 6
+MEASURE_FRAMES = 3  # convention: fresh front frames before the start counts as lost
 # The front lens's close-up: the side board (beside the robot, found by turning 90 deg right, then
 # left) is approached to CLOSEUP_STANDOFF_M, where it fills ~70% of the image width (24.5 cm at
 # f ~550 px) and, the camera being low and tilted down, reaches the top of the image: the rows the
@@ -374,13 +374,19 @@ def front_measure(robot, ref_boards: dict, cams: dict):
     ref = {n: board_in_camera(K, dist, n, d) for n, d in ref_boards.items()}
 
     def measure() -> tuple[float, float, float]:
-        time.sleep(SETTLE_S)
-        seen = boards.detect(robot.frame("front", after=time.time())[0])
-        est = [
-            base_offset(ref[n], board_in_camera(K, dist, n, d), T_base_cam)
-            for n, d in seen.items()
-            if n in ref
-        ]
+        est = []
+        # A few fresh frames before giving up: right after a move cut short and finished (a
+        # heartbeat gap), one frame showed none of the boards in plain view (Oct 30).
+        for _ in range(MEASURE_FRAMES):
+            time.sleep(SETTLE_S)
+            seen = boards.detect(robot.frame("front", after=time.time())[0])
+            est = [
+                base_offset(ref[n], board_in_camera(K, dist, n, d), T_base_cam)
+                for n, d in seen.items()
+                if n in ref
+            ]
+            if est:
+                break
         if not est:
             raise RuntimeError(
                 "none of the start's boards is in the front camera's view: can't find the start"
@@ -501,7 +507,11 @@ def run_scene(robot, poses: list[dict], moves: list[dict], closeup: bool = True)
                 finally:
                     (out / "scene.json").write_text(json.dumps(scene, indent=1) + "\n")
                 print("back to the start:")
-                scene["returned"] = return_to_start(robot, measure)
+                try:
+                    scene["returned"] = return_to_start(robot, measure)
+                except RuntimeError as e:  # the scene stands, as after the sweep
+                    print(f"  {e}: the scene is kept")
+                    scene["returned"] = {"failed": str(e)}
             (out / "scene.json").write_text(json.dumps(scene, indent=1) + "\n")
         else:
             print("no measured front camera in calib.json yet: the robot stays 20 cm back, no close-up")
