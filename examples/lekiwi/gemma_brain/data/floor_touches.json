@@ -1,26 +1,49 @@
 {
-  "meaning": "floor touches: TCP z (m, arm frame) where the jaws met the floor at TCP x, y, gripper vertical, joint angles in degrees from the homing tick under the Oct 29 arm recalibration (the touches before it, with the old zeros, sat ~1.4 cm lower: git history); brain/geometry.py fits a plane z = a + b x + c y",
-  "points": [
-    {
-      "x": 0.18,
-      "y": 0.0,
-      "z": -0.098,
-      "how": "probe",
-      "run": "calibrate_floor.py 2026-10-29 --start-z -0.05"
-    },
-    {
-      "x": 0.24,
-      "y": 0.0,
-      "z": -0.0973,
-      "how": "probe",
-      "run": "calibrate_floor.py 2026-10-29 --start-z -0.05"
-    },
-    {
-      "x": 0.3,
-      "y": 0.0,
-      "z": -0.0952,
-      "how": "probe",
-      "run": "calibrate_floor.py 2026-10-29 --start-z -0.05"
-    }
-  ]
+ "meaning": "floor touches: TCP z (m, arm frame) where the jaws met the floor at TCP x, y, gripper vertical, joint angles in degrees from the homing tick under the Oct 30 self-calibration (stops + URDF, then the camera correction elbow -4.12, wrist flex -3.73); previous_oct29: under the hand calibration; brain/geometry.py fits a plane z = a + b x + c y",
+ "points": [
+  {
+   "x": 0.18,
+   "y": 0.0,
+   "z": -0.1011,
+   "how": "probe",
+   "run": "calibrate_floor.py 2026-10-30 --start-z -0.05"
+  },
+  {
+   "x": 0.24,
+   "y": 0.0,
+   "z": -0.103,
+   "how": "probe",
+   "run": "calibrate_floor.py 2026-10-30 --start-z -0.05"
+  },
+  {
+   "x": 0.3,
+   "y": 0.0,
+   "z": -0.1034,
+   "how": "probe",
+   "run": "calibrate_floor.py 2026-10-30 --start-z -0.05"
+  }
+ ],
+ "previous_oct29": [
+  {
+   "x": 0.18,
+   "y": 0.0,
+   "z": -0.098,
+   "how": "probe",
+   "run": "calibrate_floor.py 2026-10-29 --start-z -0.05"
+  },
+  {
+   "x": 0.24,
+   "y": 0.0,
+   "z": -0.0973,
+   "how": "probe",
+   "run": "calibrate_floor.py 2026-10-29 --start-z -0.05"
+  },
+  {
+   "x": 0.3,
+   "y": 0.0,
+   "z": -0.0952,
+   "how": "probe",
+   "run": "calibrate_floor.py 2026-10-29 --start-z -0.05"
+  }
+ ]
 }
