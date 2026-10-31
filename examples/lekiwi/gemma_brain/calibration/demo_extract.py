@@ -58,6 +58,8 @@ KEY_PAUSE_FRAMES = 24
 CLOSE_DROP = 8.0  # the gripper falls at least this much in one close
 GRIPPER_EMPTY = 3.5  # v2 params.GRIPPER_EMPTY_MAX: closing below this held nothing
 OPEN_RISE = 3.0  # the gripper opening this far above its closed width is a release
+TARGET_HEIGHT_FRAMES = 12  # convention: front frames sampled along the drive to the place target
+BOTTOM_IN_FRAME = 0.98  # a box whose bottom edge reaches this (image fraction) may be cut off: no distance
 LIFT_MIN_M = 0.02  # the lift keyframe: the first pause at least this far above the close
 
 
@@ -149,9 +151,13 @@ def load_episode(root: Path, episode: int) -> pd.DataFrame:
 
 
 def wrist_frame(root: Path, df: pd.DataFrame, episode: int, row: int) -> tuple[bytes, int] | None:
-    """JPEG of the wrist camera at `row` (or the nearest earlier row that has a frame), via
+    return camera_frame(root, df, episode, row, "wrist")
+
+
+def camera_frame(root: Path, df: pd.DataFrame, episode: int, row: int, cam: str) -> tuple[bytes, int] | None:
+    """JPEG of camera `cam` at `row` (or the nearest earlier row that has a frame), via
     the recorder's video_frame column; without it, assumes one video frame per row."""
-    col = "observation.images.wrist.video_frame"
+    col = f"observation.images.{cam}.video_frame"
     if col in df:
         frames = df[col].values[: row + 1]
         hits = np.nonzero(frames >= 0)[0]
@@ -159,14 +165,53 @@ def wrist_frame(root: Path, df: pd.DataFrame, episode: int, row: int) -> tuple[b
             return None
         k = int(frames[hits[-1]])
     else:
-        print("warning: no video_frame column; assuming one wrist frame per row")
+        print(f"warning: no video_frame column; assuming one {cam} frame per row")
         k = row
-    cap = cv2.VideoCapture(str(root / "videos" / "observation.images.wrist" / "chunk-000" / f"file-{episode:03d}.mp4"))
+    cap = cv2.VideoCapture(str(root / "videos" / f"observation.images.{cam}" / "chunk-000" / f"file-{episode:03d}.mp4"))
     cap.set(cv2.CAP_PROP_POS_FRAMES, k)
     ok, bgr = cap.read()
     if not ok:
         return None
     return cv2.imencode(".jpg", bgr)[1].tobytes(), k
+
+
+def target_height(root: Path, df: pd.DataFrame, episode: int, kf: dict, target: str, model, geom) -> dict | None:
+    """The place target's height in the demo itself, as the robot measures one on an approach
+    (brain.geometry.front_object_height): the front camera's frames while the base drove to it
+    (from the lift to the release), the target boxed by the model in each; the median, from
+    boxes whose bottom edge is in the frame (it gives the distance)."""
+    from brain.geometry import front_object_height
+
+    lo, hi = kf.get("lift"), kf.get("pre_release")
+    if lo is None or hi is None or hi <= lo:
+        return None
+    heights = []
+    for row in np.linspace(lo, hi, TARGET_HEIGHT_FRAMES).astype(int):
+        got = camera_frame(root, df, episode, int(row), "front")
+        if not got:
+            continue
+        a = model.box(got[0], f"the {target}")
+        if a.value is None or a.value[3] >= BOTTOM_IN_FRAME:
+            continue
+        h = front_object_height(geom, a.value)
+        if h > 0.0:
+            heights.append(round(h, 4))
+    if not heights:
+        return None
+    return {"value_m": float(np.median(heights)), "samples_m": heights}
+
+
+def add_place_offsets(out: dict, th: dict | None) -> None:
+    """The demo's release and hover heights relative to the target's top, so they carry to a
+    target of another height (brain/params.py: the place uses the measured height plus these)."""
+    if th is None:
+        return
+    out["target_height_m"] = th
+    h = th["value_m"]
+    if out.get("release_z_above_floor_m") is not None:
+        out["release_above_target_m"] = round(out["release_z_above_floor_m"] - h, 4)
+    if out.get("above_target_z_above_floor_m") is not None:
+        out["hover_above_target_m"] = round(out["above_target_z_above_floor_m"] - h, 4)
 
 
 def main() -> None:
@@ -177,7 +222,24 @@ def main() -> None:
     ap.add_argument("--place-target", default=None, help="where it was put, e.g. 'cup'")
     ap.add_argument("--calibration", type=Path, default=ROOT / "demos" / "calibration.json")
     ap.add_argument("--vision-url", default="http://127.0.0.1:8081")
+    ap.add_argument("--add-place-offsets", action="store_true",
+                    help="only measure the place target's height and add the relative place heights to the existing extract")
     args = ap.parse_args()
+
+    if args.add_place_offsets:
+        from brain.geometry import Geometry
+        from common.gemma import LlamaCpp
+
+        path = ROOT / "data" / "demos" / args.dataset.name / f"extract-ep{args.episode}.json"
+        out = json.loads(path.read_text())
+        df = load_episode(args.dataset, args.episode)
+        th = target_height(args.dataset, df, args.episode, out["keyframes"], args.place_target or "cup",
+                           LlamaCpp(args.vision_url), Geometry.load())
+        add_place_offsets(out, th)
+        path.write_text(json.dumps(out, indent=1, default=float))
+        print(f"target height {th}; release {out.get('release_above_target_m')} m and hover "
+              f"{out.get('hover_above_target_m')} m above it; written {path}")
+        return
 
     df = load_episode(args.dataset, args.episode)
     c = json.loads(args.calibration.read_text())
@@ -264,6 +326,7 @@ def main() -> None:
                 b = a.value
                 out["pre_release"] = {"video_frame": k, "box": [round(v, 4) for v in b],
                                       "centre": [round((b[0] + b[2]) / 2, 4), round((b[1] + b[3]) / 2, 4)]}
+        add_place_offsets(out, target_height(args.dataset, df, args.episode, kf.__dict__, args.place_target, model, geom))
 
     rows = [
         ("open width before the close (mm)", f"{out['open_width_mm']:.1f}", f"OPEN_WIDTH {prm.OPEN_WIDTH.value:.1f}"),

@@ -159,9 +159,25 @@ def carry(sk: Skills) -> Result:
     return hover_at(sk, prm.HOVER_HEIGHT_M)
 
 
-def hover_at(sk: Skills, height: Param) -> Result:
+def hover_at(sk: Skills, height: Param | float) -> Result:
     """The vertical gripper over the reach point at `height`, roll 0 (jaws as they are)."""
-    return sk.move("arm", xy=(prm.REACH_POINT_X_M.value, 0.0), height=height.value, roll=0.0)
+    h = height.value if isinstance(height, Param) else float(height)
+    return sk.move("arm", xy=(prm.REACH_POINT_X_M.value, 0.0), height=h, roll=0.0)
+
+
+def place_height(sk: Skills, target: str, which: str) -> float:
+    """The jaw tips' height for the place's "release" or "hover" over `target`: its measured
+    height (the approach's front camera) plus the demo's offset above its own target's top, so
+    a lower or taller target gets its own heights (Oct 31). Without both, the demo's absolute
+    heights (made for its one container), noted."""
+    offsets = prm.demo_place_offsets()
+    h = sk.heights.get(target)
+    if offsets and h is not None and h > 0.0:
+        return h + offsets[which]
+    absolute = prm.RELEASE_ABOVE_FLOOR_M if which == "release" else prm.PLACE_HOVER_M
+    sk.ev("place_height_absolute", target=target, which=which, height_m=absolute.value,
+          why="no demo offsets" if not offsets else "the target's height wasn't measured")
+    return absolute.value
 
 
 def bring_into_view(sk: Skills, container: str) -> Result:
@@ -238,10 +254,11 @@ def beside(sk: Skills, ref: str) -> Result:
     return sk.servo(ref, BesideGoal(tol_m=prm.REACH_TOL_M)) if r.ok else r  # coarse here; precise at 3 cm
 
 
-def lower_to_release(sk: Skills) -> Result:
-    """Straight down to the demo's release height; stops early if the held object meets
-    something (the container's bottom)."""
-    return sk.move("arm", height=prm.RELEASE_ABOVE_FLOOR_M.value, until_contact=True)
+def lower_to_release(sk: Skills, target: str | None = None) -> Result:
+    """Straight down to the release height over `target` (place_height); stops early if the held
+    object meets something (the container's bottom)."""
+    h = place_height(sk, target, "release") if target else prm.RELEASE_ABOVE_FLOOR_M.value
+    return sk.move("arm", height=h, until_contact=True)
 
 
 def release(sk: Skills) -> Result:

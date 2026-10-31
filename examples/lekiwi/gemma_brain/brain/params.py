@@ -57,6 +57,16 @@ def _floor_accuracy(fallback: float) -> float:
         return fallback
 
 
+def demo_place_offsets() -> dict[str, float] | None:
+    """The demo's release and hover heights above its place target's top (demo_extract.py
+    --add-place-offsets: the target measured in the demo's own front frames), or None."""
+    try:
+        d = json.loads(DEMO_EXTRACT.read_text())
+        return {"release": float(d["release_above_target_m"]), "hover": float(d["hover_above_target_m"])}
+    except (OSError, KeyError, ValueError, TypeError):
+        return None
+
+
 def demo_place_view() -> tuple[list[float], float] | None:
     """The container's box in the wrist image at the demo's pause above it, and that height
     (jaw tips above the floor): where the owner held the brick before lowering it in."""

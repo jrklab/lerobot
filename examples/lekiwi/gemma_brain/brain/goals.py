@@ -213,7 +213,10 @@ def placed_beside(held, ref) -> bool:
 
 class AboveGoal:
     """A container's opening centre (round_centre) on the spot the owner's demo had it at the
-    pause above it, seen from the same height (PLACE_HOVER_M): image to image, no depth model."""
+    pause above it, seen from the same height above its rim (actions.place_height "hover": the
+    measured target's height plus the demo's offset above its own): image to image, no depth
+    model. Exact only at that height; a hover fixed above the floor (before Oct 31) put the
+    camera nearer a lower cup's rim than the demo's."""
 
     cam = "wrist"
     part = "arm"

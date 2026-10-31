@@ -64,5 +64,24 @@
  "open_width_deg": 32.08007767572999,
  "closed_width_deg": 10.195312546100467,
  "open_width_mm": 44.44463504548014,
- "closed_width_mm": 16.14261507163902
+ "closed_width_mm": 16.14261507163902,
+ "target_height_m": {
+  "value_m": 0.0679,
+  "samples_m": [
+   0.0679,
+   0.0675,
+   0.0668,
+   0.0679,
+   0.0665,
+   0.0673,
+   0.0679,
+   0.0673,
+   0.0681,
+   0.069,
+   0.068,
+   0.0679
+  ]
+ },
+ "release_above_target_m": 0.0064,
+ "hover_above_target_m": 0.0381
 }

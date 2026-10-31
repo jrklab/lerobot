@@ -351,3 +351,22 @@ def test_the_landing_refuses_a_contact_over_half_the_objects_height(height, abov
     sk.move = lambda part, **k: Result(True, data={"contact": True, "contact_z": -0.10 + above, "floor": -0.10})
     r = actions.land(sk, "block")
     assert (not r.ok) == refused
+
+
+def test_place_heights_follow_the_targets_measured_height(monkeypatch):
+    """The demo's release and hover above its own target's top, over a target of another height."""
+    monkeypatch.setattr(prm, "demo_place_offsets", lambda: {"release": 0.0064, "hover": 0.0381})
+    sk = _height_sk({"paper cup": 0.044, "plate": 0.015})
+    assert actions.place_height(sk, "paper cup", "release") == pytest.approx(0.0504)
+    assert actions.place_height(sk, "plate", "hover") == pytest.approx(0.0531)
+    assert sk.events == []
+
+
+def test_without_offsets_or_a_measured_target_the_demos_absolute_heights_stand(monkeypatch):
+    sk = _height_sk({})
+    monkeypatch.setattr(prm, "demo_place_offsets", lambda: {"release": 0.0064, "hover": 0.0381})
+    assert actions.place_height(sk, "bowl", "release") == prm.RELEASE_ABOVE_FLOOR_M.value  # not measured
+    monkeypatch.setattr(prm, "demo_place_offsets", lambda: None)
+    sk.heights["bowl"] = 0.05
+    assert actions.place_height(sk, "bowl", "hover") == prm.PLACE_HOVER_M.value  # no offsets
+    assert [k["why"] for _, k in sk.events] == ["the target's height wasn't measured", "no demo offsets"]

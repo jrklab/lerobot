@@ -72,11 +72,11 @@ def place_in(sk: Skills, obj: str, container: str, drive: bool = True) -> Result
     steps += [("carry", lambda: actions.carry(sk)),
               ("approach", lambda: actions.approach(sk, container, prm.PLACE_APPROACH_TOL_M))] if drive else []
     steps += [
-        ("hover", lambda: actions.hover_at(sk, prm.PLACE_HOVER_M)),
+        ("hover", lambda: actions.hover_at(sk, actions.place_height(sk, container, "hover"))),
         ("over", lambda: actions.over_container(sk, container)),
-        ("lower", lambda: actions.lower_to_release(sk)),
+        ("lower", lambda: actions.lower_to_release(sk, container)),
         ("release", lambda: actions.release(sk)),
-        ("up", lambda: actions.hover_at(sk, prm.PLACE_HOVER_M)),
+        ("up", lambda: actions.hover_at(sk, actions.place_height(sk, container, "hover"))),
         ("check", lambda: actions.check_in(sk, obj, container)),
     ]
     return run(steps)
