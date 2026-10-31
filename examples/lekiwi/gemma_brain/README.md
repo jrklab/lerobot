@@ -194,6 +194,42 @@ the front camera's turn rate, range curve and horizon (`calibrate_front.py`). Th
 
 The arm's joint angles are (ticks - 2047) x 2pi/4096 from the homing tick (fixed Oct 27).
 
+## Next robot session (checklist, Oct 31)
+
+Built offline since the last robot run; nothing below has run on the robot yet. In order:
+
+1. **Deploy** (the Pi has no internet: a git bundle over the cable; it runs `d8c1bc7a`):
+
+       git bundle create /tmp/lk.bundle d8c1bc7a..lekiwi-self-calibration && scp /tmp/lk.bundle lekiwi:/tmp/
+       ssh lekiwi 'cd ~/Work/lerobot && git pull --ff-only /tmp/lk.bundle lekiwi-self-calibration && sudo systemctl restart lekiwi-web'
+
+   The arm at rest for the restart. New on the Pi: the gripper's squeeze per close and the drop
+   threshold following it, the loads and speeds in `/auto/status`, no calibration prompt without
+   a terminal.
+2. **A full calibration** (`calibrate_all.py`, "Calibrations" above), with the floor board placed
+   a few cm further out than ideal on purpose: the base should drive up to it (the positioning
+   step). Check: PASS within 3 mm; the proposed joint stall thresholds printed at the end, to
+   compare with the Pi's (not applied).
+3. **The drive test** from the scene's start (`calibration/drive_test.py`; ~25 cm clear behind
+   and to the left): the same angle every way names a pan correction (3.2 deg expected from the
+   calibration runs' returns); apply it with `self_calibrate.py correct shoulder_pan=...`, then
+   step 2 again (the cameras were placed through the pan zero).
+4. **Re-record the cup demo** with the self-calibrated arm, then extract it
+   (`calibration/demo_extract.py <dataset> --target "red block" --place-target "paper cup"`):
+   the release and hover above the cup's top and the grip's squeeze come from it. Measure the
+   cup with a ruler too: the front camera reads it 63-68 mm.
+5. **A gripper calibration** (`calibration/calibrate_gripper.py`): it now records each close's
+   lag, to set the stall-lag threshold (hand-set 4 deg) from data.
+6. **Picks and a cup place:** the red brick and the light green block (each object's measured
+   height now sets the last look and the landing's "not the floor"; the jaw tips are 6.3 mm, the
+   URDF's), then "put the red block in the paper cup".
+7. **The scramble validation:** shift two zeros on purpose (`self_calibrate.py correct
+   elbow_flex=8 wrist_flex=-6`), run `calibrate_all.py`, compare its zeros with the ones before
+   the shift (each run keeps the calibration it started from); then restore if needed.
+8. **"Ready" = the URDF's zero pose** (all joints 0 deg; now the middle of an old calibration's
+   ranges): change it, then one pass of each kind of move.
+9. **Merge** `lekiwi-measured-params` and `lekiwi-self-calibration` into `Lekiwi_v2` once 2 and 6 pass.
+
 ## Tests
 
 ```bash
