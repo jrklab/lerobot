@@ -827,6 +827,27 @@ class RobotBridge:
         finally:
             req["done"].set()
 
+    def _read_joints_only(self) -> None:
+        """Control-loop thread only: the arm's positions and loads straight from the motors when
+        get_observation() failed. LeKiwi reads the motors and the cameras in one call, so a
+        camera stall froze the joint readings too, and auto mode saw a moving arm stand still
+        (Oct 30: a 1.7 s wrist-camera stall aborted a joint move, "tracking error 14.9 deg")."""
+        bus = getattr(self._robot, "bus", None)
+        if bus is None:
+            return
+        try:
+            pos = bus.sync_read("Present_Position", ARM_JOINTS)
+            load = bus.sync_read("Present_Load", ARM_JOINTS)
+        except Exception:
+            logger.exception("reading the arm's motors failed too")
+            return
+        with self._lock:
+            for joint, v in pos.items():
+                st = self._latest_joint_state[joint]
+                st["pos"], st["load"] = v, abs(load.get(joint, 0.0))
+                st["severity"] = _stall_severity(joint, st["load"], st.get("speed", 0.0))
+                st["stalled"] = st["severity"] > 0.0
+
     def _apply_bus_writes(self, writes: list[tuple[str, str, int | None]]) -> None:
         """Control-loop thread only: the register writes auto mode asked for
         (AutoController.take_bus_writes); value None puts the register back to its default.
@@ -1183,6 +1204,7 @@ class RobotBridge:
                     self._recorder.add_frame(obs, action)
             except Exception:
                 logger.exception("get_observation failed")
+                self._read_joints_only()
                 self._maybe_recover_cameras(loop_start)
 
             elapsed = time.monotonic() - loop_start

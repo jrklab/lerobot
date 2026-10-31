@@ -110,6 +110,8 @@ class FakeBus:
         return round(c.range_min + (units + 100.0) / 200.0 * span)
 
     def sync_read(self, reg, motors):
+        if reg == "Present_Load":
+            return dict.fromkeys(motors, 100.0)
         assert reg == "Present_Position"
         return {m: self._units(m, self.present(m)) for m in motors}
 
@@ -271,3 +273,17 @@ def test_a_probes_torque_limit_goes_in_and_back_and_a_failed_write_ends_it():
     bridge._apply_bus_writes([("Torque_Limit", "arm_elbow_flex", 300)])
     st = bridge.auto.status({})["command"]
     assert st["state"] == "aborted" and "Torque_Limit" in st["reason"]
+
+
+def test_a_camera_stall_does_not_freeze_the_joint_readings():
+    robot = _new_arm()
+    bridge = RobotBridge(robot, allow_uncalibrated=True)
+    bridge.start()
+    try:
+        robot.get_observation = lambda: (_ for _ in ()).throw(TimeoutError("latest frame is too old"))
+        robot.bus.actual["arm_elbow_flex"] += 100  # the arm moves while the camera is stalled
+        time.sleep(0.2)
+        want = robot.bus.sync_read("Present_Position", ["arm_elbow_flex"])["arm_elbow_flex"]
+        assert bridge.get_joint_state()["arm_elbow_flex"]["pos"] == pytest.approx(want)
+    finally:
+        bridge.stop()
