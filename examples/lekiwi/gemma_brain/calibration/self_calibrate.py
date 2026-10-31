@@ -108,8 +108,10 @@ REST = {**NAMED_POSES["rest"], "arm_elbow_flex": 94.4, GRIPPER: 0.0}  # the grip
 
 RELAX_S = 1.5  # convention: the arm settles onto the base well within this
 REST_TOLERANCE_DEG = 5.0  # the owner's: the rest pose is placed by eye to within this
-PAST_URDF_DEG = 15.0  # how far past the URDF's limit a sweep is checked clear: the ends found
-#                       on this arm lay up to 11 deg past it (Oct 29), plus REST_TOLERANCE_DEG
+PAST_URDF_DEG = 20.0  # how far past the URDF's limit a sweep is checked clear: the ends found
+#                       on this arm lie up to 11 deg past it (Oct 29-30), plus REST_TOLERANCE_DEG,
+#                       plus room for the probe to stop short of its held target (15 left the
+#                       wrist flex's end within 3 deg of it: "no end", Oct 30)
 SHORT_DEG = 2 * REST_TOLERANCE_DEG  # an end further inside the URDF's limit than this is suspect
 SWEEP_CLEARANCE_M = 0.05  # convention: floor clearance of a probe's sweep, for a joint sagging
 #                           at a low torque limit and the rest placement's error
