@@ -78,12 +78,13 @@ MAX_JOINT_SPEED = 60.0  # deg/s, on any joint in any segment (was 60 units/s: 53
 DEFAULT_JOINT_SPEED = 35.0  # deg/s
 MAX_WAYPOINTS = 600
 CLEARANCE_SAMPLE_DEG = 5.0
-# The jaw tips extend this far past the TCP along its approach axis: the floor probes' TCP at
-# contact (-0.0973 m at x 0.24, Oct 29) less the floor the cameras measured (the floor board's top,
-# -0.1058, less its 1.25 mm ruler-measured thickness), Oct 30. The taught grasp agrees: the held
-# brick's top face (11.4 mm) level with the TCP, the tips 1.5 mm up. It was 0.015, estimated from a
-# probe against an older floor. The planner (gemma_brain/common/arm.py) imports it from here.
-JAW_TIP_OFFSET_M = 0.0097
+# The jaw tips extend this far past the TCP along its approach axis: the SO-101 URDF's own geometry
+# (so101_new_calib.urdf's jaw meshes placed as the model places them: the fixed jaw's tip 6.3 mm
+# past gripper_frame_link, on its axis; the closed moving jaw's 4.5 mm), the owner's stock parts.
+# Was 0.0097 (Oct 30): fitted so the floor touches and the cameras agreed under the hand
+# calibration, absorbing its 3-4 deg zero errors; the self-calibrated zeros left that fit 5 mm off.
+# Before that 0.015, an estimate. The planner (gemma_brain/common/arm.py) imports it from here.
+JAW_TIP_OFFSET_M = 0.0063
 # Floor guard for the jaw tips' z in the arm base frame when a command doesn't send its own
 # z_min (the brain always sends one): the measured floor at the jaw tips (-0.112 m since the
 # Oct 29 arm recalibration; -0.126 with the old joint zeros) plus 2 cm.

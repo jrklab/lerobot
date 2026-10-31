@@ -92,12 +92,11 @@ PLAN_JOINT_SPEED = 0.9 * MAX_JOINT_SPEED
 AT_POSE_DEG = 3.0
 # Height the TCP is lifted to before reset() swings the arm home.
 RESET_SAFE_Z_M = 0.10
-# Floor height (jaw tips at contact) in the arm base frame: the floor probes' TCP at contact
-# (-0.0968 m, Oct 29, after the arm recalibration moved the shoulder-lift zero 5.2 deg and the
-# elbow's 3.8 deg) minus JAW_TIP_OFFSET_M (9.7 mm since Oct 30; it was -0.112 with 15 mm, -0.126
-# with the old zeros, TCP -0.1112). The brain takes the floor from data/ (brain/geometry.py); this
-# is only the Arm's default.
-DEFAULT_FLOOR_Z_M = -0.1065
+# Floor height (jaw tips at contact) in the arm base frame: the floor touches' TCP at contact
+# (-0.1046 m, Oct 30, calibrate_all.py under the self-calibrated zeros) minus JAW_TIP_OFFSET_M
+# (6.3 mm, the URDF's jaws). It was -0.1065 (TCP -0.0968 under the hand calibration, 9.7 mm). The
+# brain takes the floor from data/ (brain/geometry.py); this is only the Arm's default.
+DEFAULT_FLOOR_Z_M = -0.1109
 # Every point of the arm (joint frames, TCP, jaw tips) stays this far above the floor on a
 # free move; only grasp descents (which pass their own z_min) go closer.
 FLOOR_CLEARANCE_M = 0.02
