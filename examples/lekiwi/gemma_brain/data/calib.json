@@ -8,21 +8,29 @@
     "previous": "-0.100: owner's tape measure, base top 100 mm above the floor (Oct 23), in the old model"
   },
   "floor_tcp_z_m": {
-    "value": -0.102,
+    "value": -0.1046,
     "unit": "m",
     "frame": "arm base (so101_kinematics), TCP pointing straight down, gripper closed",
-    "method": "calibrate_floor.py: touch the floor in 4 mm steps; contact = measured-vs-commanded gap growth",
+    "method": "calibrate_all.py: touches on the floor (and on the floor board less its 1.25 mm)",
     "date": "2026-10-30",
     "probes": [
       {
-        "x": 0.22,
-        "floor_tcp_z": -0.1022,
-        "free_air_sag_mm": 2.1
+        "x": 0.233,
+        "floor_tcp_z": -0.1028,
+        "free_air_sag_mm": 2.9,
+        "on": "board"
       },
       {
-        "x": 0.28,
-        "floor_tcp_z": -0.1018,
-        "free_air_sag_mm": 5.1
+        "x": 0.24,
+        "floor_tcp_z": -0.1032,
+        "free_air_sag_mm": 3.4,
+        "on": "board"
+      },
+      {
+        "x": 0.3,
+        "floor_tcp_z": -0.1038,
+        "free_air_sag_mm": 6.8,
+        "on": "board"
       }
     ]
   },
@@ -243,14 +251,14 @@
       "wrist": {
         "K": [
           [
-            545.2996282724134,
+            545.9711702273004,
             0.0,
-            303.412326451259
+            305.0233743190021
           ],
           [
             0.0,
-            546.3584390234631,
-            273.2675146694066
+            546.7260816742938,
+            275.96504599414544
           ],
           [
             0.0,
@@ -259,30 +267,30 @@
           ]
         ],
         "dist": [
-          -0.4208287483685732,
-          0.16794877858542678,
+          -0.4198504964060616,
+          0.1669285962495763,
           0.0,
           0.0,
           0.0
         ],
         "T_tcp_cam": [
           [
-            0.9869175312723646,
-            0.152384518939854,
-            0.05265685952210378,
-            -0.018437274460751243
+            0.9882202680488826,
+            0.14256781371359728,
+            0.0556338054632206,
+            -0.018995639767448908
           ],
           [
-            -0.16077880425692664,
-            0.9059040889685269,
-            0.3917753918915994,
-            -0.056772342457326486
+            -0.15289601741169234,
+            0.9040849815916246,
+            0.39906535043788915,
+            -0.057918299635445675
           ],
           [
-            0.011998440272559006,
-            -0.39511610948880926,
-            0.9185528277967758,
-            -0.09169230574596762
+            0.006596186552692555,
+            -0.40287065486753537,
+            0.9152331537753455,
+            -0.09045320845051576
           ],
           [
             0.0,
@@ -295,14 +303,14 @@
       "front": {
         "K": [
           [
-            550.5668698577133,
+            550.3496208121669,
             0.0,
-            323.99675791733114
+            330.74141552431905
           ],
           [
             0.0,
-            548.6456532856353,
-            242.31193004177172
+            548.7836093359463,
+            238.92135310140742
           ],
           [
             0.0,
@@ -311,30 +319,30 @@
           ]
         ],
         "dist": [
-          -0.44997654892419103,
-          0.20914515096010708,
+          -0.43315704700247326,
+          0.17523841086932562,
           0.0,
           0.0,
           0.0
         ],
         "T_base_cam": [
           [
-            0.03934918101623297,
-            -0.1515000254834369,
-            0.9876737235706287,
-            0.08581779486661753
+            0.06132473146103377,
+            -0.15289567698396755,
+            0.9863377663208704,
+            0.08498179227819469
           ],
           [
-            -0.9992253813112594,
-            -0.005443241148085685,
-            0.03897445919024764,
-            0.01046524183081994
+            -0.9981033667660807,
+            -0.004067102889849926,
+            0.06142579201196969,
+            0.008197630034379602
           ],
           [
-            -0.0005284853075030371,
-            -0.9884422660956591,
-            -0.1515968578136037,
-            -0.04729813507189974
+            -0.005380200874174707,
+            -0.9882339655333129,
+            -0.15285510395422158,
+            -0.04819017903973233
           ],
           [
             0.0,
@@ -346,22 +354,23 @@
       },
       "joint_offsets_deg": {},
       "base_turn_centre": [
-        -0.03507135181050119,
-        0.005371900032897134
+        -0.03014518113312754,
+        -0.001337505855523496
       ],
-      "floor_z": -0.10561858888675545,
+      "floor_z": -0.10958408666382899,
       "floor_board_thickness_m": 0.00125
     },
     "meaning": "camera intrinsics (K, dist: OpenCV), the wrist camera's pose in the TCP frame and the front camera's pose in the arm base frame (metres); base_turn_centre: (x, y) the base turns about (m); floor_z: the floor under the floor board the cameras were placed against (its top less floor_board_thickness_m, a ruler's) (m); joint_offsets_deg: the zero offsets the solve assumed (deg, added to the measured angle; empty = none, the arm's own zeros)",
     "method": "solve_cameras.py on capture_cameras.py scenes: calibrateCamera, radial k1 k2 only (the front lens with the base sweep and the side board close-up); Park-Martin hand-eye refined with every corner's reprojection over all scenes, each with its own board poses; the front camera through each scene's wrist board, averaged",
     "date": "2026-10-30",
     "log": [
-      "runs/20261030T191141-scene"
+      "runs/20261030T230328-scene",
+      "runs/20261030T230443-scene"
     ],
     "rms_px": {
-      "wrist_lens": 0.42522317521382175,
-      "front_lens": 0.4287798624245867,
-      "wrist_scene": 3.4864077660042363
+      "wrist_lens": 0.34843458832799,
+      "front_lens": 0.6643160063979808,
+      "wrist_scene": 3.4315944158977993
     },
     "offset_spread_deg": null,
     "offsets_to_apply_deg": {}
