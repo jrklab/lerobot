@@ -483,7 +483,9 @@ def restore(robot: Robot) -> None:
 
 
 def main() -> None:
+    global STATE
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--state", type=Path, default=STATE, help="the probe and backup record (calibrate_all.py: its run's)")
     sub = ap.add_subparsers(dest="step", required=True)
     b = sub.add_parser("bootstrap")
     b.add_argument("joints", nargs="*", help="only these, e.g. elbow_flex (default: all)")
@@ -496,6 +498,7 @@ def main() -> None:
     sub.add_parser("restore")
     args = ap.parse_args()
     logging.basicConfig(level=logging.WARNING)
+    STATE = args.state
 
     robot = Robot(base_enabled=False)
     with robot:

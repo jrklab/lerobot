@@ -470,6 +470,36 @@ def return_to_start(robot, measure) -> tuple[float, float, float]:
     raise RuntimeError(f"not back at the start after {RETURN_TRIES} moves")
 
 
+def run_scene(robot, poses: list[dict], moves: list[dict], closeup: bool = True) -> Path:
+    """The scene capture on an enabled robot (base enabled when there are moves): the arm poses,
+    the base sweep, back to the start, the side board close-up. Returns its folder."""
+    out = capture_scene(robot, poses)
+    if moves:
+        scene = json.loads((out / "scene.json").read_text())
+        try:
+            scene["sweep"] = capture_sweep(robot, out, moves)
+        finally:
+            (out / "scene.json").write_text(json.dumps(scene, indent=1) + "\n")
+        print(f"{len(scene['sweep'])} sweep frames with a board")
+        cams = _cameras()
+        if cams and scene["front"] and scene["front"][0]["boards"]:
+            measure = front_measure(robot, scene["front"][0]["boards"], cams)
+            print("back to the start:")
+            scene["returned"] = return_to_start(robot, measure)
+            if closeup:
+                print(f"the {CLOSEUP_BOARD} board close-up:")
+                try:
+                    scene["closeup"], scene["closeup_turn_deg"] = capture_closeup(robot, out, cams)
+                finally:
+                    (out / "scene.json").write_text(json.dumps(scene, indent=1) + "\n")
+                print("back to the start:")
+                scene["returned"] = return_to_start(robot, measure)
+            (out / "scene.json").write_text(json.dumps(scene, indent=1) + "\n")
+        else:
+            print("no measured front camera in calib.json yet: the robot stays 20 cm back, no close-up")
+    return out
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="what", required=True)
@@ -540,30 +570,7 @@ def main() -> None:
     if args.plan_only:
         return
     with Robot(base_enabled=bool(moves)) as robot:
-        out = capture_scene(robot, poses)
-        if moves:
-            scene = json.loads((out / "scene.json").read_text())
-            try:
-                scene["sweep"] = capture_sweep(robot, out, moves)
-            finally:
-                (out / "scene.json").write_text(json.dumps(scene, indent=1) + "\n")
-            print(f"{len(scene['sweep'])} sweep frames with a board")
-            cams = _cameras()
-            if cams and scene["front"] and scene["front"][0]["boards"]:
-                measure = front_measure(robot, scene["front"][0]["boards"], cams)
-                print("back to the start:")
-                scene["returned"] = return_to_start(robot, measure)
-                if not args.no_closeup:
-                    print(f"the {CLOSEUP_BOARD} board close-up:")
-                    try:
-                        scene["closeup"], scene["closeup_turn_deg"] = capture_closeup(robot, out, cams)
-                    finally:
-                        (out / "scene.json").write_text(json.dumps(scene, indent=1) + "\n")
-                    print("back to the start:")
-                    scene["returned"] = return_to_start(robot, measure)
-                (out / "scene.json").write_text(json.dumps(scene, indent=1) + "\n")
-            else:
-                print("no measured front camera in calib.json yet: the robot stays 20 cm back, no close-up")
+        run_scene(robot, poses, moves, closeup=not args.no_closeup)
 
 
 if __name__ == "__main__":

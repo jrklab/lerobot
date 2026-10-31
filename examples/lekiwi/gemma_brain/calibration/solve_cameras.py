@@ -358,25 +358,22 @@ def _load(folder: Path, key: str) -> dict:
     return json.loads((folder / f"{key}.json").read_text())
 
 
-def main() -> None:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--lens-wrist", type=Path, help="a hand-held lens capture (optional)")
-    ap.add_argument("--lens-front", type=Path, help="a hand-held lens capture (optional)")
-    ap.add_argument("--scene", type=Path, nargs="+", required=True, help="one or more scene captures")
-    ap.add_argument("--closeup", type=Path, nargs="*", default=[], help="closeup captures (front lens views)")
-    ap.add_argument(
-        "--fit-offsets", action="store_true", help="fit the joint zero offsets too (reported, not trusted)"
-    )
-    ap.add_argument(
-        "--floor-board-thickness", type=float, default=0.0, help="the floor board's thickness (m, a ruler's)"
-    )
-    ap.add_argument("--write", action="store_true")
-    args = ap.parse_args()
+def solve(
+    scene_dirs: list[Path],
+    closeup_dirs: list[Path] = (),
+    lens_wrist: Path | None = None,
+    lens_front: Path | None = None,
+    fit_offsets: bool = False,
+    floor_board_thickness: float = 0.0,
+    write: bool = False,
+) -> dict:
+    """The solve, printed as it goes; returns the zero offsets (and which to apply), the floor
+    board's top and pose in the arm's frame, and the fit errors (calibration/calibrate_all.py)."""
 
-    scenes = [_load(d, "scene") for d in args.scene]
+    scenes = [_load(d, "scene") for d in scene_dirs]
     held = {
         cam: _load(d, "views")["views"] if d else []
-        for cam, d in (("wrist", args.lens_wrist), ("front", args.lens_front))
+        for cam, d in (("wrist", lens_wrist), ("front", lens_front))
     }
     # Each scene's boards are its own (placed, or the robot returned, a little differently):
     # their names carry the scene's index, "2/wrist".
@@ -385,7 +382,7 @@ def main() -> None:
         for i, sc in enumerate(scenes)
         for r in sc["wrist"]
     ]
-    closeups = [f["boards"] for d in args.closeup for f in _load(d, "closeup")["closeup"]]
+    closeups = [f["boards"] for d in closeup_dirs for f in _load(d, "closeup")["closeup"]]
     wrist_views = [v["boards"] for v in held["wrist"]] + [r["boards"] for r in records]
     front_views = (
         [v["boards"] for v in held["front"]]
@@ -397,14 +394,14 @@ def main() -> None:
     print(
         f"wrist lens: rms {wl['rms_px']:.2f} px over {wl['views']} views; front lens: rms {fl['rms_px']:.2f} px over {fl['views']}"
     )
-    offset_joints = OFFSET_JOINTS if args.fit_offsets else []
+    offset_joints = OFFSET_JOINTS if fit_offsets else []
     w = solve_wrist(records, wl["K"], wl["dist"], offset_joints=offset_joints)
     print(
         f"wrist camera on the gripper: {np.round(w['T_tcp_cam'][:3, 3] * 1000, 1).tolist()} mm; "
         f"reprojection rms {w['rms_px']:.2f} px over {w['poses']} poses in {len(scenes)} scenes, {w['corners']} corners"
     )
     spread = None
-    if args.fit_offsets:
+    if fit_offsets:
         print("joint zero offsets (deg):", {j: round(v, 2) for j, v in w["joint_offsets_deg"].items()})
         spread = offset_spread(records, wl["K"], wl["dist"])
         if spread:
@@ -439,10 +436,10 @@ def main() -> None:
     )
     centre, centre_rms = turn_centre(scenes, fl["K"], fl["dist"], f["T_base_cam"])
     board_top = float(np.mean([w["boards"][f"{i}/{FRONT_VIA}"][2, 3] for i in range(len(scenes))]))
-    floor_seen = board_top - args.floor_board_thickness
+    floor_seen = board_top - floor_board_thickness
     print(
         f"the floor board's top lies at z {1000 * board_top:.1f} mm in the arm's frame; the floor under it "
-        f"{1000 * floor_seen:.1f} mm (the board {1000 * args.floor_board_thickness:.2f} mm thick)"
+        f"{1000 * floor_seen:.1f} mm (the board {1000 * floor_board_thickness:.2f} mm thick)"
     )
     print(
         f"the base turns about ({100 * centre[0]:.1f}, {100 * centre[1]:.1f}) cm in the arm's frame (residual {100 * centre_rms:.2f} cm)"
@@ -452,7 +449,7 @@ def main() -> None:
         f"  i.e. {100 * ahead:.1f} cm ahead of the arm's pan axis, {100 * left:.1f} cm to its left, "
         f"{-100 * f['T_base_cam'][2, 3]:.1f} cm below the arm's mounting surface"
     )
-    if args.write:
+    if write:
         calib = json.loads(CALIB.read_text())
         calib["cameras"] = {
             "value": {
@@ -469,7 +466,7 @@ def main() -> None:
                 "joint_offsets_deg": w["joint_offsets_deg"],
                 "base_turn_centre": centre.tolist(),
                 "floor_z": floor_seen,
-                "floor_board_thickness_m": args.floor_board_thickness,
+                "floor_board_thickness_m": floor_board_thickness,
             },
             "meaning": "camera intrinsics (K, dist: OpenCV), the wrist camera's pose in the TCP frame and the front "
             "camera's pose in the arm base frame (metres); base_turn_centre: (x, y) the base turns about (m); "
@@ -484,7 +481,7 @@ def main() -> None:
             "date": datetime.date.today().isoformat(),
             "log": [
                 str(p.resolve().relative_to(ROOT))
-                for p in (args.lens_wrist, args.lens_front, *args.scene, *args.closeup)
+                for p in (lens_wrist, lens_front, *scene_dirs, *closeup_dirs)
                 if p
             ],
             "rms_px": {"wrist_lens": wl["rms_px"], "front_lens": fl["rms_px"], "wrist_scene": w["rms_px"]},
@@ -495,6 +492,40 @@ def main() -> None:
         }
         CALIB.write_text(json.dumps(calib, indent=2) + "\n")
         print(f"wrote {CALIB}")
+    return {
+        "joint_offsets_deg": w["joint_offsets_deg"],
+        "spread_deg": spread["spread_deg"] if spread else None,
+        "to_apply_deg": offsets_to_apply(w["joint_offsets_deg"], spread["spread_deg"]) if spread else {},
+        "board_top_z": board_top,
+        "floor_z": floor_seen,
+        "floor_board_pose": [w["boards"][f"{i}/{FRONT_VIA}"].tolist() for i in range(len(scenes))],
+        "rms_px": {"wrist_lens": wl["rms_px"], "front_lens": fl["rms_px"], "wrist_scene": w["rms_px"]},
+    }
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--lens-wrist", type=Path, help="a hand-held lens capture (optional)")
+    ap.add_argument("--lens-front", type=Path, help="a hand-held lens capture (optional)")
+    ap.add_argument("--scene", type=Path, nargs="+", required=True, help="one or more scene captures")
+    ap.add_argument("--closeup", type=Path, nargs="*", default=[], help="closeup captures (front lens views)")
+    ap.add_argument(
+        "--fit-offsets", action="store_true", help="fit the joint zero offsets too (reported, not trusted)"
+    )
+    ap.add_argument(
+        "--floor-board-thickness", type=float, default=0.0, help="the floor board's thickness (m, a ruler's)"
+    )
+    ap.add_argument("--write", action="store_true")
+    args = ap.parse_args()
+    solve(
+        args.scene,
+        closeup_dirs=args.closeup,
+        lens_wrist=args.lens_wrist,
+        lens_front=args.lens_front,
+        fit_offsets=args.fit_offsets,
+        floor_board_thickness=args.floor_board_thickness,
+        write=args.write,
+    )
 
 
 if __name__ == "__main__":
