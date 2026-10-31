@@ -66,6 +66,7 @@ from auto_control import JAW_TIP_OFFSET_M
 from brain import params as prm
 from common.arm import Arm, Calibration
 from common.robot import Robot
+from robot_bridge import STALL_LOAD_THRESHOLDS, STALL_SPEED_THRESHOLD
 
 from calibration import boards, calibrate_floor, capture_cameras, self_calibrate as sc, solve_cameras
 
@@ -78,6 +79,12 @@ TOUCH_COUNT = 3  # convention: a plane needs 3
 TOUCH_CLEAR_M = 0.03  # convention: off the board's edge and its backing, for the jaws
 FLOOR_BOARD = "wrist"
 CHECK_FRAMES = 5  # convention
+# Joint stall thresholds proposed from the run's loads (LoadLog): the highest load a joint showed
+# while (nearly) still, as the stall rule sees it, this percentile to drop single spikes...
+LOAD_PERCENTILE = 99.5
+# ...times this margin: a blocked joint pushes on towards its torque limit, a holding one stays put.
+STALL_MARGIN = 1.5
+MIN_LOAD_SAMPLES = 50  # convention: fewer and a joint gets no proposal
 FIRST_SCENE_POSE_STEP = 2  # the first scene's poses: every other one
 CHECK_BAND_MM = 3.0  # convention: the touch's own scatter (1.5 mm) and step bracket, with room
 TOUCH_START_Z_M = -0.05  # the TCP height the touches descend from (calibrate_floor.py --start-z)
@@ -95,6 +102,45 @@ def _run_dir() -> Path:
     out = ROOT / "runs" / f"{datetime.datetime.now():%Y%m%dT%H%M%S}-calibrate_all"
     out.mkdir(parents=True)
     return out
+
+
+class LoadLog:
+    """Each arm joint's load while it's (nearly) still, from every status the run reads
+    (Robot.listeners): the loads robot_bridge's stall rule judges (speed at most
+    STALL_SPEED_THRESHOLD). Not while a probe runs or during the floor touches (paused): those
+    press on purpose. Over the run's ~150 moves and holds it sees each joint under gravity
+    across the arm's poses."""
+
+    def __init__(self):
+        self.samples: dict[str, list[float]] = {j: [] for j in sc.IK_ARM_JOINTS}
+        self.paused = False
+
+    def __call__(self, st: dict) -> None:
+        if self.paused or "loads" not in st or "speeds" not in st:
+            return
+        cmd = st.get("command") or {}
+        if cmd.get("kind") == "probe" and cmd.get("state") == "running":
+            return
+        for j in self.samples:
+            if j in st["loads"] and abs(st["speeds"].get(j, 0.0)) <= STALL_SPEED_THRESHOLD:
+                self.samples[j].append(float(st["loads"][j]))
+
+    def propose(self) -> dict:
+        """Per joint: samples, the percentile and highest load (0.1 % of full scale), the proposed
+        threshold (fraction of full scale, as STALL_LOAD_THRESHOLDS) and today's."""
+        out = {}
+        for j, v in self.samples.items():
+            if len(v) < MIN_LOAD_SAMPLES:
+                continue
+            p = float(np.percentile(v, LOAD_PERCENTILE))
+            out[j] = {
+                "n": len(v),
+                "load_p": round(p),
+                "load_max": round(max(v)),
+                "proposed": round(min(STALL_MARGIN * p / 1000.0, 0.95), 3),
+                "current": STALL_LOAD_THRESHOLDS[j],
+            }
+        return out
 
 
 def check(robot: Robot) -> dict:
@@ -285,6 +331,23 @@ def board_check(probes: list[dict], board_poses: list) -> dict:
     }
 
 
+def save_load_proposal(proposal: dict) -> None:
+    """Into calib.json, for review: the Pi's STALL_LOAD_THRESHOLDS stay as they are until the
+    owner has compared these with them (Oct 31)."""
+    calib = json.loads(CALIB.read_text())
+    calib["joint_stall_thresholds"] = {
+        "value": {j: p["proposed"] for j, p in proposal.items()},
+        "enabled": False,
+        "meaning": "per arm joint, the load (fraction of the motor's full scale) above which a (nearly) still "
+        "joint counts as stalled, proposed for robot_bridge.STALL_LOAD_THRESHOLDS; not applied",
+        "method": f"calibrate_all.py: the {LOAD_PERCENTILE} percentile of each joint's load while still over the run "
+        f"(probes and floor touches left out), times {STALL_MARGIN}",
+        "date": datetime.date.today().isoformat(),
+        "loads": proposal,
+    }
+    CALIB.write_text(json.dumps(calib, indent=2) + "\n")
+
+
 def floor(robot: Robot, cams: dict, thickness: float, log: dict) -> dict:
     """The floor plane from touches on the bare floor and on the board (less its thickness); the
     board's top as touched against as seen by the cameras is the run's check."""
@@ -344,6 +407,8 @@ def main() -> None:
 
     keep_awake()
     robot = Robot(require_calibrated=False)  # it makes the calibration
+    loads = LoadLog()
+    robot.listeners.append(loads)
     with robot:
         checked = check(robot)
         print("checks:", checked)
@@ -371,7 +436,10 @@ def main() -> None:
             cams = fine(robot, args.board_thickness, log)
             log["cameras"] = {k: cams[k] for k in ("joint_offsets_deg", "board_top_z", "floor_z", "rms_px")}
             log["cameras"]["scenes"] = [s.name for s in cams["scenes"]]
+            log["joint_loads"] = loads.propose()
+            save_load_proposal(log["joint_loads"])
             print("\n=== 4. the floor ===")
+            loads.paused = True  # the touches press on the floor
             fl = floor(robot, cams, args.board_thickness, log)
             log["state"] = "done"
         except Exception as e:  # noqa: BLE001 -- whatever stops it, the run ends with its summary and the arm down
@@ -397,6 +465,14 @@ def main() -> None:
             )
         else:
             print(f"  check not made: {ck['why']}")
+        print(
+            "  joint stall thresholds (fraction of full scale; proposed from this run's loads, NOT applied):"
+        )
+        for j, p in log["joint_loads"].items():
+            print(
+                f"    {j[4:]:15s} still-load {p['load_p'] / 10:5.1f}% (max {p['load_max'] / 10:.1f}%, {p['n']} samples)"
+                f" -> proposed {p['proposed']:.2f}, current {p['current']:.2f}"
+            )
     print(f"  to put back the calibration from before: self_calibrate.py --state {sc.STATE} restore")
 
 

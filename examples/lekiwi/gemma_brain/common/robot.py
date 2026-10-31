@@ -91,6 +91,8 @@ class Robot:
         # its wall clock can be hours off; every Pi timestamp (frame capture, command finish)
         # is converted through this, refreshed on each status() call.
         self._clock_offset: float | None = None
+        # Called with every status read (e.g. calibrate_all.py's load log).
+        self.listeners: list = []
 
     # --- transport ---
 
@@ -184,6 +186,8 @@ class Robot:
         st = self._json("GET", "/auto/status")
         t1 = time.time()
         self._clock_offset = st["time"] - (t0 + t1) / 2
+        for listener in self.listeners:
+            listener(st)
         return st
 
     def frame(self, cam: str, after: float = 0.0) -> tuple[bytes, float]:

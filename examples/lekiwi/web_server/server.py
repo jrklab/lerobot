@@ -205,6 +205,10 @@ def auto_status():
         "gripper_sensors": {"temp": grip.get("temp")},
         # "calibrated", "provisional" (the arm calibrating itself) or None (mock).
         "arm_calibration": bridge.arm_calibration_state(),
+        # Each joint's load (0.1 % of the motor's full scale) and raw speed, as the stall rule sees
+        # them (robot_bridge._stall_severity): calibrate_all.py logs them to propose its thresholds.
+        "loads": {j: st.get("load", 0.0) for j, st in joint_state.items()},
+        "speeds": {j: st.get("speed", 0.0) for j, st in joint_state.items()},
     }
 
 

@@ -227,3 +227,40 @@ def test_a_board_off_to_one_side_is_centred():
     out = capture_cameras.position_for_floor_board(b, look=b.look)
     assert out["left_m"] < 0  # moved right
     assert abs(0.75 + 2.5 * out["left_m"] - 0.5) <= capture_cameras.CENTRED_U
+
+
+def _status(loads, speeds=None, kind=None, state="done"):
+    j = list(ca.sc.IK_ARM_JOINTS)
+    return {"loads": dict(zip(j, loads, strict=True)), "speeds": dict(zip(j, speeds or [0] * 5, strict=True)),
+            "command": {"kind": kind, "state": state} if kind else None}
+
+
+def test_the_load_log_keeps_still_joints_outside_probes_and_touches():
+    log = ca.LoadLog()
+    log(_status([100, 200, 150, 80, 50]))  # holding: kept
+    log(_status([900] * 5, kind="probe", state="running"))  # a probe presses on purpose
+    log(_status([700] * 5, speeds=[500] * 5))  # moving fast: the stall rule wouldn't judge it
+    log.paused = True
+    log(_status([800] * 5))  # the floor touches
+    assert [log.samples[j] for j in ca.sc.IK_ARM_JOINTS] == [[100.0], [200.0], [150.0], [80.0], [50.0]]
+
+
+def test_the_proposal_is_the_still_loads_percentile_with_the_margin(tmp_path, monkeypatch):
+    log = ca.LoadLog()
+    for k in range(ca.MIN_LOAD_SAMPLES):
+        log(_status([100 + k % 5, 300, 200, 120, 60]))
+    p = log.propose()
+    assert p["arm_shoulder_lift"]["proposed"] == pytest.approx(ca.STALL_MARGIN * 0.3)
+    assert p["arm_shoulder_pan"]["load_max"] == 104
+    assert set(p) == set(ca.sc.IK_ARM_JOINTS)  # not the gripper
+    (tmp_path / "calib.json").write_text("{}")
+    monkeypatch.setattr(ca, "CALIB", tmp_path / "calib.json")
+    ca.save_load_proposal(p)
+    saved = json.loads((tmp_path / "calib.json").read_text())["joint_stall_thresholds"]
+    assert saved["enabled"] is False and saved["value"]["arm_shoulder_lift"] == pytest.approx(0.45)
+
+
+def test_too_few_samples_propose_nothing():
+    log = ca.LoadLog()
+    log(_status([100] * 5))
+    assert log.propose() == {}
