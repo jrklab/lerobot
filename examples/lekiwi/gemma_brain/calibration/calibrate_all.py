@@ -74,6 +74,7 @@ TOUCH_REACH_M = (0.18, 0.30)  # where the floor touches have run, gripper vertic
 TOUCHES = 3  # convention: a plane needs 3
 TOUCH_CLEAR_M = 0.03  # convention: off the board's edge and its backing, for the jaws
 FLOOR_BOARD = "wrist"
+CHECK_FRAMES = 5  # convention
 
 
 def _run_dir() -> Path:
@@ -85,10 +86,20 @@ def _run_dir() -> Path:
 def check(robot: Robot) -> dict:
     """No motion: what the procedure needs to see before it moves anything."""
     st = robot.status()
-    seen = {
-        cam: boards.detect(boards.decode(robot.frame(cam, after=time.time())[0]))
-        for cam in ("front", "wrist")
-    }
+    # The best of CHECK_FRAMES frames per camera: the floor board seen edge-on by the front camera
+    # comes and goes between frames (Oct 30: 10 corners, then none a minute later).
+    seen = {}
+    for cam in ("front", "wrist"):
+        for _ in range(CHECK_FRAMES):
+            got = boards.detect(boards.decode(robot.frame(cam, after=time.time())[0]))
+            seen[cam] = {
+                b: max(
+                    got.get(b, {"ids": []}),
+                    seen.get(cam, {}).get(b, {"ids": []}),
+                    key=lambda d: len(d["ids"]),
+                )
+                for b in set(got) | set(seen.get(cam, {}))
+            }
     found = {cam: {b: len(d["ids"]) for b, d in v.items()} for cam, v in seen.items()}
     problems = []
     for board in ("front", FLOOR_BOARD):  # the front camera is placed through the floor board
