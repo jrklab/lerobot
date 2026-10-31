@@ -457,7 +457,7 @@ class Skills:
             return Result(True, data={**res, "mm": round(mm, 1)})
         if how != "close":
             return Result(False, f"grip: 'open' or 'close', not {how!r}")
-        res = self.robot.gripper(0, speed=prm.CLOSE_SPEED.value).get("result", {})
+        res = self.robot.gripper(0, speed=prm.CLOSE_SPEED.value, squeeze=prm.GRIP_SQUEEZE_DEG.value).get("result", {})
         mm = None if res.get("pos") is None else round(self.geom.gripper_mm(res["pos"]), 1)
         held = self.held()
         self.ev("grip", how="close", held=held, mm=mm, **res)

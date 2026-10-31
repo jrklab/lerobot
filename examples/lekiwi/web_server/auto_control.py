@@ -135,27 +135,34 @@ CONTACT_FOLLOW_FRACTION = 0.4
 CONTACT_FOLLOW_MIN_M = 0.002
 
 # Gripper: closed is 0. When it stalls on an object, hold this far past the measured
-# position, so it keeps a firm grip without driving the servo at full torque.
+# position, so it keeps a firm grip without driving the servo at full torque. The close command
+# may give its own ("squeeze": the brain's from the owner's demo, the leader commanding past
+# where the jaws stopped on the object: 5.1 deg on the brick, Oct 27); this is the default, and
+# MAX_GRIPPER_SQUEEZE caps any.
 GRIPPER_SQUEEZE = 5.0  # deg (4 units)
+MAX_GRIPPER_SQUEEZE = 10.0  # deg: about twice the demonstrated squeeze
 GRIPPER_STALL_TICKS = 4
 GRIPPER_STALL_LAG_DEG = 4.0  # closing, the target ran this far ahead of the jaws (3 units)
 GRIPPER_SETTLED_DEG = 2.5  # an open or close within this of its goal is done (2 units)
 
 # Hold: after a close stalls on an object, the hold is watched every tick until the next
 # gripper command (status()["gripper_hold"]).
-# Dropped: the jaws closed this far past where they stalled, for HOLD_DROP_TICKS ticks. With
-# the object gone they travel most of the way to the squeeze target (GRIPPER_SQUEEZE). Load
+# Dropped: the jaws closed past where they stalled by HOLD_DROP_FRACTION of the hold's current
+# squeeze, for HOLD_DROP_TICKS ticks. With the object gone they travel most of the way to the
+# squeeze target; held, they don't move at all (the demo's 473 held frames: 0.00 deg). Half way
+# between, so it follows an eased squeeze too: a fixed 3.3 deg (until Oct 31) couldn't be reached
+# once the squeeze eased to 2.6, and a drop then went unseen. Load
 # can't tell: the firmware itself cuts the gripper to Protective_Torque (20%) after ~2 s over
 # Overload_Torque (25%), and today's holds load it ~41% (registers read Oct 26).
-HOLD_DROP_DEG = 3.3  # (2.5 units)
+HOLD_DROP_FRACTION = 0.5
 HOLD_DROP_TICKS = 3
 # Protection: over-current and overload are the gripper firmware's own (Protection_Current
 # 250 ~1.6 A, Overload_Torque 25% -> Protective_Torque 20%, each after ~2 s); a load rule here
 # would fire on every hold (~41%). Its only thermal response is cutting torque at
 # Max_Temperature_Limit 70 C, which drops the object, so temperature is watched here: at
-# GRIPPER_TEMP_WARN_C the squeeze eases to GRIPPER_SQUEEZE_EASED, at GRIPPER_TEMP_HARD_C it
+# GRIPPER_TEMP_WARN_C the squeeze eases to GRIPPER_EASE_FRACTION of the hold's, at GRIPPER_TEMP_HARD_C it
 # stops (holds the stalled position; never opens: the object would fall).
-GRIPPER_SQUEEZE_EASED = 2.6  # deg (2 units)
+GRIPPER_EASE_FRACTION = 0.5  # was a fixed 2.6 deg of the default 5
 GRIPPER_TEMP_WARN_C = 55.0
 GRIPPER_TEMP_HARD_C = 62.0
 HOLD_MAX_EVENTS = 5
@@ -456,7 +463,13 @@ class AutoController:
         except (KeyError, TypeError, ValueError):
             raise CommandRefused(f"gripper: 'pos' must be a number, degrees open, 0 (closed) .. {hi:.0f}") from None
         speed = _clamp(float(cmd.get("speed") or DEFAULT_GRIPPER_SPEED), MIN_GRIPPER_SPEED, MAX_GRIPPER_SPEED)
-        return {"gripper_start": start[GRIPPER], "gripper_goal": goal, "gripper_speed": speed, "stall_ticks": 0}
+        try:
+            squeeze = _clamp(float(cmd.get("squeeze") if cmd.get("squeeze") is not None else GRIPPER_SQUEEZE),
+                             0.0, MAX_GRIPPER_SQUEEZE)
+        except (TypeError, ValueError):
+            raise CommandRefused("gripper: 'squeeze' must be a number of degrees") from None
+        return {"gripper_start": start[GRIPPER], "gripper_goal": goal, "gripper_speed": speed, "stall_ticks": 0,
+                "gripper_squeeze": squeeze}
 
     def _plan_probe(self, start: dict[str, float], cmd: dict) -> dict:
         """One joint toward one end: {"joint", "direction": +1 or -1, "speed" (deg/s), "torque"
@@ -648,10 +661,11 @@ class AutoController:
         else:
             cmd["stall_ticks"] = 0
         if cmd["stall_ticks"] >= GRIPPER_STALL_TICKS:
-            targets[GRIPPER] = max(0.0, meas - GRIPPER_SQUEEZE)  # 0: closed
+            squeeze = cmd.get("gripper_squeeze", GRIPPER_SQUEEZE)
+            targets[GRIPPER] = max(0.0, meas - squeeze)  # 0: closed
             with self._lock:
                 cmd["result"] = {"pos": round(meas, 1), "load": load, "stalled": True, "temp": st.get("temp")}
-                self._hold = {"state": "holding", "pos": round(meas, 1), "squeeze": GRIPPER_SQUEEZE,
+                self._hold = {"state": "holding", "pos": round(meas, 1), "squeeze": squeeze, "full_squeeze": squeeze,
                               "temp": st.get("temp"), "events": [], "drop_ticks": 0}
                 self._finish_locked("done", "stalled on an object")
             return
@@ -791,7 +805,7 @@ class AutoController:
             h["temp"] = temp
             if h["state"] == "dropped":
                 return
-            if meas < h["pos"] - HOLD_DROP_DEG:
+            if h["squeeze"] > 0.0 and meas < h["pos"] - HOLD_DROP_FRACTION * h["squeeze"]:
                 h["drop_ticks"] += 1
                 if h["drop_ticks"] >= HOLD_DROP_TICKS:
                     h["state"] = "dropped"
@@ -803,7 +817,7 @@ class AutoController:
             if temp is not None and temp >= GRIPPER_TEMP_HARD_C:
                 squeeze, why = 0.0, f"temperature {temp:.0f} C"
             elif temp is not None and temp >= GRIPPER_TEMP_WARN_C:
-                squeeze, why = min(squeeze, GRIPPER_SQUEEZE_EASED), f"temperature {temp:.0f} C"
+                squeeze, why = min(squeeze, GRIPPER_EASE_FRACTION * h["full_squeeze"]), f"temperature {temp:.0f} C"
             if squeeze < h["squeeze"]:
                 h["squeeze"] = squeeze
                 targets[GRIPPER] = max(0.0, h["pos"] - squeeze)

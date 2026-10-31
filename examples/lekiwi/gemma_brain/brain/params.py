@@ -79,6 +79,7 @@ def demo_place_view() -> tuple[list[float], float] | None:
 
 # --- DEMO (the owner's Oct 27 pick_cup demo; re-extract after the joint-zero fix for heights) ---
 OPEN_WIDTH = Param(_demo("open_width_mm", 44.5), "DEMO", "jaw opening before a grasp, mm (demo: 44.5, opened to 32.1 deg / 24.6 normalized units; geometry.gripper_mm)")
+GRIP_SQUEEZE_DEG = Param(_demo("squeeze_deg", 5.0), "DEMO", "how far past where the jaws stop on the object the gripper is held (deg): the demo's leader commanded this past the follower's stall while holding (5.1 on the brick, 473 frames); the Pi's own default 5 without a demo")
 LIFT_M = Param(_demo("lift_m", 0.09), "DEMO", "lift after the grasp (demo: 9.5 cm)")
 RELEASE_ABOVE_FLOOR_M = Param(_demo("release_z_above_floor_m", 0.06), "DEMO",
                               "TCP height above the floor at release inside a cup (demo: 5.9 cm)")

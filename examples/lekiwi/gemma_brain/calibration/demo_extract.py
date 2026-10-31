@@ -58,6 +58,7 @@ KEY_PAUSE_FRAMES = 24
 CLOSE_DROP = 8.0  # the gripper falls at least this much in one close
 GRIPPER_EMPTY = 3.5  # v2 params.GRIPPER_EMPTY_MAX: closing below this held nothing
 OPEN_RISE = 3.0  # the gripper opening this far above its closed width is a release
+SQUEEZE_SETTLE_FRAMES = 10  # convention: the close's last motion, before the hold
 TARGET_HEIGHT_FRAMES = 12  # convention: front frames sampled along the drive to the place target
 BOTTOM_IN_FRAME = 0.98  # a box whose bottom edge reaches this (image fraction) may be cut off: no distance
 LIFT_MIN_M = 0.02  # the lift keyframe: the first pause at least this far above the close
@@ -201,6 +202,19 @@ def target_height(root: Path, df: pd.DataFrame, episode: int, kf: dict, target: 
     return {"value_m": float(np.median(heights)), "samples_m": heights}
 
 
+def grip_squeeze(df: pd.DataFrame, calib, kf: dict) -> float | None:
+    """How far past where the jaws stopped on the object the owner held the gripper: the leader's
+    gripper command less the follower's reading, over the hold (after the close settles, to the
+    release), the median, in degrees (the robot's gripper commands)."""
+    lo, hi = kf.get("close_end"), kf.get("pre_release")
+    if lo is None or hi is None or hi <= lo + SQUEEZE_SETTLE_FRAMES or "action" not in df:
+        return None
+    rows = range(lo + SQUEEZE_SETTLE_FRAMES, hi)
+    act = np.stack(df["action"].values)[:, JOINTS.index("arm_gripper")]
+    d = [calib.to_deg("arm_gripper", df["arm_gripper.pos"].values[r]) - calib.to_deg("arm_gripper", act[r]) for r in rows]
+    return round(float(np.median(d)), 2)
+
+
 def add_place_offsets(out: dict, th: dict | None) -> None:
     """The demo's release and hover heights relative to the target's top, so they carry to a
     target of another height (brain/params.py: the place uses the measured height plus these)."""
@@ -224,8 +238,18 @@ def main() -> None:
     ap.add_argument("--vision-url", default="http://127.0.0.1:8081")
     ap.add_argument("--add-place-offsets", action="store_true",
                     help="only measure the place target's height and add the relative place heights to the existing extract")
+    ap.add_argument("--add-squeeze", action="store_true", help="only add the grip's squeeze to the existing extract")
     args = ap.parse_args()
 
+    if args.add_squeeze:
+        path = ROOT / "data" / "demos" / args.dataset.name / f"extract-ep{args.episode}.json"
+        out = json.loads(path.read_text())
+        c = json.loads(args.calibration.read_text())
+        out["squeeze_deg"] = grip_squeeze(load_episode(args.dataset, args.episode),
+                                          Calibration(c["joints"], c.get("motor_resolution", 4096)), out["keyframes"])
+        path.write_text(json.dumps(out, indent=1, default=float))
+        print(f"squeeze {out['squeeze_deg']} deg; written {path}")
+        return
     if args.add_place_offsets:
         from brain.geometry import Geometry
         from common.gemma import LlamaCpp
@@ -279,6 +303,7 @@ def main() -> None:
     out["base_moved_between_close_and_release"] = bool(base[kf.close_end : kf.pre_release or len(df)].any())
     if kf.pre_release is not None:
         out["release_z_above_floor_m"] = float(z[kf.pre_release] - out["floor_z_m_est"])
+    out["squeeze_deg"] = grip_squeeze(df, calib, kf.__dict__)
 
     model = LlamaCpp(args.vision_url)
     got = wrist_frame(args.dataset, df, args.episode, kf.pre_close)

@@ -201,7 +201,9 @@ class Robot:
 
     # --- primitives (each blocks until it finishes; raises RobotError unless it's "done") ---
 
-    def run(self, cmd: dict, timeout: float = 60.0) -> dict:
+    def run(self, cmd: dict, timeout: float = 60.0, trace: list | None = None) -> dict:
+        """trace: each status polled while the command runs is appended (time, joints, targets),
+        e.g. a close's lag for calibrate_gripper.py."""
         reply = self._json("POST", "/auto/cmd", cmd, timeout=10.0)
         cmd_id = reply["id"]
         deadline = time.monotonic() + timeout
@@ -215,6 +217,8 @@ class Robot:
                 time.sleep(0.2)
                 continue
             c = st.get("command") or {}
+            if trace is not None:
+                trace.append({"t": st.get("time"), "joints": st.get("joints"), "targets": st.get("targets")})
             if st["mode"] != "auto":
                 raise OperatorTookOver(f"robot left auto mode (now {st['mode']}): operator took over", c)
             if c.get("id") == cmd_id and c["state"] != "running":
@@ -252,9 +256,13 @@ class Robot:
         """targets in degrees (common/arm.py), speed in deg/s."""
         return self.run({"cmd": "joints", "targets": targets, "speed": speed, "z_min": z_min, "units": JOINT_UNITS})
 
-    def gripper(self, pos: float, speed: float | None = None) -> dict:
-        """pos: degrees open from closed (0), speed in deg/s."""
-        return self.run({"cmd": "gripper", "pos": pos, "speed": speed, "units": JOINT_UNITS})
+    def gripper(self, pos: float, speed: float | None = None, squeeze: float | None = None) -> dict:
+        """pos: degrees open from closed (0), speed in deg/s. squeeze: on a stall, hold this many
+        degrees past where the jaws stopped (None: the Pi's default)."""
+        cmd = {"cmd": "gripper", "pos": pos, "speed": speed, "units": JOINT_UNITS}
+        if squeeze is not None:
+            cmd["squeeze"] = squeeze
+        return self.run(cmd)
 
     def base(self, dx: float = 0.0, dy: float = 0.0, dtheta_deg: float = 0.0, speed: float | None = None,
              theta_speed: float | None = None) -> dict:

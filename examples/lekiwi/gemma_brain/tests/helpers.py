@@ -40,7 +40,7 @@ class SimRobot(_SimRobot):
             cmd["contact_stop"] = True
         return self.run(cmd)
 
-    def gripper(self, pos, speed=None):
+    def gripper(self, pos, speed=None, squeeze=None):
         return self.run({"cmd": "gripper", "pos": pos, "speed": speed})
 
     def frame(self, cam, after=0.0):

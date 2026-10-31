@@ -37,8 +37,11 @@ sys.path.insert(0, str(Path(__file__).parent))
 import so101_kinematics as kin  # noqa: E402
 from auto_control import (  # noqa: E402
     GRIPPER,
+    GRIPPER_EASE_FRACTION,
+    GRIPPER_SQUEEZE,
     HEARTBEAT_TIMEOUT_S,
     IK_ARM_JOINTS,
+    MAX_GRIPPER_SQUEEZE,
     AutoController,
     CommandRefused,
 )
@@ -323,12 +326,12 @@ def test_gripper_closes_empty():
     assert st["state"] == "done" and not st["result"]["stalled"] and st["result"]["pos"] < 2.0, st
 
 
-def holding_sim(temp=40.0):
+def holding_sim(temp=40.0, squeeze=None):
     """A sim whose gripper has just closed and stalled on a block, 22 deg open."""
     sim = Sim()
     sim.walls[GRIPPER] = (22.0, 1e9)
     sim.extra[GRIPPER] = {"temp": temp}
-    sim.submit({"cmd": "gripper", "pos": 0, "speed": 50})
+    sim.submit({"cmd": "gripper", "pos": 0, "speed": 50, **({"squeeze": squeeze} if squeeze is not None else {})})
     st = sim.run_until_done()
     assert st["result"]["stalled"] and st["result"]["temp"] == temp, st
     return sim
@@ -358,7 +361,7 @@ def test_hold_spots_a_drop():
 def test_temperature_eases_then_stops_the_squeeze():
     sim = holding_sim(temp=56.0)
     sim.run(0.2)
-    assert hold(sim)["squeeze"] == 2.6, hold(sim)
+    assert hold(sim)["squeeze"] == GRIPPER_EASE_FRACTION * GRIPPER_SQUEEZE, hold(sim)
     sim.extra[GRIPPER]["temp"] = 63.0
     sim.run(0.2)
     h = hold(sim)
@@ -624,3 +627,23 @@ def test_a_joint_reaching_the_end_of_its_travel_has_no_end():
     _probe(sim, "arm_wrist_flex", 1, max_travel=20.0)
     st = sim.run_until_done()
     assert st["state"] == "failed" and "no end within 20" in st["reason"]
+
+
+def test_a_close_holds_with_its_own_squeeze_capped():
+    """The brain sends the demo's squeeze; the Pi caps it."""
+    sim = holding_sim(squeeze=3.0)
+    assert hold(sim)["squeeze"] == 3.0 and sim.targets[GRIPPER] == pytest.approx(hold(sim)["pos"] - 3.0)
+    assert holding_sim(squeeze=50.0).auto.status({})["gripper_hold"]["squeeze"] == MAX_GRIPPER_SQUEEZE
+    with pytest.raises(CommandRefused):
+        Sim().submit({"cmd": "gripper", "pos": 0, "squeeze": "tight", "units": "deg"})
+
+
+def test_a_drop_is_seen_with_the_squeeze_eased():
+    """Until Oct 31 the drop threshold was a fixed 3.3 deg: once the squeeze eased to 2.6 the
+    jaws couldn't travel that far, and a drop went unseen."""
+    sim = holding_sim(temp=56.0)
+    sim.run(0.2)
+    assert hold(sim)["squeeze"] == GRIPPER_EASE_FRACTION * GRIPPER_SQUEEZE
+    sim.walls.pop(GRIPPER)
+    sim.run(0.5)
+    assert hold(sim)["state"] == "dropped", hold(sim)

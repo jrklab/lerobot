@@ -56,7 +56,7 @@ from brain import actions, params as prm
 from brain.geometry import Geometry
 from brain.primitives import Skills
 from common.arm import Arm
-from common.robot import Robot
+from common.robot import JOINT_UNITS, Robot
 
 CALIB = ROOT / "data" / "calib.json"
 # Width (mm) of what the jaws close on: nothing, LEGO bricks (8 mm per stud less the 0.2 mm play).
@@ -66,6 +66,23 @@ OBJECTS = {
     "2x4-long": ("the 2x4 brick across its long side (4 studs)", 31.8),
     "2x6-long": ("the 2x6 brick across its long side (6 studs)", 47.8),
 }
+
+
+MOVING_DEG = 0.3  # convention: a poll-to-poll change above the reading's scatter (0.35 deg over closes)
+
+
+def close_lags(trace: list[dict]) -> dict:
+    """From a close's polled statuses: the largest lag of the jaws behind their target while they
+    were still moving, and the lag where they stopped. The Pi calls a close stalled once the lag
+    passes auto_control.GRIPPER_STALL_LAG_DEG (hand-set, 4 deg): it belongs between these two."""
+    rows = [(r["targets"]["arm_gripper"], r["joints"]["arm_gripper"]) for r in trace
+            if r.get("targets") and r.get("joints") and "arm_gripper" in r["targets"]]
+    if len(rows) < 3:
+        return {}
+    meas = [m for _, m in rows]
+    moving = [meas[i] - t for i, (t, _) in enumerate(rows[:-1]) if meas[i] - meas[i + 1] > MOVING_DEG]
+    return {"free_lag_max_deg": round(max(moving), 2) if moving else None,
+            "stall_lag_deg": round(rows[-1][1] - rows[-1][0], 2), "trace_n": len(rows)}
 
 
 def curve(points: list[dict]) -> list[list[float]]:
@@ -96,9 +113,12 @@ def main() -> None:
                 for what, mm in (OBJECTS[o] for o in args.objects):
                     robot.gripper(wide)
                     input(f"\n[{k + 1}/{args.repeats}] Place {what} ({mm:.1f} mm) at the jaw tips, then press ENTER ")
-                    res = robot.gripper(0.0, speed=prm.CLOSE_SPEED.value).get("result", {})
+                    trace = []
+                    cmd = {"cmd": "gripper", "pos": 0.0, "speed": prm.CLOSE_SPEED.value, "units": JOINT_UNITS}
+                    res = robot.run(cmd, trace=trace).get("result", {})
                     deg = float(robot.status()["joints"]["arm_gripper"])
-                    points.append({"mm": mm, "deg": round(deg, 2), "stalled": bool(res.get("stalled")), "what": what})
+                    points.append({"mm": mm, "deg": round(deg, 2), "stalled": bool(res.get("stalled")), "what": what,
+                                   **close_lags(trace)})
                     print(f"    closed at {deg:.2f} deg (stalled: {res.get('stalled')})")
             robot.gripper(wide)
             input("\nTake the brick out, then press ENTER to fold the arm ")

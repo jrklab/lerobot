@@ -83,5 +83,6 @@
   ]
  },
  "release_above_target_m": 0.0064,
- "hover_above_target_m": 0.0381
+ "hover_above_target_m": 0.0381,
+ "squeeze_deg": 5.14
 }

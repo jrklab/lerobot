@@ -127,7 +127,7 @@ class NewArm:
             raise RobotError(f"{cmd['cmd']} {st['state']}: {st['reason']}", st)
         return st
 
-    def gripper(self, pos, speed=None):
+    def gripper(self, pos, speed=None, squeeze=None):
         return self.run({"cmd": "gripper", "pos": pos, "speed": speed})
 
     def joints(self, targets, speed=None, z_min=None):
