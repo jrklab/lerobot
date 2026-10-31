@@ -366,11 +366,16 @@ def solve(
     fit_offsets: bool = False,
     floor_board_thickness: float = 0.0,
     write: bool = False,
+    front_extra: list[Path] = (),
 ) -> dict:
     """The solve, printed as it goes; returns the zero offsets (and which to apply), the floor
-    board's top and pose in the arm's frame, and the fit errors (calibration/calibrate_all.py)."""
+    board's top and pose in the arm's frame, and the fit errors (calibration/calibrate_all.py).
+    front_extra: scenes whose front frames (start, base sweep, close-up) only add to the front
+    lens and the turning centre: the front camera's views don't depend on the arm's zeros, so a
+    sweep taken before a zero correction still counts (calibrate_all.py sweeps once a run)."""
 
     scenes = [_load(d, "scene") for d in scene_dirs]
+    extra = [_load(d, "scene") for d in front_extra]
     held = {
         cam: _load(d, "views")["views"] if d else []
         for cam, d in (("wrist", lens_wrist), ("front", lens_front))
@@ -386,7 +391,11 @@ def solve(
     wrist_views = [v["boards"] for v in held["wrist"]] + [r["boards"] for r in records]
     front_views = (
         [v["boards"] for v in held["front"]]
-        + [f["boards"] for sc in scenes for f in sc["front"] + sc.get("sweep", []) + sc.get("closeup", [])]
+        + [
+            f["boards"]
+            for sc in scenes + extra
+            for f in sc["front"] + sc.get("sweep", []) + sc.get("closeup", [])
+        ]
         + closeups
     )
     wl = lens(wrist_views, IMAGE_SIZE)
@@ -444,7 +453,7 @@ def solve(
         f"of their mean, tilts {min(np.degrees(np.arcsin(-T[2, 2])) for T in fronts):.1f}-"
         f"{max(np.degrees(np.arcsin(-T[2, 2])) for T in fronts):.1f} deg)"
     )
-    centre, centre_rms = turn_centre(scenes, fl["K"], fl["dist"], f["T_base_cam"])
+    centre, centre_rms = turn_centre(scenes + extra, fl["K"], fl["dist"], f["T_base_cam"])
     board_top = float(np.mean([w["boards"][f"{i}/{FRONT_VIA}"][2, 3] for i in range(len(scenes))]))
     floor_seen = board_top - floor_board_thickness
     print(

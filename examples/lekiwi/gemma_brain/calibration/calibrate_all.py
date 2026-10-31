@@ -75,6 +75,7 @@ TOUCHES = 3  # convention: a plane needs 3
 TOUCH_CLEAR_M = 0.03  # convention: off the board's edge and its backing, for the jaws
 FLOOR_BOARD = "wrist"
 CHECK_FRAMES = 5  # convention
+FIRST_SCENE_POSE_STEP = 2  # the first scene's poses: every other one
 TOUCH_START_Z_M = -0.05  # the TCP height the touches descend from (calibrate_floor.py --start-z)
 
 
@@ -174,19 +175,35 @@ def coarse(robot: Robot, log: dict) -> None:
 
 
 def fine(robot: Robot, thickness: float, log: dict) -> dict:
-    """Capture, solve, correct until no offset is larger than its spread over two scenes."""
+    """Capture, solve, correct until no offset is larger than its spread over two scenes. The
+    run's first scene takes every FIRST_SCENE_POSE_STEP-th arm pose (it only measures the coarse
+    zeros' error; every anchor keeps two or more) and the base sweep and side board close-up,
+    for the front lens and the turning centre, which the later scenes then reuse (the front
+    camera's views don't depend on the arm's zeros): those capture the arm poses only."""
     scenes: list[Path] = []
+    sweeps: list[Path] = []
     reverse = False
     while True:
+        first = not sweeps
         poses = capture_cameras.plan(
             Calibration.from_robot(robot), prm.REACH_POINT_X_M.value, reverse=reverse
         )
         refused = [p for p in poses if "joints" not in p]
         if refused:
             raise RuntimeError(f"scene poses refused: {[p['name'] for p in refused]}")
-        scenes.append(capture_cameras.run_scene(robot, poses, capture_cameras.sweep_plan()))
+        if first:
+            poses = poses[::FIRST_SCENE_POSE_STEP]
+        scene = capture_cameras.run_scene(
+            robot, poses, capture_cameras.sweep_plan() if first else [], closeup=first
+        )
+        if first:
+            sweeps.append(scene)
+        scenes.append(scene)
         reverse = not reverse
-        result = solve_cameras.solve(scenes, fit_offsets=True, floor_board_thickness=thickness)
+        extra = [s for s in sweeps if s not in scenes]
+        result = solve_cameras.solve(
+            scenes, fit_offsets=True, floor_board_thickness=thickness, front_extra=extra
+        )
         log["solves"].append(
             {
                 "scenes": [s.name for s in scenes],
@@ -202,9 +219,11 @@ def fine(robot: Robot, thickness: float, log: dict) -> dict:
         if len(scenes) >= SCENES_PER_VERDICT:
             if apply:
                 print(f"still to apply after {MAX_CORRECTIONS} corrections: {apply} -- kept as they are")
-            return solve_cameras.solve(scenes, floor_board_thickness=thickness, write=True) | {
-                "scenes": scenes
-            }
+            extra = [s for s in sweeps if s not in scenes]
+            final = solve_cameras.solve(
+                scenes, floor_board_thickness=thickness, write=True, front_extra=extra
+            )
+            return final | {"scenes": scenes}
 
 
 def floor(robot: Robot, cams: dict, thickness: float, log: dict) -> dict:

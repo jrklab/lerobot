@@ -115,7 +115,7 @@ SWEEP_CLEARANCE_M = 0.05  # convention: floor clearance of a probe's sweep, for 
 #                           at a low torque limit and the rest placement's error
 GRIPPER_TRAVEL_DEG = 200.0  # convention: more than a gripper opens
 GRIPPER_CLOSED_MARGIN_DEG = 1.0  # convention: closed without squeezing the jaws together
-MOVE_SPEED = 20.0  # deg/s between poses, as the other calibration scripts
+MOVE_SPEED = 35.0  # deg/s between poses: the Pi's default joint speed, as the scene captures (was 20)
 PROBE_SPEED = 10.0  # deg/s
 PROBE_TORQUE = 0.3  # of the motor's maximum
 PROBE_BACKOFF_DEG = 3.0  # web_server/auto_control.py: where a probe parks after an end

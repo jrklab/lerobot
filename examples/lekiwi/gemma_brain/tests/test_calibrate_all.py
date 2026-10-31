@@ -26,14 +26,18 @@ class Fake:
     def __init__(self, verdicts):
         self.verdicts = list(verdicts)  # to_apply per solve with fit_offsets
         self.captures, self.solves, self.corrections, self.written = [], [], [], None
+        self.swept, self.n_poses, self.extras = [], [], []
 
-    def run_scene(self, robot, poses, moves):
+    def run_scene(self, robot, poses, moves, closeup=True):
         p = Path(f"scene{len(self.captures)}")
         self.captures.append((p, poses[0]["reverse"]))
+        self.swept.append(bool(moves) and closeup)
+        self.n_poses.append(len(poses))
         return p
 
-    def solve(self, scenes, fit_offsets=False, floor_board_thickness=0.0, write=False):
+    def solve(self, scenes, fit_offsets=False, floor_board_thickness=0.0, write=False, front_extra=()):
         self.solves.append(([s.name for s in scenes], fit_offsets, write))
+        self.extras.append([s.name for s in front_extra])
         apply = self.verdicts.pop(0) if fit_offsets else {}
         return {
             "joint_offsets_deg": {},
@@ -51,10 +55,10 @@ def fake(monkeypatch):
     def make(verdicts):
         f = Fake(verdicts)
         monkeypatch.setattr(
-            ca.capture_cameras, "plan", lambda calib, x, reverse: [{"joints": {}, "reverse": reverse}]
+            ca.capture_cameras, "plan", lambda calib, x, reverse: [{"joints": {}, "reverse": reverse}] * 38
         )
         monkeypatch.setattr(ca.capture_cameras, "run_scene", f.run_scene)
-        monkeypatch.setattr(ca.capture_cameras, "sweep_plan", lambda: [])
+        monkeypatch.setattr(ca.capture_cameras, "sweep_plan", lambda: [{"turn_deg": 10}])
         monkeypatch.setattr(ca.solve_cameras, "solve", f.solve)
         monkeypatch.setattr(ca.sc, "correct", lambda robot, offsets: f.corrections.append(offsets))
         monkeypatch.setattr(ca.Calibration, "from_robot", classmethod(lambda cls, robot: None))
@@ -76,6 +80,9 @@ def test_a_correction_restarts_the_round_and_the_verdict_takes_two_scenes(fake):
     assert [r for _, r in f.captures] == [False, True, False]
     assert f.solves[-1] == (["scene1", "scene2"], False, True)  # the cameras written from both
     assert [s.name for s in out["scenes"]] == ["scene1", "scene2"]
+    # Only the first scene sweeps the base, with every other pose; the later ones reuse its sweep.
+    assert f.swept == [True, False, False] and f.n_poses == [19, 38, 38]
+    assert f.extras[-1] == ["scene0"]
 
 
 def test_no_correction_needed_still_takes_both_orders(fake):
