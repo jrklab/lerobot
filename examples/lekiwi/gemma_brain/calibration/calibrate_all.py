@@ -92,8 +92,9 @@ def check(robot: Robot) -> dict:
     }
     found = {cam: {b: len(d["ids"]) for b, d in v.items()} for cam, v in seen.items()}
     problems = []
-    if "front" not in seen["front"]:
-        problems.append("the front camera doesn't see the front board")
+    for board in ("front", FLOOR_BOARD):  # the front camera is placed through the floor board
+        if board not in seen["front"]:
+            problems.append(f"the front camera doesn't see the {board} board")
     if FLOOR_BOARD not in seen["wrist"]:
         problems.append("the wrist camera (the arm at rest) doesn't see the floor board")
     if st.get("arm_calibration") == "calibrated":
@@ -106,8 +107,14 @@ def check(robot: Robot) -> dict:
             if abs(st["joints"][j] - sc.REST[j]) > sc.REST_TOLERANCE_DEG
         }
         if off:
-            problems.append(f"the arm doesn't lie at rest (deg from it: {off}): fold it down onto the base")
-    return {"boards_seen": found, "problems": problems, "arm_calibration": st.get("arm_calibration")}
+            # Calibrated, the arm can be laid down itself (main: the planner's rest holds it raised).
+            print(f"note: the arm isn't lying at rest (deg from it: {off}): the run lays it down first")
+    return {
+        "boards_seen": found,
+        "problems": problems,
+        "arm_calibration": st.get("arm_calibration"),
+        "off_rest": off if st.get("arm_calibration") == "calibrated" else {},
+    }
 
 
 def touch_points(board_pose: np.ndarray) -> tuple[list[float], float | None]:
@@ -184,6 +191,7 @@ def floor(robot: Robot, cams: dict, thickness: float, log: dict) -> dict:
             probes.append({**calibrate_floor.probe(arm, x), "on": "floor" if x in floor_xs else "board"})
     finally:
         arm.reset()
+        sc._move(arm, sc.REST, "down to rest")  # lying, as the next run starts from
     points = [
         {
             "x": p["x"],
@@ -248,6 +256,8 @@ def main() -> None:
         }
         t0 = time.monotonic()
         try:
+            if checked["off_rest"]:
+                sc._move(Arm(robot), sc.REST, "down to rest")
             print("\n=== 1. coarse: the joints' ends ===")
             coarse(robot, log)
             print("\n=== 2-3. fine: the cameras and the joint zeros ===")
