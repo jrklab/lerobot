@@ -202,6 +202,8 @@ def fine(robot: Robot, thickness: float, log: dict) -> dict:
     scenes: list[Path] = []
     sweeps: list[Path] = []
     reverse = False
+    print("the base placed for the floor board:")
+    log["positioned"] = capture_cameras.position_for_floor_board(robot)
     while True:
         first = not sweeps
         poses = capture_cameras.plan(

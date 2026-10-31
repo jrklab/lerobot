@@ -143,6 +143,17 @@ RETURN_TOL_DEG = BASE_THETA_TOL_DEG
 # Oct 30: 4 ran out 1.8 cm off (drive back, turn, turn, then the sideways drive wasn't reached).
 RETURN_TRIES = 6
 MEASURE_FRAMES = 3  # convention: fresh front frames before the start counts as lost
+FLOOR_BOARD = "wrist"  # the floor board's name (boards.py)
+# Positioning for the floor board (position_for_floor_board): 15 corners gave every solve a front
+# camera placement on Oct 30; 6-10 came and went between frames.
+GOOD_BOARD_CORNERS = 15
+LOOK_FRAMES = 3  # convention: the best of a few frames
+REPOSITION_STEP_M = 0.03  # convention
+MAX_REPOSITION_M = 0.12  # convention: a board placed within a hand's width of right
+NEAR_ROW = 0.88  # the board's lowest corners below this (fraction of the image height): no nearer
+SIDEWAYS_STEP_M = 0.02  # convention
+MAX_SIDEWAYS_M = 0.10  # convention
+CENTRED_U = 0.12  # the board's corners centred within this of the image's middle (fraction of its width)
 # The front lens's close-up: the side board (beside the robot, found by turning 90 deg right, then
 # left) is approached to CLOSEUP_STANDOFF_M, where it fills ~70% of the image width (24.5 cm at
 # f ~550 px) and, the camera being low and tilted down, reaches the top of the image: the rows the
@@ -476,6 +487,85 @@ def return_to_start(robot, measure) -> tuple[float, float, float]:
                 raise RuntimeError(f"the start is {-100 * x:.0f} cm ahead: more than a return drives blind")
             robot.base(dx=-x, dy=-y)
     raise RuntimeError(f"not back at the start after {RETURN_TRIES} moves")
+
+
+def floor_board_look(robot, frames: int = LOOK_FRAMES) -> tuple[int, float | None, float | None]:
+    """The front camera's best of a few frames at the floor board: (corners, mean u, lowest v),
+    image fractions; (0, None, None) when it isn't read (edge-on from 5 cm up, it comes and goes)."""
+    best = (0, None, None)
+    for _ in range(frames):
+        d = boards.detect(robot.frame("front", after=time.time())[0]).get(FLOOR_BOARD)
+        if d and len(d["ids"]) > best[0]:
+            px = np.asarray(d["px"], float).reshape(-1, 2) / np.array([640.0, 480.0])
+            best = (len(d["ids"]), float(px[:, 0].mean()), float(px[:, 1].max()))
+    return best
+
+
+def position_for_floor_board(robot, look=floor_board_look) -> dict:
+    """Before a run's first scene: the base moved (forward or back, then sideways) until the front
+    camera reads the floor board well (GOOD_BOARD_CORNERS), so a board placed a little far or to one
+    side needs no one to move it (Oct 30: the front camera read 0-26 of its corners as placed). By
+    the image alone, so it works before the front camera is calibrated: forward while the board's
+    lowest corners stay above NEAR_ROW (the base never reaches it), within MAX_REPOSITION_M; back to
+    the best position seen if none reads well. Returns where it went and what it read."""
+    moved = np.zeros(2)  # (forward, left) m, open loop: short moves
+    seen = []  # (forward, corners)
+
+    def at(n, u, v):
+        seen.append((float(moved[0]), n))
+        print(
+            f"  {100 * moved[0]:+.0f} cm forward, {100 * moved[1]:+.0f} cm left: the floor board {n} corners"
+        )
+
+    n, u, v = look()
+    at(n, u, v)
+    if n < GOOD_BOARD_CORNERS:
+        step = -REPOSITION_STEP_M if v is not None and v > NEAR_ROW else REPOSITION_STEP_M
+        for _ in range(2):  # one way, then the other
+            while n < GOOD_BOARD_CORNERS and abs(moved[0] + step) <= MAX_REPOSITION_M:
+                if step > 0 and v is not None and v > NEAR_ROW:
+                    break  # its near edge low in the view: no nearer
+                before = n
+                robot.base(dx=step)
+                moved[0] += step
+                n, u, v = look()
+                at(n, u, v)
+                if n < before:
+                    break  # read worse this way: no use going on
+            if n >= GOOD_BOARD_CORNERS:
+                break
+            step = -step
+        if n < GOOD_BOARD_CORNERS and seen:
+            best_fwd, best_n = max(seen, key=lambda e: e[1])
+            if best_n and abs(best_fwd - moved[0]) > 1e-3:
+                robot.base(dx=best_fwd - moved[0])
+                moved[0] = best_fwd
+                n, u, v = look()
+                at(n, u, v)
+    for _ in range(round(MAX_SIDEWAYS_M / SIDEWAYS_STEP_M)):  # centre it left to right
+        if u is None or abs(u - 0.5) <= CENTRED_U:
+            break
+        dy = -SIDEWAYS_STEP_M if u > 0.5 else SIDEWAYS_STEP_M  # right of centre in the image: move right
+        if abs(moved[1] + dy) > MAX_SIDEWAYS_M:
+            break
+        robot.base(dy=dy)
+        moved[1] += dy
+        n2, u2, v2 = look()
+        at(n2, u2, v2)
+        if n2:
+            n, u, v = n2, u2, v2
+    ok = n >= GOOD_BOARD_CORNERS
+    if not ok:
+        print(
+            f"  the front camera reads {n} of the floor board's corners at best: the solve may place it "
+            "through the upright board instead (move the floor board nearer for a better front camera)"
+        )
+    return {
+        "forward_m": round(float(moved[0]), 3),
+        "left_m": round(float(moved[1]), 3),
+        "corners": n,
+        "ok": ok,
+    }
 
 
 def run_scene(robot, poses: list[dict], moves: list[dict], closeup: bool = True) -> Path:

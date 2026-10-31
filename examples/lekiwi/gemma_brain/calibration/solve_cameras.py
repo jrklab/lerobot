@@ -484,6 +484,7 @@ def solve(
         f"{max(np.degrees(np.arcsin(-T[2, 2])) for T in fronts):.1f} deg)"
     )
     centre, centre_rms = turn_centre(scenes + extra, fl["K"], fl["dist"], f["T_base_cam"])
+    result.update(front_K=fl["K"], front_dist=fl["dist"], T_base_cam=f["T_base_cam"], turn_centre=centre)
     print(
         f"the base turns about ({100 * centre[0]:.1f}, {100 * centre[1]:.1f}) cm in the arm's frame (residual {100 * centre_rms:.2f} cm)"
     )

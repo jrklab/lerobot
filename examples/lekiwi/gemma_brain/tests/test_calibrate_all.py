@@ -20,7 +20,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from calibration import calibrate_all as ca
+from calibration import calibrate_all as ca, capture_cameras
 
 
 class Fake:
@@ -60,6 +60,7 @@ def fake(monkeypatch):
         )
         monkeypatch.setattr(ca.capture_cameras, "run_scene", f.run_scene)
         monkeypatch.setattr(ca.capture_cameras, "sweep_plan", lambda: [{"turn_deg": 10}])
+        monkeypatch.setattr(ca.capture_cameras, "position_for_floor_board", lambda robot: {"ok": True})
         monkeypatch.setattr(ca.solve_cameras, "solve", f.solve)
         monkeypatch.setattr(ca.sc, "correct", lambda robot, offsets: f.corrections.append(offsets))
         monkeypatch.setattr(ca.Calibration, "from_robot", classmethod(lambda cls, robot: None))
@@ -166,3 +167,63 @@ def test_the_board_top_is_read_where_it_was_touched():
     )
     near, far = ca.board_top_at([tilted], 0.25), ca.board_top_at([tilted], 0.35)
     assert abs(abs(far - near) - 0.10 * np.tan(a)) < 1e-4  # 1.7 mm over 10 cm
+
+
+class Base:
+    """The base's position, and the front camera's view of the floor board from it."""
+
+    def __init__(self, view):
+        self.fwd = self.left = 0.0
+        self.view = view
+        self.moves = []
+
+    def base(self, dx=0.0, dy=0.0):
+        self.fwd += dx
+        self.left += dy
+        self.moves.append((round(dx, 3), round(dy, 3)))
+
+    def look(self):
+        return self.view(self.fwd, self.left)
+
+
+def _far_board(fwd, left, need=0.06, u0=0.5):
+    """A board read well from `need` forward on; nearer, its lowest corners drop down the image."""
+    v = 0.55 + 2.0 * fwd
+    if fwd < need - 0.035:
+        return 0, None, None
+    return (18 if fwd >= need - 1e-9 else 9), u0 + 2.5 * left, v  # moving right shifts it left in the image
+
+
+def test_a_far_board_is_driven_up_to():
+    b = Base(_far_board)
+    out = capture_cameras.position_for_floor_board(b, look=b.look)
+    assert out["ok"] and out["forward_m"] == pytest.approx(0.06) and b.moves == [(0.03, 0.0), (0.03, 0.0)]
+
+
+def test_a_well_read_board_moves_nothing():
+    b = Base(lambda f, left: (20, 0.5, 0.7))
+    assert capture_cameras.position_for_floor_board(b, look=b.look)["ok"] and b.moves == []
+
+
+def test_a_board_too_near_is_backed_away_from():
+    # Read poorly with its near edge low in the view: back up until it reads well.
+    b = Base(lambda f, left: (18, 0.5, 0.8) if f <= -0.06 + 1e-9 else (8, 0.5, 0.92))
+    out = capture_cameras.position_for_floor_board(b, look=b.look)
+    assert out["ok"] and out["forward_m"] == pytest.approx(-0.06)
+
+
+def test_never_nearer_than_the_near_row():
+    # Read better the nearer it is, but well only past the near row: stop there, nothing better.
+    b = Base(lambda f, left: (int(6 + 60 * f), 0.5, 0.80 + f))
+    out = capture_cameras.position_for_floor_board(b, look=b.look)
+    assert not out["ok"]
+    stop = max(f for f in (0.0, 0.03, 0.06, 0.09) if 0.80 + f - 0.03 <= capture_cameras.NEAR_ROW)
+    assert out["forward_m"] == pytest.approx(stop)  # one step past the row at most, then no further
+    assert all(abs(dx) <= capture_cameras.MAX_REPOSITION_M for dx, _ in b.moves)
+
+
+def test_a_board_off_to_one_side_is_centred():
+    b = Base(lambda f, left: _far_board(f, left, need=0.0, u0=0.75))  # read well, right of centre
+    out = capture_cameras.position_for_floor_board(b, look=b.look)
+    assert out["left_m"] < 0  # moved right
+    assert abs(0.75 + 2.5 * out["left_m"] - 0.5) <= capture_cameras.CENTRED_U
