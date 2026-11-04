@@ -365,6 +365,16 @@ def check_in(sk: Skills, obj: str, container: str) -> Result:
     A miss hidden behind the container passes. The same find() as the approach, nothing else
     (owner, Oct 29: the wrist pixel counts had grown too hand-crafted)."""
     det = sk.find(obj, "front", fast_ok=False)
+    if det is not None and sk.widths.get(container, 0.0) > 0.0:
+        # A miss lands by the container: one let go just over its rim falls within its width of
+        # where it was let go (the reach point). Further off it's something else (Nov 4: a
+        # basketball 2 m away boxed as the red block, and the retry drove for it).
+        p = sk.geom.front_point(((det.box[0] + det.box[2]) / 2, det.box[3]))
+        off = np.inf if p is None else float(np.hypot(p[0] - prm.REACH_POINT_X_M.value, p[1]))
+        if off > sk.widths[container]:
+            sk.ev("place_check", obj=obj, target=container, on_floor=False, box=det.box,
+                  far_m=None if p is None else round(off, 3), why="seen too far from the release to be it")
+            return Result(True)
     sk.ev("place_check", obj=obj, target=container, on_floor=det is not None, box=None if det is None else det.box)
     if det is not None:
         return Result(False, f"the {obj} is on the floor, not in the {container}", {"box": det.box})

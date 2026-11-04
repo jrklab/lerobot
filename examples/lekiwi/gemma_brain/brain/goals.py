@@ -186,7 +186,9 @@ class FrontApproachGoal:
         # pixel of the box is centimetres, and a 9 cm overshoot took the brick out of view (Oct 29).
         rem, margin = self.remaining(err, sk), front_view_margin(sk.geom)
         short = margin if rem - self.tol_m.value / 2 > margin else self.tol_m.value / 2
-        return {"delta": (max(rem - short, 0.0), 0.0)}
+        # At most one of the Pi's commands (its stop-short added), then a look again.
+        longest = prm.BASE_MOVE_MAX_M.value - prm.BASE_STOP_SHORT_M.value
+        return {"delta": (min(max(rem - short, 0.0), longest), 0.0)}
 
 
 def round_centre(box) -> np.ndarray:

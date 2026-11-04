@@ -321,6 +321,22 @@ def test_a_base_turn_over_the_pis_limit_goes_in_two():
     assert sent == [-90.0 - stop, -90.0 - stop] and all(abs(t) <= prm.BASE_TURN_MAX_DEG.value for t in sent)
 
 
+
+def test_a_base_drive_over_the_pis_limit_goes_in_two():
+    # Nov 4: a 2.3 m approach drive came back HTTP 409 ("1 m per axis").
+    sent = []
+
+    class R:
+        def base(self, dx=0.0, dy=0.0, dtheta_deg=0.0):
+            sent.append((round(dx, 3), round(dy, 3)))
+            return {"result": {"moved": [dx, dy, dtheta_deg]}}
+
+    sk = Skills.__new__(Skills)
+    sk.robot, sk.log = R(), None
+    assert sk.move("base", delta=(1.6, 0.0)).ok
+    stop = prm.BASE_STOP_SHORT_M.value
+    assert sent == [(round(0.8 + stop, 3), 0.0)] * 2 and all(abs(d[0]) <= prm.BASE_MOVE_MAX_M.value for d in sent)
+
 def test_close_up_front_looks_go_to_the_main_model(monkeypatch):
     # Oct 30: the 26B chose the named block among several in 15 of 15 asks at 0.4-0.5 m, 4 of 7
     # at ~1 m: within CLOSE_CHOICE_M the front camera's looks are its, not the fast model's.

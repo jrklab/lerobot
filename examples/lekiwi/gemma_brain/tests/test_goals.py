@@ -191,3 +191,11 @@ def test_placed_beside_measures_the_gap_and_level():
     assert not placed_beside(held, [0.40, 0.52, 0.50, 0.72])  # overlapping
     assert not placed_beside(held, [0.10, 0.52, 0.20, 0.72])  # far off
     assert not placed_beside(held, [0.30, 0.80, 0.40, 1.0])  # not level
+
+
+def test_a_far_approach_drives_at_most_one_pi_command_then_looks_again():
+    class S:
+        geom = geom(-0.11)
+
+    d = goals.FrontApproachGoal().step(np.array([0.0, 2.3]), S())["delta"][0]
+    assert abs(d - (prm.BASE_MOVE_MAX_M.value - prm.BASE_STOP_SHORT_M.value)) < 1e-9

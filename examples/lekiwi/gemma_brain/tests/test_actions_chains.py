@@ -233,6 +233,7 @@ def test_place_in_check_is_the_front_camera_finding_the_object_on_the_floor():
         def ev(self, *a, **k):
             pass
 
+    S.widths = {}  # the cup's width unmeasured: any red block on the floor is a miss
     r = actions.check_in(S(True), "red block", "paper cup")
     assert not r.ok and "on the floor" in r.reason
     assert actions.check_in(S(False), "red block", "paper cup").ok
@@ -474,3 +475,28 @@ def test_a_close_well_past_the_measured_width_is_a_miss(monkeypatch):
     sk.closed_mm = 9.0  # on an edge of it, or something smaller
     r = actions.close(sk)
     assert not r.ok and "missed it" in r.reason
+
+
+def test_a_red_thing_far_from_the_cup_is_not_the_missed_brick():
+    # Nov 4: the check boxed a basketball 2 m off as the red block; the brick was in the cup.
+    from brain.goals import Detection
+
+    class G:
+        def front_point(self, uv):
+            return np.array([2.2, -0.9, 0.0]) if uv[1] < 0.5 else np.array([0.30, 0.04, 0.0])
+
+    class S:
+        geom, widths, events = G(), {"paper cup": 0.095}, []
+
+        def __init__(self, box):
+            self.box = box
+
+        def find(self, obj, cam, fast_ok=True, **k):
+            return Detection(box=self.box)
+
+        def ev(self, name, **k):
+            self.events.append(k)
+
+    assert actions.check_in(S([0.941, 0.303, 0.993, 0.373]), "red block", "paper cup").ok  # far: not it
+    r = actions.check_in(S([0.4, 0.62, 0.5, 0.7]), "red block", "paper cup")  # by the cup: missed
+    assert not r.ok and "on the floor" in r.reason

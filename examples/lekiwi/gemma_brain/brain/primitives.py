@@ -225,6 +225,11 @@ class Skills:
             d = np.asarray(delta, float)
             n = float(np.linalg.norm(d))
             d = d * (n + prm.BASE_STOP_SHORT_M.value) / n if n > 0 else d
+            if np.max(np.abs(d)) > prm.BASE_MOVE_MAX_M.value:
+                # Over the Pi's one-command limit with the stop-short added: two halves.
+                half = (float(delta[0]) / 2, float(delta[1]) / 2)
+                first = self._move_base(half, None)
+                return self._move_base(half, None) if first.ok else first
             res = self.robot.base(dx=float(d[0]), dy=float(d[1]))
         self._last_moved = "base"
         moved = res.get("result", {}).get("moved")
