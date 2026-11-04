@@ -146,7 +146,7 @@ def test_the_floor_stage_writes_the_plane_and_the_check(tmp_path, monkeypatch):
     monkeypatch.setattr(ca.calibrate_floor, "probe", lambda arm, x: {"x": x, "floor_tcp_z": tcp[round(x, 3)]})
     cams = {"floor_board_pose": [_board_at(0.442).tolist()], "board_top_z": -0.1077}
     log = {}
-    out = ca.floor(None, cams, 0.00125, log)
+    out = ca.floor(None, cams["floor_board_pose"], 0.00125, log)
     touches = json.loads((tmp_path / "floor_touches.json").read_text())["points"]
     assert [p["how"] for p in touches] == ["probe on the floor", "probe on the floor", "probe on the board"]
     assert touches[-1]["z"] == pytest.approx(
@@ -296,3 +296,14 @@ def test_an_unread_board_is_driven_up_to_only_until_the_wrist_sees_it_near():
     b.wrist = lambda: (30, 0.5, 0.5 + 0.35 * b.fwd / 0.09)  # near enough at 9 cm
     out = capture_cameras.position_for_floor_board(b, look=b.look, wrist_look=b.wrist)
     assert out["forward_m"] <= 0.09 + 1e-9 and not out["ok"]
+
+
+def test_the_steps_run_in_order_with_position_where_needed():
+    assert ca.plan_steps(ca.DEFAULT_STEPS) == ["coarse", "position", "fine", "floor", "gripper"]
+    assert ca.plan_steps(["gripper"]) == ["position", "gripper"]
+    assert ca.plan_steps(["floor", "fine"]) == ["position", "fine", "floor"]
+    assert ca.plan_steps(["drive"]) == ["drive"]
+    with pytest.raises(ValueError, match="coarse needs fine"):
+        ca.plan_steps(["coarse"])
+    with pytest.raises(ValueError, match="unknown"):
+        ca.plan_steps(["cameras"])

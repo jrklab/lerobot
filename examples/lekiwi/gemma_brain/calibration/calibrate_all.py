@@ -17,9 +17,17 @@
 # ruff: noqa: E402
 
 """The whole robot calibration in one run, no one touching the robot: the arm's joints from
-their ends and the URDF, the cameras, the joint zeros the cameras can see, the floor.
+their ends and the URDF, the cameras, the joint zeros the cameras can see, the floor, the
+gripper's opening.
 
     .venv/bin/python calibration/calibrate_all.py --board-thickness 0.00125 [--check-only]
+    .venv/bin/python calibration/calibrate_all.py --board-thickness 0.00125 --steps gripper
+    .venv/bin/python calibration/calibrate_all.py --board-thickness 0.00125 --steps fine,floor
+
+--steps: any of coarse, position, fine, floor, gripper, drive (default all but drive), run in
+that order. position comes with fine, floor and gripper; coarse needs fine after it (it moves
+three zeros the cameras were placed through); floor and gripper without fine take the floor
+board where the wrist camera sees it now, through the saved camera calibration.
 
 Before: the boards placed (CAMERA_CALIBRATION.md, "The calibration scene"; the floor board
 stays), the arm folded at rest, nothing within its reach, ~30 cm clear behind the robot and
@@ -38,7 +46,11 @@ the floor clear to the side board; the Pi's service with --allow-uncalibrated. T
   4. the floor: touches spread over the reach, on the bare floor before the floor board or on
      its printed area (where the cameras placed it; less its thickness), for the floor plane. The board's top as touched and as the cameras saw it is the same surface: their
      difference is the run's check
-  5. a summary, runs/<time>-calibrate_all/summary.json
+  5. the gripper (calibrate_gripper.auto): closes on nothing, then on a 2x4 brick lying right of
+     the floor board, across its short and its long side, as a pick grasps: the opening in mm
+     against the angle, and a stall-lag threshold proposed (not applied)
+  6. drive (only when asked): the four-direction drive test, reported (drive_test.py)
+  7. a summary, runs/<time>-calibrate_all/summary.json
 
 Everything goes to the run's folder; the calibration from before the run is kept there
 (self_calibration.json "before": self_calibrate.py --state <it> restore puts it back).
@@ -68,7 +80,15 @@ from common.arm import Arm, Calibration
 from common.robot import Robot
 from robot_bridge import STALL_LOAD_THRESHOLDS, STALL_SPEED_THRESHOLD
 
-from calibration import boards, calibrate_floor, capture_cameras, self_calibrate as sc, solve_cameras
+from calibration import (
+    boards,
+    calibrate_floor,
+    calibrate_gripper,
+    capture_cameras,
+    drive_test,
+    self_calibrate as sc,
+    solve_cameras,
+)
 
 CALIB = ROOT / "data" / "calib.json"
 TOUCHES = ROOT / "data" / "floor_touches.json"
@@ -93,6 +113,24 @@ MIN_LOAD_SAMPLES = 50  # convention: fewer and a joint gets no proposal
 FIRST_SCENE_POSE_STEP = 2  # the first scene's poses: every other one
 CHECK_BAND_MM = 3.0  # convention: the touch's own scatter (1.5 mm) and step bracket, with room
 TOUCH_START_Z_M = -0.05  # the TCP height the touches descend from (calibrate_floor.py --start-z)
+STEPS = ("coarse", "position", "fine", "floor", "gripper", "drive")
+DEFAULT_STEPS = ("coarse", "position", "fine", "floor", "gripper")  # the owner's (Nov 4): drive only when asked
+NEED_POSITION = ("fine", "floor", "gripper")  # with the base where the floor board reads well
+
+
+def plan_steps(asked: list[str] | tuple[str, ...]) -> list[str]:
+    """The steps to run, in their order, with position added where one needs it. Refused:
+    unknown names, and coarse without fine (it moves three zeros the cameras were placed
+    through)."""
+    unknown = [a for a in asked if a not in STEPS]
+    if unknown:
+        raise ValueError(f"unknown steps {unknown}: choose from {', '.join(STEPS)}")
+    want = set(asked)
+    if "coarse" in want and "fine" not in want:
+        raise ValueError("coarse needs fine after it: the cameras were placed through the zeros it moves")
+    if want & set(NEED_POSITION):
+        want.add("position")
+    return [st for st in STEPS if st in want]
 
 
 def keep_awake() -> None:
@@ -262,10 +300,6 @@ def fine(robot: Robot, thickness: float, log: dict, closeup: bool = False) -> di
     scenes: list[Path] = []
     sweeps: list[Path] = []
     reverse = False
-    print("the base placed for the floor board:")
-    log["positioned"] = capture_cameras.position_for_floor_board(robot)
-    if not wrist_sees_floor_board(robot):
-        raise RuntimeError("after the base moved, the wrist camera (the arm at rest) still doesn't see the floor board")
     while True:
         first = not sweeps
         poses = capture_cameras.plan(
@@ -310,6 +344,52 @@ def fine(robot: Robot, thickness: float, log: dict, closeup: bool = False) -> di
                 scenes, floor_board_thickness=thickness, write=True, front_extra=extra
             )
             return final | {"scenes": scenes}
+
+
+def position(robot: Robot, log: dict) -> None:
+    """The base placed so the floor board reads well (capture_cameras.position_for_floor_board),
+    and the wrist camera at rest seeing it there."""
+    print("the base placed for the floor board:")
+    log["positioned"] = capture_cameras.position_for_floor_board(robot)
+    if not wrist_sees_floor_board(robot):
+        raise RuntimeError("after the base moved, the wrist camera (the arm at rest) still doesn't see the floor board")
+
+
+def board_pose_now(robot: Robot, cams: dict) -> np.ndarray:
+    """The floor board's pose in the arm's frame from one wrist look at rest, through the saved
+    camera calibration (the wrist camera's lens and mount): for floor and gripper without fine."""
+    k, dist = np.asarray(cams["wrist"]["K"]), np.asarray(cams["wrist"]["dist"])
+    for _ in range(CHECK_FRAMES):
+        d = boards.detect(boards.decode(robot.frame("wrist", after=time.time())[0])).get(FLOOR_BOARD)
+        cam_board = None if d is None else solve_cameras.board_in_camera(k, dist, FLOOR_BOARD, d)
+        if cam_board is not None:
+            joints = robot.status()["joints"]
+            return solve_cameras.fk(joints) @ np.asarray(cams["wrist"]["T_tcp_cam"]) @ cam_board
+    raise RuntimeError("the wrist camera at rest doesn't see the floor board")
+
+
+def gripper(robot: Robot, board_pose: np.ndarray, cams: dict, out: Path, log: dict) -> dict:
+    """calibrate_gripper.auto on the 2x4 brick right of the floor board, the base back where it
+    started after (the front camera's boards), the arm laid down; the curve written with the
+    widths it didn't measure kept from before, and the stall lag proposed."""
+    ref = boards.detect(robot.frame("front", after=time.time())[0])
+    measure = capture_cameras.front_measure(robot, ref, cams)
+    try:
+        points = calibrate_gripper.auto(robot, board_pose, out / "gripper")
+    finally:
+        print("back to the start:")
+        capture_cameras.return_to_start(robot, measure)
+        lay_down(robot)
+    old = json.loads(CALIB.read_text()).get("gripper_opening", {}).get("points", [])
+    curve = calibrate_gripper.write_curve(
+        calibrate_gripper.merged(points, old),
+        "calibrate_all.py gripper step: closed at the pick's speed until the stall on nothing and a 2x4 brick "
+        "(its short and long side, as a pick grasps it); other widths kept from before",
+    )
+    lag = calibrate_gripper.propose_stall_lag(points)
+    calibrate_gripper.save_stall_lag(lag)
+    log["gripper"] = {"points": points, "curve": curve, "stall_lag": lag}
+    return log["gripper"]
 
 
 def board_top_at(poses: list, x: float, y: float = 0.0) -> float:
@@ -367,10 +447,11 @@ def save_load_proposal(proposal: dict) -> None:
     CALIB.write_text(json.dumps(calib, indent=2) + "\n")
 
 
-def floor(robot: Robot, cams: dict, thickness: float, log: dict) -> dict:
+def floor(robot: Robot, board_poses: list, thickness: float, log: dict) -> dict:
     """The floor plane from touches on the bare floor and on the board (less its thickness); the
-    board's top as touched against as seen by the cameras is the run's check."""
-    where = touch_points(np.asarray(cams["floor_board_pose"][-1]))
+    board's top as touched against as seen by the cameras (`board_poses`, each scene's) is the
+    run's check."""
+    where = touch_points(np.asarray(board_poses[-1]))
     # Pointing straight down, the far end of the reach (30 cm) isn't reachable from the probe's
     # usual start 3 cm up (the wrist flex past its limit, Oct 30); from 5 cm below the arm base
     # it is, as the Oct 29-30 touches out to 30 cm started.
@@ -395,7 +476,7 @@ def floor(robot: Robot, cams: dict, thickness: float, log: dict) -> dict:
         for p in probes
     ]
     out = {"touches": probes, "floor_tcp_z": round(float(np.mean([q["z"] for q in points])), 4)}
-    out["check"] = board_check(probes, cams["floor_board_pose"])
+    out["check"] = board_check(probes, board_poses)
     calib = json.loads(CALIB.read_text())
     calib["floor_tcp_z_m"] = {
         "value": out["floor_tcp_z"],
@@ -422,8 +503,14 @@ def main() -> None:
     ap.add_argument("--board-thickness", type=float, required=True, help="the floor board's (m, a ruler's)")
     ap.add_argument("--check-only", action="store_true", help="step 0 only: no motion")
     ap.add_argument("--closeup", action="store_true", help="also the side board close-up in the first scene (off by default)")
+    ap.add_argument("--steps", default=",".join(DEFAULT_STEPS), help=f"comma-separated, of {', '.join(STEPS)}")
     args = ap.parse_args()
     logging.basicConfig(level=logging.WARNING)
+    try:
+        steps = plan_steps([a.strip() for a in args.steps.split(",") if a.strip()])
+    except ValueError as e:
+        raise SystemExit(str(e)) from None
+    print("steps:", ", ".join(steps))
 
     keep_awake()
     robot = Robot(require_calibrated=False)  # it makes the calibration
@@ -431,6 +518,10 @@ def main() -> None:
     robot.listeners.append(loads)
     with robot:
         checked = check(robot)
+        if "coarse" not in steps and checked["arm_calibration"] != "calibrated":
+            checked["problems"].append(f"the arm isn't calibrated ({checked['arm_calibration']}): run coarse and fine")
+        if "fine" not in steps and set(steps) & {"floor", "gripper", "drive"} and not capture_cameras._cameras():
+            checked["problems"].append("no saved camera calibration: run fine")
         print("checks:", checked)
         if checked["problems"] or args.check_only:
             if checked["problems"]:
@@ -445,22 +536,42 @@ def main() -> None:
             "solves": [],
             "corrections": [],
             "board_thickness_m": args.board_thickness,
+            "steps": steps,
         }
+        fl = None
         t0 = time.monotonic()
         try:
             if checked["off_rest"]:
                 lay_down(robot)
-            print("\n=== 1. coarse: the joints' ends ===")
-            coarse(robot, log)
-            print("\n=== 2-3. fine: the cameras and the joint zeros ===")
-            cams = fine(robot, args.board_thickness, log, closeup=args.closeup)
-            log["cameras"] = {k: cams[k] for k in ("joint_offsets_deg", "board_top_z", "floor_z", "rms_px")}
-            log["cameras"]["scenes"] = [s.name for s in cams["scenes"]]
+            if "coarse" in steps:
+                print("\n=== 1. coarse: the joints' ends ===")
+                coarse(robot, log)
+            if "position" in steps:
+                print("\n=== position: the base to the floor board ===")
+                position(robot, log)
+            board_poses = None
+            if "fine" in steps:
+                print("\n=== 2-3. fine: the cameras and the joint zeros ===")
+                cams = fine(robot, args.board_thickness, log, closeup=args.closeup)
+                log["cameras"] = {k: cams[k] for k in ("joint_offsets_deg", "board_top_z", "floor_z", "rms_px")}
+                log["cameras"]["scenes"] = [s.name for s in cams["scenes"]]
+                board_poses = cams["floor_board_pose"]
+            saved = capture_cameras._cameras()
+            if board_poses is None and {"floor", "gripper"} & set(steps):
+                board_poses = [board_pose_now(robot, saved).tolist()]
+            loads.paused = True  # the touches and grasps press on purpose
+            if "floor" in steps:
+                print("\n=== 4. the floor ===")
+                fl = floor(robot, board_poses, args.board_thickness, log)
+            if "gripper" in steps:
+                print("\n=== 5. the gripper ===")
+                gripper(robot, np.asarray(board_poses[-1]), saved, out, log)
+            if "drive" in steps:
+                print("\n=== 6. drive (reported, nothing applied) ===")
+                log["drive"] = drive_test.run(robot, saved)
             log["joint_loads"] = loads.propose()
-            save_load_proposal(log["joint_loads"])
-            print("\n=== 4. the floor ===")
-            loads.paused = True  # the touches press on the floor
-            fl = floor(robot, cams, args.board_thickness, log)
+            if log["joint_loads"]:
+                save_load_proposal(log["joint_loads"])
             log["state"] = "done"
         except Exception as e:  # noqa: BLE001 -- whatever stops it, the run ends with its summary and the arm down
             log["state"], log["reason"] = "stopped", f"{type(e).__name__}: {e}"
@@ -474,10 +585,13 @@ def main() -> None:
             (out / "summary.json").write_text(json.dumps(log, indent=1, default=str) + "\n")
     print(f"\n{log['state']} in {log['minutes']} min; summary: {out / 'summary.json'}")
     if log["state"] == "done":
-        print(f"  corrections applied: {log['corrections'] or 'none'}")
-        print(f"  final offsets (within their spread): {log['solves'][-1]['joint_offsets_deg']}")
-        ck = fl["check"]
-        if ck["made"]:
+        if "fine" in steps:
+            print(f"  corrections applied: {log['corrections'] or 'none'}")
+            print(f"  final offsets (within their spread): {log['solves'][-1]['joint_offsets_deg']}")
+        ck = fl["check"] if fl is not None else {"made": False, "why": "floor not run"}
+        if fl is None:
+            pass
+        elif ck["made"]:
             diffs = ", ".join(f"{q['x']:.2f} m {q['diff_mm']:+.1f}" for q in ck["points"])
             print(
                 f"  check, the board's top touched vs seen by the cameras: {diffs} mm -> "
@@ -485,6 +599,13 @@ def main() -> None:
             )
         else:
             print(f"  check not made: {ck['why']}")
+        if "gripper" in log:
+            g = log["gripper"]
+            print(f"  gripper opening (deg -> mm): {g['curve']}")
+            lag = g["stall_lag"]
+            print(f"  gripper stall lag: {'not proposed' if lag is None else lag} (hand-set 4 deg, NOT applied)")
+        if "drive" in log:
+            drive_test.report(log["drive"]["verdict"])
         print(
             "  joint stall thresholds (fraction of full scale; proposed from this run's loads, NOT applied):"
         )

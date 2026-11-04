@@ -73,7 +73,8 @@ def land(sk: Skills, obj: str | None = None) -> Result:
 def measure_width(sk: Skills, obj: str) -> dict | None:
     """The object's width from the last wrist look (the final look, the jaws over it): its
     extent along the jaws' closing direction (the image's horizontal, any residual angle
-    included) and its short side (what squeezing jaws close to), both on its measured top (m).
+    included), its short side (what squeezing jaws close to) and its long side, all on its
+    measured top (m).
     None when the look has no brick-shaped blob."""
     det = sk.seen.get(f"wrist:{obj}")
     m = None if det is None else brick_angle(det.jpeg, det.box, look=sk.looks.get(f"wrist:{obj}"))
@@ -83,6 +84,7 @@ def measure_width(sk: Skills, obj: str) -> dict | None:
     return {
         "extent_m": sk.geom.wrist_distance(*m["extent_u"], h, top, sk.roll),
         "short_m": sk.geom.wrist_distance(*m["across"], h, top, sk.roll),
+        "long_m": sk.geom.wrist_distance(*m["along"], h, top, sk.roll),
     }
 
 

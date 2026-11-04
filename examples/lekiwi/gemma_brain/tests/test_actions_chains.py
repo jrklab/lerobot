@@ -445,7 +445,8 @@ def _width_sk(monkeypatch, extent, short):
     sk.geom, sk.roll, sk.closed_mm, opened = _Geom(), 0.0, None, []
     sk.seen = {"wrist:red block": Detection(box=[0.4, 0.5, 0.55, 0.77], jpeg=b"x")}
     monkeypatch.setattr(actions, "brick_angle", lambda jpeg, box, look=None: {
-        "extent_u": [[0.4, 0.6], [0.4 + extent / 0.1, 0.6]], "across": [[0.4, 0.6], [0.4 + short / 0.1, 0.6]]})
+        "extent_u": [[0.4, 0.6], [0.4 + extent / 0.1, 0.6]], "across": [[0.4, 0.6], [0.4 + short / 0.1, 0.6]],
+        "along": [[0.4, 0.6], [0.4, 0.6 + 2 * short / 0.1]]})
     sk.grip = lambda how, width=None, **k: (opened.append((how, width)), Result(True, data={"mm": sk.closed_mm}))[1]
     return sk, opened
 

@@ -161,38 +161,31 @@ def drive_legs(robot, measure, leg_m: float, repeats: int, centre) -> list[dict]
     return out
 
 
-def main() -> None:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--leg", type=float, default=LEG_M, help="each leg's length (m)")
-    ap.add_argument(
-        "--repeats", type=int, default=3, help="3 or more: a direction's median ignores one bad leg"
-    )
-    args = ap.parse_args()
+REPEATS = 3  # 3 or more: a direction's median ignores one bad leg
 
+
+def run(robot, cams: dict, leg_m: float = LEG_M, repeats: int = REPEATS) -> dict:
+    """The legs from where the base stands (the front camera seeing a board), back to it after;
+    the legs and their verdict. Applies nothing."""
     import time
 
-    from common.robot import Robot
-
     from calibration import boards
-    from calibration.capture_cameras import _cameras, front_measure, return_to_start
+    from calibration.capture_cameras import front_measure, return_to_start
 
-    cams = _cameras()
-    if not cams:
-        raise SystemExit("no cameras in calib.json: run calibrate_all.py first")
-    with Robot() as robot:
-        ref = boards.detect(robot.frame("front", after=time.time())[0])
-        if not ref:
-            raise SystemExit(
-                "the front camera sees no board: place the robot at the calibration scene's start"
-            )
-        measure = front_measure(robot, ref, cams)
-        print(f"{args.repeats} x {len(LEGS)} legs of {100 * args.leg:.0f} cm:")
-        try:
-            legs = drive_legs(robot, measure, args.leg, args.repeats, cams["base_turn_centre"])
-        finally:
-            print("back to the start:")
-            return_to_start(robot, measure)
-    v = verdict(legs)
+    ref = boards.detect(robot.frame("front", after=time.time())[0])
+    if not ref:
+        raise RuntimeError("the front camera sees no board: place the robot at the calibration scene's start")
+    measure = front_measure(robot, ref, cams)
+    print(f"{repeats} x {len(LEGS)} legs of {100 * leg_m:.0f} cm:")
+    try:
+        legs = drive_legs(robot, measure, leg_m, repeats, cams["base_turn_centre"])
+    finally:
+        print("back to the start:")
+        return_to_start(robot, measure)
+    return {"legs": legs, "verdict": verdict(legs), "leg_m": leg_m}
+
+
+def report(v: dict) -> None:
     print(
         f"\nby direction (median deg off the command): {v['by_direction_deg']}; spread {v['spread_deg']} deg"
         f" (the same within {v['tolerance_deg']})"
@@ -210,8 +203,29 @@ def main() -> None:
         )
     else:
         print("different per direction: the wheels, not the arm (no pan correction)")
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--leg", type=float, default=LEG_M, help="each leg's length (m)")
+    ap.add_argument("--repeats", type=int, default=REPEATS, help="3 or more: a direction's median ignores one bad leg")
+    args = ap.parse_args()
+
+    from common.robot import Robot
+
+    from calibration.capture_cameras import _cameras
+
+    cams = _cameras()
+    if not cams:
+        raise SystemExit("no cameras in calib.json: run calibrate_all.py first")
+    with Robot() as robot:
+        try:
+            res = run(robot, cams, args.leg, args.repeats)
+        except RuntimeError as e:
+            raise SystemExit(str(e)) from None
+    report(res["verdict"])
     out = ROOT / "runs" / f"{datetime.datetime.now():%Y%m%dT%H%M%S}-drive_test.json"
-    out.write_text(json.dumps({"legs": legs, "verdict": v, "leg_m": args.leg}, indent=1) + "\n")
+    out.write_text(json.dumps(res, indent=1) + "\n")
     print(f"written {out}")
 
 

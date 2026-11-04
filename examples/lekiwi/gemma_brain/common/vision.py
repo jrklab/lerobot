@@ -80,6 +80,10 @@ def brick_angle(jpeg: bytes, box, pad: float = 0.25, look: Look | None = None) -
     nx, ny = math.cos(t) * half, math.sin(t) * half  # normal to the long axis (image vertical + angle)
     across = [[round((X0 + cx - nx) / w, 4), round((Y0 + cy - ny) / h, 4)],
               [round((X0 + cx + nx) / w, 4), round((Y0 + cy + ny) / h, 4)]]
+    # ...and of its short sides: its length along the long axis.
+    lx, ly = -math.sin(t) * max(rw, rh) / 2, math.cos(t) * max(rw, rh) / 2
+    along = [[round((X0 + cx - lx) / w, 4), round((Y0 + cy - ly) / h, 4)],
+             [round((X0 + cx + lx) / w, 4), round((Y0 + cy + ly) / h, 4)]]
     # Its extent along the image's horizontal through the centre: what the jaws (closing
     # left-right in the wrist image) have to clear, a residual angle included.
     us = cv2.boxPoints(((cx, cy), (rw, rh), a))[:, 0]
@@ -88,6 +92,7 @@ def brick_angle(jpeg: bytes, box, pad: float = 0.25, look: Look | None = None) -
     return {
         "angle_deg": round(float(long_angle), 1),
         "across": across,
+        "along": along,
         "extent_u": extent_u,
         "aspect": round(float(max(rw, rh) / max(1.0, min(rw, rh))), 2),
         "fill": round(float(cv2.contourArea(c) / max(1.0, box_area)), 2),
@@ -138,6 +143,32 @@ def jaw_geometry(jpeg: bytes, fixed: dict | None = None, band: float = 0.06) -> 
         moving_tip, moving_inner = jaw(max(left, key=lambda i: stats[i][cv2.CC_STAT_AREA]), inner_is_left=False)
         out.update(moving_tip_v=moving_tip, moving_inner_u=moving_inner, opening_u=fixed_inner - moving_inner)
     return out
+
+
+# coloured_blobs: a LEGO brick's colour against the floor, a board's black and white and the jaws'
+# blue (L*a*b* chroma: the red brick ~60, the wooden floor under 20), and its least size in the
+# image (share of the frame: a 2x4 brick from the hover is ~1.5%).
+BLOB_MIN_CHROMA = 35.0
+BLOB_MIN_AREA = 0.002
+
+
+def coloured_blobs(jpeg: bytes, min_chroma: float = BLOB_MIN_CHROMA) -> list[list[float]]:
+    """The boxes (image fractions) of the strongly coloured, not jaw-blue blobs in a frame,
+    largest first: what the calibration's gripper step finds a brick by, without a model."""
+    img = cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_COLOR)
+    if img is None:
+        return []
+    h, w = img.shape[:2]
+    lab = cv2.cvtColor(cv2.GaussianBlur(img, (5, 5), 0), cv2.COLOR_BGR2LAB).astype(float)
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    jaw = (hsv[..., 0] > 95) & (hsv[..., 0] < 135) & (hsv[..., 1] > 120)
+    mask = ((np.hypot(lab[..., 1] - 128, lab[..., 2] - 128) > min_chroma) & ~jaw).astype(np.uint8) * 255
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((5, 5), np.uint8))
+    n, _, stats, _ = cv2.connectedComponentsWithStats(mask)
+    blobs = [stats[i] for i in range(1, n) if stats[i][cv2.CC_STAT_AREA] >= BLOB_MIN_AREA * h * w]
+    blobs.sort(key=lambda st: -st[cv2.CC_STAT_AREA])
+    return [[round(float(x) / w, 4), round(float(y) / h, 4), round(float(x + bw) / w, 4), round(float(y + bh) / h, 4)]
+            for x, y, bw, bh, _ in blobs]
 
 
 # snap_top: the object's colour is its box's top band (this share of the box's height, the
