@@ -201,15 +201,15 @@
     "value": {
       "curve": [
         [
-          1.41,
+          1.85,
           0.0
         ],
         [
-          9.93,
+          10.51,
           15.8
         ],
         [
-          22.32,
+          22.59,
           31.8
         ],
         [
@@ -219,44 +219,66 @@
       ]
     },
     "meaning": "jaw opening (mm, at the tips) against the gripper angle (deg open from its recorded closed end): straight between these [deg, mm] points; beyond the last, its last segment's slope",
-    "method": "calibrate_gripper.py: closed at the pick's speed until the stall on nothing and LEGO bricks of known width",
-    "date": "2026-10-29",
+    "method": "calibrate_all.py gripper step: closed at the pick's speed until the stall on nothing and a 2x4 brick (its short and long side, as a pick grasps it); other widths kept from before",
+    "date": "2026-11-04",
     "points": [
       {
         "mm": 0.0,
-        "deg": 1.58,
+        "what": "nothing",
+        "deg": 2.29,
         "stalled": false,
-        "what": "nothing between the jaws"
-      },
-      {
-        "mm": 15.8,
-        "deg": 10.02,
-        "stalled": true,
-        "what": "the brick across its short side (2 studs)"
-      },
-      {
-        "mm": 31.8,
-        "deg": 22.32,
-        "stalled": true,
-        "what": "the brick across its long side (4 studs)"
+        "free_lag_max_deg": 5.74,
+        "stall_lag_deg": 2.29,
+        "trace_n": 54
       },
       {
         "mm": 0.0,
-        "deg": 1.23,
+        "what": "nothing",
+        "deg": 1.41,
         "stalled": false,
-        "what": "nothing between the jaws"
+        "free_lag_max_deg": 5.71,
+        "stall_lag_deg": 1.67,
+        "trace_n": 55
       },
       {
         "mm": 15.8,
-        "deg": 9.84,
+        "what": "2x4 brick, short side",
+        "measured_mm": 16.4,
+        "deg": 10.55,
         "stalled": true,
-        "what": "the brick across its short side (2 studs)"
+        "free_lag_max_deg": 9.32,
+        "stall_lag_deg": 5.0,
+        "trace_n": 12
+      },
+      {
+        "mm": 15.8,
+        "what": "2x4 brick, short side",
+        "measured_mm": 16.3,
+        "deg": 10.46,
+        "stalled": true,
+        "free_lag_max_deg": 10.99,
+        "stall_lag_deg": 5.0,
+        "trace_n": 11
       },
       {
         "mm": 31.8,
-        "deg": 22.32,
+        "what": "2x4 brick, long side",
+        "measured_mm": 31.8,
+        "deg": 22.59,
         "stalled": true,
-        "what": "the brick across its long side (4 studs)"
+        "free_lag_max_deg": 10.66,
+        "stall_lag_deg": 5.0,
+        "trace_n": 12
+      },
+      {
+        "mm": 31.8,
+        "what": "2x4 brick, long side",
+        "measured_mm": 31.8,
+        "deg": 22.59,
+        "stalled": true,
+        "free_lag_max_deg": 10.44,
+        "stall_lag_deg": 5.0,
+        "trace_n": 12
       },
       {
         "mm": 47.8,
