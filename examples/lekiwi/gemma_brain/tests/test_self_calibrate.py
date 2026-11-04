@@ -155,6 +155,13 @@ def test_the_provisional_offsets_read_rest_and_wrap_into_the_register():
     assert (5754 - off) % RES == round(2047 + 81.29 * TPD)
 
 
+
+def test_a_kept_joint_keeps_its_zero_and_only_its_range_opens():
+    # The pan's zero, measured by drive_test.py: not re-placed from wherever it was left at rest.
+    calib = {"arm_shoulder_pan": {"homing_offset": 1795, "range_min": 683, "range_max": 3365, "drive_mode": 0}}
+    new = sc.provisional_calibration(calib, {"arm_shoulder_pan": -3.4}, keep=("arm_shoulder_pan",))
+    assert new["arm_shoulder_pan"] == {"homing_offset": 1795, "range_min": 0, "range_max": RES - 1}
+
 def test_a_new_arm_calibrates_itself(state):
     robot = NewArm()
     sc.bootstrap(robot)

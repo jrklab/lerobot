@@ -26,7 +26,8 @@ CENTRE = np.array([-0.030, 0.0])  # the base's turning centre in the arm's frame
 
 class Base:
     """The arm frame's origin as the front camera measures it, against the start. pan_err: a pan
-    read pan_err short of true turns everything the cameras placed by -pan_err; wheel: per
+    zero that self_calibrate.py correct shoulder_pan=+pan_err fixes turns the drives the cameras
+    see by +pan_err (Nov 3, measured); wheel: per
     command direction, the angle (deg) the base actually drives off it; turn: deg it turns per leg."""
 
     def __init__(self, pan_err=0.0, wheel=None, turn=0.0, scale=1.0):
@@ -39,7 +40,7 @@ class Base:
             (int(np.sign(dx)), int(np.sign(dy)))
         ]
         drive = dt._rot(self.head + self.wheel.get(key, 0.0)) @ cmd * self.scale  # in the true frame
-        self.pos = self.pos + dt._rot(-self.pan_err) @ drive + (np.eye(2) - dt._rot(self.turn)) @ CENTRE
+        self.pos = self.pos + dt._rot(self.pan_err) @ drive + (np.eye(2) - dt._rot(self.turn)) @ CENTRE
         self.head += self.turn
 
     def measure(self):
@@ -53,7 +54,7 @@ def _run(base, repeats=2):
 def test_a_pan_error_turns_every_direction_the_same_and_is_named():
     v = _run(Base(pan_err=3.2))
     assert v["same_every_way"] and v["pan_offset_deg"] == pytest.approx(3.2, abs=0.05)
-    assert all(a == pytest.approx(-3.2, abs=0.05) for a in v["by_direction_deg"].values())
+    assert all(a == pytest.approx(3.2, abs=0.05) for a in v["by_direction_deg"].values())
 
 
 def test_wheel_errors_turn_each_direction_its_own_way_and_name_no_pan_correction():
@@ -83,3 +84,18 @@ def test_angles_wrap_round():
         np.zeros(2),
     )
     assert -180.0 <= r["angle_deg"] <= 180.0
+
+
+def test_one_bad_leg_doesnt_sway_a_direction_with_three_repeats():
+    # Nov 3's eight legs (the first back +8.3 deg), plus a third repeat in line with the rest.
+    angles = {
+        "back": [8.3, 1.7, 2.6],
+        "forward": [2.8, 3.2, 2.9],
+        "left": [3.1, 2.6, 2.8],
+        "right": [3.0, 2.0, 2.7],
+    }
+    legs = [{"dir": d, "repeat": k, "angle_deg": a} for d, v in angles.items() for k, a in enumerate(v)]
+    v = dt.verdict(legs)
+    assert v["same_every_way"] and v["by_direction_deg"]["back"] == pytest.approx(2.6)
+    assert v["pan_offset_deg"] == pytest.approx(2.75, abs=0.01)
+    assert v["outliers"] == [{"dir": "back", "repeat": 0, "angle_deg": 8.3}] and v["repeats"] == 3

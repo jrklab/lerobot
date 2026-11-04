@@ -239,7 +239,8 @@ def touch_points(board_pose: np.ndarray) -> list[tuple[float, str]]:
 
 
 def coarse(robot: Robot, log: dict) -> None:
-    sc.bootstrap(robot)
+    calibrated = robot.status().get("arm_calibration") == "calibrated"
+    sc.bootstrap(robot, keep=sc.KEEP_WHEN_CALIBRATED if calibrated else ())
     for joint in sc.ORDER:
         log["ends"][joint] = sc.probe_joint(robot, joint)
     sc.write(robot, dry_run=False)

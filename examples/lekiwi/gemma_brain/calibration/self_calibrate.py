@@ -99,6 +99,10 @@ ORDER = [
 ]
 # Zeros from the two ends (the others keep the rest placement: see the module docstring).
 ZERO_FROM_ENDS = ("arm_shoulder_lift", "arm_elbow_flex", "arm_wrist_flex")
+# Measured otherwise, so kept when the arm is already calibrated: the pan's zero by
+# drive_test.py (Nov 3: the base drove 2.4 deg off the arm's x axis every way). Placed from rest
+# instead, it reads wherever the pan was left (it doesn't settle on a vertical axis) as rest.
+KEEP_WHEN_CALIBRATED = ("arm_shoulder_pan",)
 # Where the SO-101 rests folded, placed by hand: the planner's rest pose, but with the elbow as
 # far folded as the arm lies when set down (Oct 30, this arm, read in its camera-checked
 # calibration: 94.4; the planner's commanded rest, 81.3, holds it 13 deg less folded).
@@ -144,17 +148,17 @@ def present_ticks(joint: str, c: dict, deg: float) -> float:
 
 
 def provisional_calibration(
-    calib: dict[str, dict], measured: dict[str, float], rest: dict[str, float] = REST
+    calib: dict[str, dict], measured: dict[str, float], rest: dict[str, float] = REST, keep: tuple[str, ...] = ()
 ) -> dict:
     """Homing offsets for each joint, at rest, to read its rest angle (the gripper: the half
     turn, room to both sides), and whole-turn ranges. Feetech: Present = Actual - Homing_Offset
-    (mod a turn)."""
+    (mod a turn). keep: these joints keep their offset (only their range opens)."""
     out = {}
     for joint, c in calib.items():
         actual = round(present_ticks(joint, c, measured[joint])) + c["homing_offset"]
         want = HOMING_TICK if joint == GRIPPER else HOMING_TICK + rest[joint] * TICKS_PER_DEG
         out[joint] = {
-            "homing_offset": _wrap_offset(round(actual - want)),
+            "homing_offset": c["homing_offset"] if joint in keep else _wrap_offset(round(actual - want)),
             "range_min": 0,
             "range_max": RESOLUTION - 1,
         }
@@ -314,10 +318,11 @@ def _at(robot: Robot) -> dict[str, float]:
     return robot.status()["joints"]
 
 
-def bootstrap(robot: Robot, joints: list[str] | None = None) -> dict:
+def bootstrap(robot: Robot, joints: list[str] | None = None, keep: tuple[str, ...] = ()) -> dict:
     """The arm is at rest. Keeps the calibration the motors had (for restore), then writes the
     provisional one to the motors only. joints: only these (their ends found so far are
-    dropped; the others' offsets and ends are kept)."""
+    dropped; the others' offsets and ends are kept). keep: these keep their zero (their range
+    opens for the probes): see KEEP_WHEN_CALIBRATED."""
     cal = robot.calibration()
     state = _load()
     if "before" not in state:
@@ -330,7 +335,7 @@ def bootstrap(robot: Robot, joints: list[str] | None = None) -> dict:
     # pose commanded in an earlier run's readings, its wrist flex read several degrees off, and
     # its end fell outside the probe's sweep).
     robot.write_calibration({}, save=False, relax_s=RELAX_S)
-    new = provisional_calibration(cal["joints"], _at(robot))
+    new = provisional_calibration(cal["joints"], _at(robot), keep=keep)
     if joints:
         new = {j: new[j] for j in joints}
         ends = {j: e for j, e in state.get("ends", {}).items() if j not in joints}

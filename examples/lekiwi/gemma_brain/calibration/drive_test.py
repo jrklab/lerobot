@@ -20,7 +20,7 @@
 as the base's forward; the base's moves, measured by the front camera (placed in the arm's frame
 by the camera calibration), say how far off that is, and why.
 
-    .venv/bin/python calibration/drive_test.py [--leg 0.2] [--repeats 2]
+    .venv/bin/python calibration/drive_test.py [--leg 0.2] [--repeats 3]
 
 From the calibration scene's start (the front camera seeing the boards; ~25 cm clear behind and
 to the left): legs of LEG_M back, forward (back to the start), left, right (back again), each
@@ -90,23 +90,34 @@ def leg_result(before, after, cmd_base, centre) -> dict:
 
 
 def verdict(legs: list[dict]) -> dict:
-    """The per-direction means, and what they say: one angle every way (the arm's frame turned
-    on the base: a pan correction of minus it) or not (the wheels)."""
+    """The per-direction medians, and what they say: one angle every way (the arm's frame turned
+    on the base: a pan correction of it) or not (the wheels). Medians, not means: Nov 3's
+    first leg back read +8.3 deg against +1.7 to +3.2 for the other seven, and its mean alone made
+    "back" differ; with three or more repeats a direction's median ignores one such leg. The legs
+    off their direction's median by more than SAME_ANGLE_DEG are listed as outliers."""
     by = {}
     for leg in legs:
         by.setdefault(leg["dir"], []).append(leg["angle_deg"])
-    means = {d: round(float(np.mean(v)), 2) for d, v in by.items()}
-    spread = max(means.values()) - min(means.values())
-    mean = float(np.mean([leg["angle_deg"] for leg in legs]))
+    medians = {d: round(float(np.median(v)), 2) for d, v in by.items()}
+    spread = max(medians.values()) - min(medians.values())
+    mean = float(np.mean(list(medians.values())))
     same = spread <= SAME_ANGLE_DEG
-    # The front camera was placed through the arm's zeros: a pan read d short of true (offset +d,
-    # self_calibrate.py correct) turns everything it placed by -d, the base's moves included.
+    outliers = [
+        {"dir": leg["dir"], "repeat": leg["repeat"], "angle_deg": leg["angle_deg"]}
+        for leg in legs
+        if abs(leg["angle_deg"] - medians[leg["dir"]]) > SAME_ANGLE_DEG
+    ]
+    # The front camera was placed through the arm's zeros, so a pan zero off turns the base's
+    # moves as it sees them. Measured, not derived (Nov 3): correcting the pan by -2.43 deg took
+    # the drives from +2.4 to +5.3 deg, so the correction is plus the angle.
     return {
-        "by_direction_deg": means,
+        "by_direction_deg": medians,
         "spread_deg": round(spread, 2),
         "mean_deg": round(mean, 2),
         "same_every_way": same,
-        "pan_offset_deg": round(-mean, 2) if same else None,
+        "outliers": outliers,
+        "repeats": min(len(v) for v in by.values()),
+        "pan_offset_deg": round(mean, 2) if same else None,
     }
 
 
@@ -129,7 +140,9 @@ def drive_legs(robot, measure, leg_m: float, repeats: int, centre) -> list[dict]
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--leg", type=float, default=LEG_M, help="each leg's length (m)")
-    ap.add_argument("--repeats", type=int, default=2)
+    ap.add_argument(
+        "--repeats", type=int, default=3, help="3 or more: a direction's median ignores one bad leg"
+    )
     args = ap.parse_args()
 
     import time
@@ -156,7 +169,15 @@ def main() -> None:
             print("back to the start:")
             return_to_start(robot, measure)
     v = verdict(legs)
-    print(f"\nby direction (deg off the command): {v['by_direction_deg']}; spread {v['spread_deg']} deg")
+    print(
+        f"\nby direction (median deg off the command): {v['by_direction_deg']}; spread {v['spread_deg']} deg"
+    )
+    for o in v["outliers"]:
+        print(
+            f"  outlier: {o['dir']} (repeat {o['repeat']}) {o['angle_deg']:+.1f} deg, off its direction's median"
+        )
+    if v["repeats"] < 3:
+        print("  (under 3 repeats: a direction's median is its mean, one bad leg can sway it)")
     if v["same_every_way"]:
         print(
             f"the same every way, {v['mean_deg']:+.2f} deg: the arm's frame is turned on the base.\n"
