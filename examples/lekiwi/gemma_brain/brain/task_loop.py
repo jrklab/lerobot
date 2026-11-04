@@ -173,6 +173,14 @@ class PlanBrain:
     def run(self, goal: str) -> tuple[bool, str]:
         self.log.ev("goal", goal=goal, planner=self.planner.model.model, holding=self.holding)
         self.sk.holding = self.holding
+        # From rest, where every chain's first move was planned from: raised by hand, the move
+        # down to the hover passed the shoulder lift's limit and the first pick was refused
+        # (Nov 4, run 20261104T094659; the fold after it, then the same move, went through).
+        if not self.sk.arm.at_pose("rest"):
+            print("folding the arm to rest first")
+            why = self.fold()
+            if why:
+                return False, f"couldn't fold the arm to rest first: {why}"
         front, wrist = self.frames()
         steps, why = self.make_plan(goal, front, wrist)
         if steps is None:

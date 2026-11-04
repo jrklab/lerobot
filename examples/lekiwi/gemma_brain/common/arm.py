@@ -379,6 +379,11 @@ class Arm:
         self.check_clear(cur, {**cur, **NAMED_POSES[name]}, f"move to {name}")
         return self.robot.joints(NAMED_POSES[name], speed=speed, z_min=self.joint_z_min())
 
+    def at_pose(self, name: str) -> bool:
+        """Whether the arm's targets are within AT_POSE_DEG of a named pose on every joint."""
+        cur = self.targets()
+        return all(abs(cur[j] - v) < AT_POSE_DEG for j, v in NAMED_POSES[name].items())
+
     def reset(self, to: str = "rest", speed: float = FREE_JOINT_SPEED) -> None:
         """Back to a known pose from anywhere: lift the TCP straight up first if it's low (so
         the swing home can't drag the gripper across the floor or the block), then "ready",
@@ -389,7 +394,7 @@ class Arm:
         if to not in ("rest", "ready"):
             raise PlanError("reset: 'to' must be 'rest' or 'ready'")
         cur = self.targets()
-        if all(abs(cur[j] - v) < AT_POSE_DEG for j, v in NAMED_POSES[to].items()):
+        if self.at_pose(to):
             return  # already there: no lift-and-swing (it used to unfold and refold the arm)
         try:
             # Straight there in one joint move when that sweep clears the floor and the body

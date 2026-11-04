@@ -60,8 +60,12 @@ class FakeArm:
 
     z_min = -0.065
 
-    def __init__(self, z=0.15, stuck=False):
-        self.z, self.stuck, self.moves = z, stuck, []
+    def __init__(self, z=0.15, stuck=False, at_rest=True):
+        self.z, self.stuck, self.moves, self.at_rest = z, stuck, [], at_rest
+
+    def at_pose(self, name):
+        return self.at_rest
+
 
     def tcp(self):
         m = np.eye(4)
@@ -76,6 +80,7 @@ class FakeArm:
 
     def reset(self):
         self.moves.append(("reset",))
+        self.at_rest = True
 
 
 class FakeSkills:
@@ -340,3 +345,13 @@ def test_starts_holding(world):
     sk.gripped = True
     ok, _ = brain(FakePlanner('place "green block" next_to "red block"\ndone'), sk, holding="green block").run("x")
     assert ok and world.calls == ["place green block next_to red block"], world.calls
+
+
+def test_a_run_starts_from_rest_folding_a_raised_arm_first(world):
+    # Nov 4: raised by hand, the first move down to the hover passed the lift's limit.
+    sk = FakeSkills(arm=FakeArm(at_rest=False))
+    ok, _ = brain(FakePlanner('pick "a"'), sk).run("pick a")
+    assert ok and world.calls[:2] == ["hover", "pick a"] and sk.arm.moves[0] == ("reset",)
+    sk = FakeSkills()  # already at rest: nothing moves first
+    brain(FakePlanner('pick "a"'), sk).run("pick a")
+    assert sk.arm.moves == []
