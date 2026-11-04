@@ -403,22 +403,22 @@
   },
   "joint_stall_thresholds": {
     "value": {
-      "arm_shoulder_pan": 0.127,
+      "arm_shoulder_pan": 0.192,
       "arm_shoulder_lift": 0.3,
-      "arm_elbow_flex": 0.258,
-      "arm_wrist_flex": 0.162,
-      "arm_wrist_roll": 0.072
+      "arm_elbow_flex": 0.326,
+      "arm_wrist_flex": 0.182,
+      "arm_wrist_roll": 0.216
     },
     "enabled": false,
     "meaning": "per arm joint, the load (fraction of the motor's full scale) above which a (nearly) still joint counts as stalled, proposed for robot_bridge.STALL_LOAD_THRESHOLDS; not applied",
-    "method": "calibrate_all.py: the 99.5 percentile of each joint's load while still over the run (probes and floor touches left out), times 1.5",
+    "method": "calibrate_all.py: the 99.5 percentile of each joint's load while still over the run (probes and floor touches left out), times 1.5; at least the highest load times 1.2",
     "date": "2026-11-04",
     "loads": {
       "arm_shoulder_pan": {
         "n": 3298,
         "load_p": 84,
         "load_max": 160,
-        "proposed": 0.127,
+        "proposed": 0.192,
         "current": 0.3
       },
       "arm_shoulder_lift": {
@@ -432,21 +432,21 @@
         "n": 2963,
         "load_p": 172,
         "load_max": 272,
-        "proposed": 0.258,
+        "proposed": 0.326,
         "current": 0.5
       },
       "arm_wrist_flex": {
         "n": 2750,
         "load_p": 108,
         "load_max": 152,
-        "proposed": 0.162,
+        "proposed": 0.182,
         "current": 0.5
       },
       "arm_wrist_roll": {
         "n": 2980,
         "load_p": 48,
         "load_max": 180,
-        "proposed": 0.072,
+        "proposed": 0.216,
         "current": 0.3
       }
     }

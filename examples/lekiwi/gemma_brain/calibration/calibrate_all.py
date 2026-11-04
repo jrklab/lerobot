@@ -84,6 +84,11 @@ CHECK_FRAMES = 5  # convention
 LOAD_PERCENTILE = 99.5
 # ...times this margin: a blocked joint pushes on towards its torque limit, a holding one stays put.
 STALL_MARGIN = 1.5
+# ...but never below the highest load seen while still times this: the run's own moves must not
+# read as stalls (Nov 3: the percentile rule put pan at 0.10, wrist flex 0.16 and roll 0.06, under
+# the 16%, 16.4% and 6.4% they reached holding and starting moves). Convention: room for a load a
+# little above any seen.
+MAX_LOAD_MARGIN = 1.2
 MIN_LOAD_SAMPLES = 50  # convention: fewer and a joint gets no proposal
 FIRST_SCENE_POSE_STEP = 2  # the first scene's poses: every other one
 CHECK_BAND_MM = 3.0  # convention: the touch's own scatter (1.5 mm) and step bracket, with room
@@ -127,17 +132,19 @@ class LoadLog:
 
     def propose(self) -> dict:
         """Per joint: samples, the percentile and highest load (0.1 % of full scale), the proposed
-        threshold (fraction of full scale, as STALL_LOAD_THRESHOLDS) and today's."""
+        threshold (fraction of full scale, as STALL_LOAD_THRESHOLDS: the percentile with the
+        margin, at least the highest with MAX_LOAD_MARGIN) and today's."""
         out = {}
         for j, v in self.samples.items():
             if len(v) < MIN_LOAD_SAMPLES:
                 continue
             p = float(np.percentile(v, LOAD_PERCENTILE))
+            proposed = max(STALL_MARGIN * p, MAX_LOAD_MARGIN * max(v)) / 1000.0
             out[j] = {
                 "n": len(v),
                 "load_p": round(p),
                 "load_max": round(max(v)),
-                "proposed": round(min(STALL_MARGIN * p / 1000.0, 0.95), 3),
+                "proposed": round(min(proposed, 0.95), 3),
                 "current": STALL_LOAD_THRESHOLDS[j],
             }
         return out
@@ -353,7 +360,7 @@ def save_load_proposal(proposal: dict) -> None:
         "meaning": "per arm joint, the load (fraction of the motor's full scale) above which a (nearly) still "
         "joint counts as stalled, proposed for robot_bridge.STALL_LOAD_THRESHOLDS; not applied",
         "method": f"calibrate_all.py: the {LOAD_PERCENTILE} percentile of each joint's load while still over the run "
-        f"(probes and floor touches left out), times {STALL_MARGIN}",
+        f"(probes and floor touches left out), times {STALL_MARGIN}; at least the highest load times {MAX_LOAD_MARGIN}",
         "date": datetime.date.today().isoformat(),
         "loads": proposal,
     }

@@ -273,6 +273,17 @@ def test_the_proposal_is_the_still_loads_percentile_with_the_margin(tmp_path, mo
     assert saved["enabled"] is False and saved["value"]["arm_shoulder_lift"] == pytest.approx(0.45)
 
 
+
+def test_the_proposal_never_falls_below_the_highest_still_load():
+    # Nov 3's pan: mostly ~7% still, but 16% at times (holding, starting moves) -- too rare for the
+    # percentile; the proposal must still clear it.
+    log = ca.LoadLog()
+    for k in range(400):
+        log(_status([160 if k == 0 else 68, 300, 200, 120, 60]))
+    p = log.propose()["arm_shoulder_pan"]
+    assert p["load_max"] == 160 and p["proposed"] == pytest.approx(ca.MAX_LOAD_MARGIN * 0.16)
+    assert p["proposed"] > p["load_max"] / 1000.0
+
 def test_too_few_samples_propose_nothing():
     log = ca.LoadLog()
     log(_status([100] * 5))
