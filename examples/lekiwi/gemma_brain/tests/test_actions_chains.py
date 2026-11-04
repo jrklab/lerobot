@@ -62,9 +62,9 @@ def test_lift_right_after_landing_is_allowed():
     sim, sk = skills_over(real_floor_tcp_z=-0.12, predicted=-0.12)
     assert actions.land(sk).ok
     before = sk.tcp()[2]
-    r = sk.move("arm", delta=(0.0, 0.0, prm.LIFT_M.value))
+    r = sk.move("arm", delta=(0.0, 0.0, prm.HOVER_HEIGHT_M.value))
     assert r.ok, r
-    assert sk.tcp()[2] > before + prm.LIFT_M.value - 0.01
+    assert sk.tcp()[2] > before + prm.HOVER_HEIGHT_M.value - 0.01
 
 def test_lift_halves_where_the_full_lift_is_out_of_reach():
     from brain.primitives import Result
@@ -72,15 +72,38 @@ def test_lift_halves_where_the_full_lift_is_out_of_reach():
     tried = []
 
     class S:
+        heights, held_below = {}, 0.004
+
+        def height(self):
+            return 0.004
+
         def move(self, part, delta=None, **k):
             tried.append(round(delta[2], 4))
-            return Result(delta[2] < 0.1, "" if delta[2] < 0.1 else "can't move there")
+            return Result(delta[2] < 0.05, "" if delta[2] < 0.05 else "can't move there")
 
         def held(self):
             return True
 
     r = actions.lift(S())
-    assert r.ok and tried == [round(prm.LIFT_M.value, 4), round(prm.LIFT_M.value / 2, 4)]
+    up = prm.HOVER_HEIGHT_M.value - 0.004  # up to the carry height: nothing taller measured
+    assert r.ok and tried == [round(up, 4), round(up / 2, 4)]
+
+
+def test_the_carry_clears_the_tallest_measured_object():
+    sk = _height_sk({"red block": 0.012, "tall box": 0.12})
+    sk.held_below = 0.004
+    assert actions.carry_height(sk) == pytest.approx(0.12 + 0.004 + prm.PLACE_CLEARANCE_M.value)
+    sk.heights = {"cup": 0.068}  # lower than the hover: the hover height stands
+    assert actions.carry_height(sk) == prm.HOVER_HEIGHT_M.value
+
+
+def test_the_close_notes_how_far_the_object_reaches_below_the_jaws():
+    from brain.primitives import Result
+
+    sk = _height_sk({})
+    sk.height = lambda: 0.0042
+    sk.grip = lambda how, **k: Result(True)
+    assert actions.close(sk).ok and sk.held_below == 0.0042
 
 def test_carry_holds_at_the_hover_without_folding():
     from brain.primitives import Result
@@ -89,6 +112,7 @@ def test_carry_holds_at_the_hover_without_folding():
 
     class S:
         arm = type("A", (), {"reset": lambda self: calls.append("fold")})()
+        heights, held_below = {}, None
 
         def move(self, part, **k):
             calls.append((part, k.get("height")))
@@ -227,6 +251,7 @@ def test_pick_chain_runs_its_steps_in_order_and_stops_at_the_first_failure(monke
         monkeypatch.setattr(chains.actions, name, ok(name))
     sk = Skills.__new__(Skills)
     sk.log, sk.heights, sk._height_fallbacks = None, {}, set()
+    sk.height = lambda: 0.004
     sk.servo = lambda obj, goal, part=None: (calls.append(type(goal).__name__), Result(True))[1]
     sk.move = lambda part, **k: (calls.append("down"), Result(True))[1]
     sk.grip = lambda how, **k: (calls.append(how), Result(True))[1]
@@ -315,6 +340,8 @@ def test_the_approachs_first_drive_uses_the_main_models_look():
 def _height_sk(heights):
     sk = Skills.__new__(Skills)
     sk.log, sk.heights, sk._height_fallbacks = None, dict(heights), set()
+    sk.widths, sk.held_below, sk.geom = {}, None, None
+    sk.height = lambda: 0.004
     sk.events = []
     sk.ev = lambda name, **k: sk.events.append((name, k))
     return sk
@@ -353,20 +380,42 @@ def test_the_landing_refuses_a_contact_over_half_the_objects_height(height, abov
     assert (not r.ok) == refused
 
 
-def test_place_heights_follow_the_targets_measured_height(monkeypatch):
-    """The demo's release and hover above its own target's top, over a target of another height."""
+def test_the_release_puts_the_held_objects_bottom_just_over_the_targets_top(monkeypatch):
+    """Nov 4: measured, not the demo's offsets: the cup's top + how far the brick reaches below
+    the jaws + the clearance; the demo's height for the same cup logged beside it."""
     monkeypatch.setattr(prm, "demo_place_offsets", lambda: {"release": 0.0064, "hover": 0.0381})
-    sk = _height_sk({"paper cup": 0.044, "plate": 0.015})
-    assert actions.place_height(sk, "paper cup", "release") == pytest.approx(0.0504)
-    assert actions.place_height(sk, "plate", "hover") == pytest.approx(0.0531)
-    assert sk.events == []
+    sk = _height_sk({"cup": 0.068})
+    sk.held_below = 0.004
+    release = 0.068 + 0.004 + prm.PLACE_CLEARANCE_M.value
+    assert actions.place_height(sk, "cup", "release") == pytest.approx(release)
+    assert sk.events[-1] == ("place_height", {"target": "cup", "which": "release", "height_m": round(release, 4),
+                                              "demo_m": 0.0744})
 
 
-def test_without_offsets_or_a_measured_target_the_demos_absolute_heights_stand(monkeypatch):
+def test_the_hover_is_the_lowest_the_whole_target_is_in_view(monkeypatch):
+    sk = _height_sk({"cup": 0.068, "plate": 0.015})
+    sk.held_below = 0.004
+    release = 0.068 + 0.004 + prm.PLACE_CLEARANCE_M.value
+    # no width measured: just over the release
+    assert actions.place_height(sk, "cup", "hover") == pytest.approx(release + prm.LOOK_CLEARANCE_M.value)
+    seen = []
+    monkeypatch.setattr(actions, "lowest_view_height", lambda g, w, h, start: (seen.append((w, h, start)), 0.15)[1])
+    sk.widths = {"cup": 0.08}
+    assert actions.place_height(sk, "cup", "hover") == 0.15
+    assert seen == [(0.08, 0.068, pytest.approx(release + prm.LOOK_CLEARANCE_M.value))]
+
+
+def test_the_lowest_view_height_steps_up_until_the_width_fits(monkeypatch):
+    from brain import geometry
+
+    monkeypatch.setattr(geometry, "view_half_width", lambda g, h, plane_h: (h - plane_h) / 2)
+    h = geometry.lowest_view_height(None, 0.08, 0.068, 0.097)  # fits from 0.148 up
+    assert 0.148 <= h < 0.148 + geometry.VIEW_HEIGHT_STEP_M
+    assert geometry.lowest_view_height(None, 10.0, 0.068, 0.097) == geometry.MAX_VIEW_HEIGHT_M
+
+
+def test_without_a_measured_target_the_demos_absolute_heights_stand():
     sk = _height_sk({})
-    monkeypatch.setattr(prm, "demo_place_offsets", lambda: {"release": 0.0064, "hover": 0.0381})
-    assert actions.place_height(sk, "bowl", "release") == prm.RELEASE_ABOVE_FLOOR_M.value  # not measured
-    monkeypatch.setattr(prm, "demo_place_offsets", lambda: None)
-    sk.heights["bowl"] = 0.05
-    assert actions.place_height(sk, "bowl", "hover") == prm.PLACE_HOVER_M.value  # no offsets
-    assert [k["why"] for _, k in sk.events] == ["the target's height wasn't measured", "no demo offsets"]
+    assert actions.place_height(sk, "bowl", "release") == prm.RELEASE_ABOVE_FLOOR_M.value
+    assert actions.place_height(sk, "bowl", "hover") == prm.PLACE_HOVER_M.value
+    assert [k["why"] for _, k in sk.events] == ["the target's height wasn't measured"] * 2

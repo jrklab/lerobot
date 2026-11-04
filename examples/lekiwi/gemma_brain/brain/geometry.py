@@ -56,6 +56,8 @@ MIDDLE_ROW_ENDS = ((0.0, 0.5), (1.0, 0.5))  # convention: image fractions
 BOTTOM_CENTRE = (0.5, 1.0)  # convention: image fractions
 EDGE_MIDPOINTS = ((0.0, 0.5), (1.0, 0.5), (0.5, 0.0), (0.5, 1.0))  # convention: image fractions
 FAR_M = 100.0  # convention: a floor point far enough ahead to stand for the horizon
+VIEW_HEIGHT_STEP_M = 0.005  # convention: finer than the place's clearances matter
+MAX_VIEW_HEIGHT_M = 0.30  # convention: above the vertical gripper's reach (~0.28 m at the reach point)
 JACOBIAN_STEP_M = 1e-4  # convention: a TCP move small next to the view, large next to rounding
 
 
@@ -235,6 +237,23 @@ def front_object_height(geom: Geometry, box) -> float:
     d = geom.cams.T_base_cam[:3, :3] @ geom.cams.front.ray((u, box[1]))
     t = np.hypot(*(bottom[:2] - o[:2])) / np.hypot(*d[:2])
     return float(o[2] + t * d[2] - geom.floor_seen_z)
+
+
+def front_object_width(geom: Geometry, box) -> float:
+    """An object's width (m) across the front camera's view, from its box: the two bottom
+    corners' floor points (its near face, where it stands on the floor)."""
+    a, b = geom.front_point((box[0], box[3])), geom.front_point((box[2], box[3]))
+    return 0.0 if a is None or b is None else float(np.hypot(*(a[:2] - b[:2])))
+
+
+def lowest_view_height(geom: Geometry, width: float, plane_h: float, start: float) -> float:
+    """The lowest jaw-tip height from `start` up at which a target `width` across, its top
+    `plane_h` above the floor, fits in the wrist view (view_half_width), in VIEW_HEIGHT_STEP_M
+    steps; MAX_VIEW_HEIGHT_M if it never does (the arm then refuses or the view check fails)."""
+    h = start
+    while h < MAX_VIEW_HEIGHT_M and view_half_width(geom, h, plane_h) < width / 2:
+        h += VIEW_HEIGHT_STEP_M
+    return min(h, MAX_VIEW_HEIGHT_M)
 
 
 def locate_from_one_view(geom: Geometry, c, h: float, height: float, roll_deg: float = 0.0) -> np.ndarray:

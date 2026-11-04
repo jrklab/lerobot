@@ -212,13 +212,13 @@ def test_a_move_crossing_the_clearance_goes_at_the_near_speed_only_below_it():
         return orig(wps, durs, z_min, contact_stop)
 
     sk.arm.robot.trajectory = spy
-    assert sk.move("arm", delta=(0.0, 0.0, prm.LIFT_M.value)).ok
+    assert sk.move("arm", delta=(0.0, 0.0, prm.HOVER_HEIGHT_M.value)).ok
     clear = FLOOR_CLEARANCE_M + JAW_TIP_OFFSET_M
     assert len(sent) == 2 and sent[0][0] < clear  # the near part first, from the floor
     near_s = (clear - prm.GRASP_LIFT_M.value) / prm.NEAR_SPEED_MPS.value
-    free_s = (prm.GRASP_LIFT_M.value + prm.LIFT_M.value - clear) / prm.FREE_SPEED_MPS.value
+    free_s = (prm.GRASP_LIFT_M.value + prm.HOVER_HEIGHT_M.value - clear) / prm.FREE_SPEED_MPS.value
     assert abs(sent[0][1] - near_s) < 0.5 and abs(sent[1][1] - free_s) < 0.5
-    assert abs(sk.height() - (prm.GRASP_LIFT_M.value + prm.LIFT_M.value)) < 0.005
+    assert abs(sk.height() - (prm.GRASP_LIFT_M.value + prm.HOVER_HEIGHT_M.value)) < 0.005
     sent.clear()
     h0 = sk.height()
     assert sk.move("arm", height=prm.FINAL_LOOK_HEIGHT_M.value).ok  # down: free first, then near

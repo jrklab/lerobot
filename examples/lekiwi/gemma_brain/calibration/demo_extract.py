@@ -358,7 +358,7 @@ def main() -> None:
         ("jaw width at the close (mm)", f"{out['closed_width_mm']:.1f}", f"empty below {prm.GRIPPER_EMPTY_MAX.value}; 2x4 short side 15.8"),
         ("hover -> close descend", _m(out["descend_m"]),
          f"hover {prm.HOVER_HEIGHT_M.value} m, last look {prm.FINAL_LOOK_HEIGHT_M.value} m above the floor"),
-        ("lift after the close", _m(out["lift_m"]), f"LIFT_M {prm.LIFT_M.value:.3f}"),
+        ("lift after the close", _m(out["lift_m"]), "v2: up to the carry height (actions.carry_height)"),
         ("release height above floor", _m(out.get("release_z_above_floor_m")),
          f"RELEASE_ABOVE_FLOOR_M {prm.RELEASE_ABOVE_FLOOR_M.value:.3f}"),
     ]

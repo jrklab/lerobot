@@ -57,7 +57,7 @@ def pick(sk: Skills, obj: str, drive: bool = True, start: str | None = None) -> 
         ("down", lambda: sk.move("arm", height=sk.final_look_height(obj))),
         ("centre_low", lambda: sk.servo(obj, JawGoal(plane_h=sk.object_height(obj)))),
         ("land", lambda: actions.land(sk, obj)),
-        ("close", lambda: sk.grip("close")),
+        ("close", lambda: actions.close(sk)),
         ("lift", lambda: actions.lift(sk)),
     ]
     if start is not None:

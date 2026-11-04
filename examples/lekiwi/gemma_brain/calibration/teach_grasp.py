@@ -93,7 +93,7 @@ def main() -> None:
             print(f"box {det.box}  target (right edge u, middle v) {[round(v, 4) for v in target]}  at {1000 * h:.1f} mm")
             log.ev("teach_grasp", box=det.box, target=target, height_m=h)
             if args.close:
-                c = sk.grip("close")
+                c = actions.close(sk)
                 lr = actions.lift(sk) if c.ok else c
                 print("close:", c.data.get("pos"), "held after the lift:", lr.ok)
             if args.write:

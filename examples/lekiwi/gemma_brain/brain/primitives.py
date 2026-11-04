@@ -78,6 +78,10 @@ class Skills:
         self.roll = 0.0
         self.seen: dict[str, Detection] = {}  # the last detection of each object, per camera
         self.heights: dict[str, float] = {}  # object heights measured side-on by the front camera
+        self.widths: dict[str, float] = {}  # and their widths across its view (geometry.front_object_width)
+        # How far the held object reaches below the jaw tips: their height above the floor when
+        # they closed on it (actions.close); None until a grasp.
+        self.held_below: float | None = None
         self._height_fallbacks: set[str] = set()  # objects whose height wasn't measured (logged once)
         # Each object's colour per camera, sampled from the main model's boxes (vision.Look):
         # the fast model's boxes must match it.

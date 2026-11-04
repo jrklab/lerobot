@@ -80,11 +80,10 @@ def demo_place_view() -> tuple[list[float], float] | None:
 # --- DEMO (the owner's Oct 27 pick_cup demo; re-extract after the joint-zero fix for heights) ---
 OPEN_WIDTH = Param(_demo("open_width_mm", 44.5), "DEMO", "jaw opening before a grasp, mm (demo: 44.5, opened to 32.1 deg / 24.6 normalized units; geometry.gripper_mm)")
 GRIP_SQUEEZE_DEG = Param(_demo("squeeze_deg", 5.0), "DEMO", "how far past where the jaws stop on the object the gripper is held (deg): the demo's leader commanded this past the follower's stall while holding (5.1 on the brick, 473 frames); the Pi's own default 5 without a demo")
-LIFT_M = Param(_demo("lift_m", 0.09), "DEMO", "lift after the grasp (demo: 9.5 cm)")
 RELEASE_ABOVE_FLOOR_M = Param(_demo("release_z_above_floor_m", 0.06), "DEMO",
-                              "TCP height above the floor at release inside a cup (demo: 5.9 cm)")
+                              "TCP height above the floor at release inside a cup (demo: 5.9 cm); only for a target whose height wasn't measured (actions.place_height)")
 PLACE_HOVER_M = Param(_demo("above_target_z_above_floor_m", 0.10), "DEMO",
-                      "height above a container before lowering into it (demo: 10.6 cm; its view there is the place target)")
+                      "height above a container before lowering into it (demo: 10.6 cm); only for a target whose height wasn't measured (actions.place_height)")
 # The grasp target in the wrist image (where the brick's box sits just before closing for a
 # middle grip) comes from the owner's midpoint teach: geometry.grasp_target(); not here yet.
 
@@ -116,6 +115,14 @@ LAND_SEARCH_M = Param(
     "how far past its goal a contact-stop move may go: the floor's verified accuracy, the band within which "
     "calibrate_all.py's touches and cameras agreed (3 mm; Oct 30: 1.2 mm worst); 8.4 mm, an old floor fit's "
     "worst error, if no check passed",
+)
+FRONT_HEIGHT_ERROR_M = Param(0.002, "RULE", "how far off the front camera's side-on object height can be: ~2 mm over 149 approaches (geometry.front_object_height; LOOK_CLEARANCE_M)")
+PLACE_CLEARANCE_M = Param(
+    LAND_SEARCH_M.value + FRONT_HEIGHT_ERROR_M.value,
+    "RULE",
+    "how far the held object's bottom stays above what it is lowered onto or carried over: the floor's "
+    "verified accuracy (the arm's own height) plus the front camera's height error (the target's top); "
+    "the release's contact stop guards the rest (Nov 4; the demo's brick released ~2.4 mm above the cup's rim)",
 )
 SERVO_TOL_M = Param(0.002, "RULE", "servo position tolerance at the object: under the last descent's landing scatter (2.5 mm), so the servo isn't what limits a grasp")
 REACH_TOL_M = Param(0.015, "RULE", "line-up: close enough for the arm to take the rest, with room: vertical reach at the hover goes 3 cm past the reach point, half of it (at 3 cm the arm then needed 4.4 cm after a large roll and was refused, Oct 27; v1's ARM_REACH_M was 1.5 cm)")

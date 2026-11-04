@@ -23,9 +23,11 @@ import numpy as np
 from brain import params as prm
 from brain.geometry import (
     front_object_height,
+    front_object_width,
     grasp_spot,
     locate_from_one_view,
     look_offsets,
+    lowest_view_height,
     view_half_width,
     wrap_deg,
 )
@@ -66,12 +68,33 @@ def land(sk: Skills, obj: str | None = None) -> Result:
     return sk.move("arm", delta=(0.0, 0.0, r.data["contact_z"] + prm.GRASP_LIFT_M.value - sk.tcp()[2]))
 
 
+def close(sk: Skills) -> Result:
+    """Close the jaws on the object, noting how far it reaches below them: the jaw tips' height
+    above the floor it stands on (what the release and the carry clear by)."""
+    sk.held_below = max(sk.height(), 0.0)
+    return sk.grip("close")
+
+
+def hang(sk: Skills) -> float:
+    """How far the held object reaches below the jaw tips (Skills.held_below), the grasp's own
+    height if no close noted it."""
+    return sk.held_below if sk.held_below is not None else prm.GRASP_LIFT_M.value
+
+
+def carry_height(sk: Skills) -> float:
+    """The jaw tips' height for carrying: the held object's bottom PLACE_CLEARANCE_M over the
+    tallest object measured so far (the place's target among them), at least the hover height
+    (the arm out of the front camera's floor view, carry())."""
+    tallest = max(sk.heights.values(), default=0.0)
+    return max(prm.HOVER_HEIGHT_M.value, tallest + hang(sk) + prm.PLACE_CLEARANCE_M.value)
+
+
 def lift(sk: Skills) -> Result:
-    """Straight up by the demo's lift, or, where the vertical gripper can't reach that high (at
-    27 cm out it goes ~11 cm up; Oct 27 v2 pick), by half as much again until it can, but not
-    less than the final look height; then whether the object is still held. The planner refuses
-    before anything moves, so a try costs nothing."""
-    up = prm.LIFT_M.value
+    """Straight up to the carry height (Nov 4: was the demo's fixed lift), or, where the vertical
+    gripper can't reach that high (at 27 cm out it goes ~11 cm up; Oct 27 v2 pick), by half as
+    much again until it can, but not less than the final look height; then whether the object
+    is still held. The planner refuses before anything moves, so a try costs nothing."""
+    up = carry_height(sk) - sk.height()
     r = sk.move("arm", delta=(0.0, 0.0, up))
     while not r.ok and up / 2 >= prm.FINAL_LOOK_HEIGHT_M.value:
         up /= 2
@@ -130,7 +153,8 @@ def approach(sk: Skills, obj: str, tol=None) -> Result:
     det = sk.seen.get(f"front:{obj}")
     if r.ok and det is not None:  # side-on, for placing into it later (front_object_height)
         sk.heights[obj] = front_object_height(sk.geom, det.box)
-        sk.ev("object_height", obj=obj, height_m=round(sk.heights[obj], 4))
+        sk.widths[obj] = front_object_width(sk.geom, det.box)
+        sk.ev("object_height", obj=obj, height_m=round(sk.heights[obj], 4), width_m=round(sk.widths[obj], 4))
     return r
 
 
@@ -155,8 +179,9 @@ def carry(sk: Skills) -> Result:
     after the pick's lift (~6 cm at 27 cm out) the brick caught a cup's rim and pushed the cup
     ahead of the robot (owner, Oct 28). Folding instead cost ~10 s a task (fold, then unfold for
     the place); at the hover the arm is out of the front camera's floor view, its jaw tips just
-    in the frame's top above the horizon (Oct 28 check), where find() takes no box."""
-    return hover_at(sk, prm.HOVER_HEIGHT_M)
+    in the frame's top above the horizon (Oct 28 check), where find() takes no box. Higher if
+    a taller object was measured (carry_height)."""
+    return hover_at(sk, carry_height(sk))
 
 
 def hover_at(sk: Skills, height: Param | float) -> Result:
@@ -166,18 +191,30 @@ def hover_at(sk: Skills, height: Param | float) -> Result:
 
 
 def place_height(sk: Skills, target: str, which: str) -> float:
-    """The jaw tips' height for the place's "release" or "hover" over `target`: its measured
-    height (the approach's front camera) plus the demo's offset above its own target's top, so
-    a lower or taller target gets its own heights (Oct 31). Without both, the demo's absolute
-    heights (made for its one container), noted."""
-    offsets = prm.demo_place_offsets()
+    """The jaw tips' height for the place's "release" or "hover" over `target`, from what was
+    measured (Nov 4; the demo's offsets before):
+      release  the target's top (the approach's front camera) + how far the held object reaches
+               below the jaws (the close) + PLACE_CLEARANCE_M: its bottom just over the top
+      hover    the lowest height the target's whole width fits in the wrist view (the approach's
+               front camera), at least LOOK_CLEARANCE_M over the release
+    The demo's heights for the same target are logged beside them, to compare. Without a
+    measured height, the demo's absolute heights (made for its one container), noted."""
     h = sk.heights.get(target)
-    if offsets and h is not None and h > 0.0:
-        return h + offsets[which]
-    absolute = prm.RELEASE_ABOVE_FLOOR_M if which == "release" else prm.PLACE_HOVER_M
-    sk.ev("place_height_absolute", target=target, which=which, height_m=absolute.value,
-          why="no demo offsets" if not offsets else "the target's height wasn't measured")
-    return absolute.value
+    if h is None or h <= 0.0:
+        absolute = prm.RELEASE_ABOVE_FLOOR_M if which == "release" else prm.PLACE_HOVER_M
+        sk.ev("place_height_absolute", target=target, which=which, height_m=absolute.value,
+              why="the target's height wasn't measured")
+        return absolute.value
+    out = h + hang(sk) + prm.PLACE_CLEARANCE_M.value
+    if which == "hover":
+        out += prm.LOOK_CLEARANCE_M.value
+        width = sk.widths.get(target, 0.0)
+        if width > 0.0:
+            out = lowest_view_height(sk.geom, width, h, out)
+    offsets = prm.demo_place_offsets()
+    sk.ev("place_height", target=target, which=which, height_m=round(out, 4),
+          demo_m=None if not offsets else round(h + offsets[which], 4))
+    return out
 
 
 def bring_into_view(sk: Skills, container: str) -> Result:
