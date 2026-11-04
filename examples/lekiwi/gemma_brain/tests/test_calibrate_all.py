@@ -307,3 +307,18 @@ def test_the_steps_run_in_order_with_position_where_needed():
         ca.plan_steps(["coarse"])
     with pytest.raises(ValueError, match="unknown"):
         ca.plan_steps(["cameras"])
+
+
+def test_the_gripper_steps_base_moves_are_undone_by_their_sum():
+    # Nov 4: 11 cm right, then the line-up's 5 cm right and 3 cm forward, out of the boards' view.
+    sent = []
+
+    class R:
+        def base(self, dx=0.0, dy=0.0, dtheta_deg=0.0):
+            sent.append((round(dx, 3), round(dy, 3)))
+
+    moves = [(0.0, -0.112, 0.1), (0.034, -0.052, 0.3), (0.016, 0.014, -0.1)]
+    ca.undo_moves(R(), moves)
+    assert sent == [(-0.05, 0.15)]
+    ca.undo_moves(R(), [])
+    assert len(sent) == 1  # nothing moved, nothing sent

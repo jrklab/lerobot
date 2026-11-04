@@ -56,7 +56,8 @@ sys.path.insert(0, str(ROOT))
 
 from brain import actions, params as prm
 from brain.geometry import Geometry
-from brain.goals import JawGoal
+from brain.goals import AngleGoal, JawGoal
+from brain.params import Param
 from brain.primitives import Skills
 from common import vision
 from common.arm import Arm
@@ -114,6 +115,9 @@ LEGO_PITCH_MM, LEGO_PLAY_MM = 8.0, 0.2  # a brick is 8 mm per stud less the 0.2 
 # The brick lies beside the floor board on its right (the side board's side, owner Nov 4): its
 # middle about this far out past the board's edge; the line-up takes the rest.
 BRICK_PAST_EDGE_M = 0.05  # convention
+# Each grasp squares the brick to the jaws first, tighter than a pick's 12 deg: a long-side close on a
+# brick a few degrees off closed 2.2 deg (~3 mm) wider than the one before (Nov 4).
+ALIGN_TOL = Param(3.0, "RULE", "the gripper calibration's grasps: the brick within this of square to the jaws (deg)")
 
 
 class ColourBoxes:
@@ -160,10 +164,13 @@ def _ok(r, what: str):
     return r
 
 
-def _grasp_once(sk: Skills, robot, wide: float, side: str, roll: float) -> dict:
-    """From the hover: roll the jaws to `side`, centre high and low as a pick does, measure the
-    side, open to fit, land, close until the stall; then open and back up to the hover."""
-    _ok(sk.move("arm", delta=(0.0, 0.0, 0.0), roll=roll), "roll")
+def _grasp_once(sk: Skills, robot, wide: float, side: str) -> dict:
+    """From the hover: square the jaws to the brick (ALIGN_TOL), a quarter turn more for its long
+    side, centre high and low as a pick does, measure the side, open to fit, land, close until
+    the stall; then open and back up to the hover."""
+    _ok(sk.servo(BRICK, AngleGoal(ALIGN_TOL)), "align")
+    if side == "long":
+        _ok(sk.move("arm", delta=(0.0, 0.0, 0.0), roll=_turned(sk, sk.roll)), "quarter turn")
     _ok(sk.servo(BRICK, JawGoal(tol_m=prm.REACH_TOL_M, plane_h=sk.object_height(BRICK))), "centre high")
     _ok(sk.move("arm", height=sk.final_look_height(BRICK)), "down")
     _ok(sk.servo(BRICK, JawGoal(plane_h=sk.object_height(BRICK))), "centre low")
@@ -181,13 +188,22 @@ def _grasp_once(sk: Skills, robot, wide: float, side: str, roll: float) -> dict:
     return {"mm": mm, "what": f"2x4 brick, {side} side", "measured_mm": round(1000 * measured, 1), **c}
 
 
-def auto(robot, board_pose, out: Path, repeats: int = AUTO_REPEATS) -> list[dict]:
+def auto(robot, board_pose, out: Path, repeats: int = AUTO_REPEATS, moves: list | None = None) -> list[dict]:
     """The gripper's points with no one there: closed on nothing at the hover; then the 2x4 brick
-    beside the floor board, the base moved across to it, found by colour, lined up and aligned as
-    a pick does, and closed on across its short side and (a quarter turn) its long side,
-    `repeats` times each. The base stays where the line-up left it (the caller returns it)."""
+    beside the floor board, the base moved across to it, found by colour, lined up as a pick
+    does, and closed on across its short side and (a quarter turn) its long side, `repeats`
+    times each. The base stays where the line-up left it: each base move, as the Pi reported it
+    ((dx, dy, dtheta_deg)), goes into `moves` for the caller to undo."""
     arm = Arm(robot)
     sk = Skills(robot, arm, Geometry.load(), Log(out), main=ColourBoxes())
+    log_ev = sk.ev
+
+    def ev(name: str, **kw) -> None:
+        if moves is not None and name == "move" and kw.get("part") == "base" and kw.get("moved"):
+            moves.append(tuple(kw["moved"]))
+        log_ev(name, **kw)
+
+    sk.ev = ev
     points: list[dict] = []
     wide = arm.calib.limits("arm_gripper")[1]
     try:
@@ -201,11 +217,9 @@ def auto(robot, board_pose, out: Path, repeats: int = AUTO_REPEATS) -> list[dict
         if sk.find(BRICK, "wrist") is None:
             raise RuntimeError("no brick in the wrist camera's view right of the floor board")
         _ok(actions.line_up(sk, BRICK), "line up")
-        _ok(actions.align(sk, BRICK), "align")
-        aligned = sk.roll
-        for side, roll in (("short", aligned), ("long", _turned(sk, aligned))):
+        for side in ("short", "long"):
             for _ in range(repeats):
-                points.append(_grasp_once(sk, robot, wide, side, roll))
+                points.append(_grasp_once(sk, robot, wide, side))
     finally:
         robot.gripper(wide)
         arm.reset()

@@ -368,27 +368,43 @@ def board_pose_now(robot: Robot, cams: dict) -> np.ndarray:
     raise RuntimeError("the wrist camera at rest doesn't see the floor board")
 
 
+def undo_moves(robot: Robot, moves: list) -> tuple[float, float]:
+    """Drive back by the sum of the base's drives (as the Pi reported them): the gripper step's
+    sideways moves can take the start's boards out of the front camera's view (Nov 4: 15 cm
+    right). Their turns are a fraction of a degree, left to the front camera's refinement."""
+    dx, dy = -sum(m[0] for m in moves), -sum(m[1] for m in moves)
+    if np.hypot(dx, dy) > 0:
+        robot.base(dx=dx, dy=dy)
+    return dx, dy
+
+
 def gripper(robot: Robot, board_pose: np.ndarray, cams: dict, out: Path, log: dict) -> dict:
-    """calibrate_gripper.auto on the 2x4 brick right of the floor board, the base back where it
-    started after (the front camera's boards), the arm laid down; the curve written with the
-    widths it didn't measure kept from before, and the stall lag proposed."""
+    """calibrate_gripper.auto on the 2x4 brick right of the floor board; the curve written (the
+    widths it didn't measure kept from before) and the stall lag proposed as soon as it's done;
+    then the base back: its moves undone, refined by the front camera's boards where it sees
+    them; the arm laid down."""
     ref = boards.detect(robot.frame("front", after=time.time())[0])
     measure = capture_cameras.front_measure(robot, ref, cams)
+    moves: list = []
     try:
-        points = calibrate_gripper.auto(robot, board_pose, out / "gripper")
+        points = calibrate_gripper.auto(robot, board_pose, out / "gripper", moves=moves)
+        old = json.loads(CALIB.read_text()).get("gripper_opening", {}).get("points", [])
+        log["gripper"] = {"points": points}
+        log["gripper"]["curve"] = calibrate_gripper.write_curve(
+            calibrate_gripper.merged(points, old),
+            "calibrate_all.py gripper step: closed at the pick's speed until the stall on nothing and a 2x4 brick "
+            "(its short and long side, as a pick grasps it); other widths kept from before",
+        )
+        log["gripper"]["stall_lag"] = calibrate_gripper.propose_stall_lag(points)
+        calibrate_gripper.save_stall_lag(log["gripper"]["stall_lag"])
     finally:
-        print("back to the start:")
-        capture_cameras.return_to_start(robot, measure)
+        print(f"back to the start: the step's base moves undone {undo_moves(robot, moves)}")
+        try:
+            capture_cameras.return_to_start(robot, measure)
+        except RuntimeError as e:
+            print(f"  not refined by the front camera ({e}): back by the base's own count only")
+            log.setdefault("gripper", {})["return"] = f"dead-reckoned only: {e}"
         lay_down(robot)
-    old = json.loads(CALIB.read_text()).get("gripper_opening", {}).get("points", [])
-    curve = calibrate_gripper.write_curve(
-        calibrate_gripper.merged(points, old),
-        "calibrate_all.py gripper step: closed at the pick's speed until the stall on nothing and a 2x4 brick "
-        "(its short and long side, as a pick grasps it); other widths kept from before",
-    )
-    lag = calibrate_gripper.propose_stall_lag(points)
-    calibrate_gripper.save_stall_lag(lag)
-    log["gripper"] = {"points": points, "curve": curve, "stall_lag": lag}
     return log["gripper"]
 
 

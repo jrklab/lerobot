@@ -199,3 +199,10 @@ def test_a_far_approach_drives_at_most_one_pi_command_then_looks_again():
 
     d = goals.FrontApproachGoal().step(np.array([0.0, 2.3]), S())["delta"][0]
     assert abs(d - (prm.BASE_MOVE_MAX_M.value - prm.BASE_STOP_SHORT_M.value)) < 1e-9
+
+
+def test_an_angle_goal_can_be_tighter_than_a_picks():
+    from brain.params import Param
+
+    assert goals.AngleGoal().done(np.array([10.0]), None)
+    assert not goals.AngleGoal(Param(3.0, "RULE", "")).done(np.array([10.0]), None)

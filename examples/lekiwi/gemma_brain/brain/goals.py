@@ -116,6 +116,11 @@ class ReachGoal(_WristPointGoal):
 class AngleGoal:
     cam = "wrist"
     part = "roll"
+    tol_deg = prm.ANGLE_TOL_DEG
+
+    def __init__(self, tol_deg=None):
+        if tol_deg is not None:  # tighter for the gripper calibration's grasps
+            self.tol_deg = tol_deg
 
     def error(self, det: Detection, sk) -> np.ndarray:
         if det.angle_deg is None:
@@ -123,7 +128,7 @@ class AngleGoal:
         return np.array([det.angle_deg])
 
     def done(self, err: np.ndarray, sk) -> bool:
-        return abs(float(err[0])) <= prm.ANGLE_TOL_DEG.value
+        return abs(float(err[0])) <= self.tol_deg.value
 
     def step(self, err: np.ndarray, sk) -> dict:
         # Image angle changes by -roll; the object looks the same every 180 deg: the nearest
