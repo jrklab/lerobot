@@ -195,11 +195,11 @@
     "value": {
       "curve": [
         [
-          1.85,
+          1.62,
           0.0
         ],
         [
-          10.51,
+          10.68,
           15.8
         ],
         [
@@ -219,60 +219,46 @@
       {
         "mm": 0.0,
         "what": "nothing",
-        "deg": 2.29,
-        "stalled": false,
-        "free_lag_max_deg": 5.74,
-        "stall_lag_deg": 2.29,
-        "trace_n": 54
+        "deg": 1.58,
+        "stalled": false
       },
       {
         "mm": 0.0,
         "what": "nothing",
-        "deg": 1.41,
-        "stalled": false,
-        "free_lag_max_deg": 5.71,
-        "stall_lag_deg": 1.67,
-        "trace_n": 55
+        "deg": 1.67,
+        "stalled": false
       },
       {
         "mm": 15.8,
         "what": "2x4 brick, short side",
-        "measured_mm": 16.4,
-        "deg": 10.55,
-        "stalled": true,
-        "free_lag_max_deg": 9.32,
-        "stall_lag_deg": 5.0,
-        "trace_n": 12
+        "measured_mm": 16.2,
+        "angle_left_deg": 4.5,
+        "deg": 10.72,
+        "stalled": true
       },
       {
         "mm": 15.8,
         "what": "2x4 brick, short side",
-        "measured_mm": 16.3,
-        "deg": 10.46,
-        "stalled": true,
-        "free_lag_max_deg": 10.99,
-        "stall_lag_deg": 5.0,
-        "trace_n": 11
+        "measured_mm": 16.1,
+        "angle_left_deg": 0.0,
+        "deg": 10.63,
+        "stalled": true
       },
       {
         "mm": 31.8,
         "what": "2x4 brick, long side",
-        "measured_mm": 31.8,
+        "measured_mm": 31.1,
+        "angle_left_deg": 0.0,
         "deg": 22.59,
-        "stalled": true,
-        "free_lag_max_deg": 10.66,
-        "stall_lag_deg": 5.0,
-        "trace_n": 12
+        "stalled": true
       },
       {
         "mm": 31.8,
         "what": "2x4 brick, long side",
-        "measured_mm": 31.8,
+        "measured_mm": 31.6,
+        "angle_left_deg": 0.0,
         "deg": 22.59,
-        "stalled": true,
-        "free_lag_max_deg": 10.44,
-        "stall_lag_deg": 5.0,
-        "trace_n": 12
+        "stalled": true
       },
       {
         "mm": 47.8,
