@@ -201,6 +201,12 @@ def test_a_far_board_is_driven_up_to():
     assert out["ok"] and out["forward_m"] == pytest.approx(0.06) and b.moves == [(0.03, 0.0), (0.03, 0.0)]
 
 
+def test_the_default_look_uses_the_robots_front_camera(monkeypatch):
+    b = Base(lambda f, left: (20, 0.5, 0.7))
+    monkeypatch.setattr(capture_cameras, "floor_board_look", lambda robot: b.look() if robot is b else None)
+    assert capture_cameras.position_for_floor_board(b)["ok"]
+
+
 def test_a_well_read_board_moves_nothing():
     b = Base(lambda f, left: (20, 0.5, 0.7))
     assert capture_cameras.position_for_floor_board(b, look=b.look)["ok"] and b.moves == []

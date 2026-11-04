@@ -501,13 +501,15 @@ def floor_board_look(robot, frames: int = LOOK_FRAMES) -> tuple[int, float | Non
     return best
 
 
-def position_for_floor_board(robot, look=floor_board_look) -> dict:
+def position_for_floor_board(robot, look=None) -> dict:
     """Before a run's first scene: the base moved (forward or back, then sideways) until the front
     camera reads the floor board well (GOOD_BOARD_CORNERS), so a board placed a little far or to one
     side needs no one to move it (Oct 30: the front camera read 0-26 of its corners as placed). By
     the image alone, so it works before the front camera is calibrated: forward while the board's
     lowest corners stay above NEAR_ROW (the base never reaches it), within MAX_REPOSITION_M; back to
     the best position seen if none reads well. Returns where it went and what it read."""
+    if look is None:
+        look = lambda: floor_board_look(robot)  # noqa: E731
     moved = np.zeros(2)  # (forward, left) m, open loop: short moves
     seen = []  # (forward, corners)
 
