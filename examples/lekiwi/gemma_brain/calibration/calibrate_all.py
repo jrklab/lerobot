@@ -245,7 +245,7 @@ def coarse(robot: Robot, log: dict) -> None:
     sc.write(robot, dry_run=False)
 
 
-def fine(robot: Robot, thickness: float, log: dict) -> dict:
+def fine(robot: Robot, thickness: float, log: dict, closeup: bool = False) -> dict:
     """Capture, solve, correct until no offset is larger than its spread over two scenes. The
     run's first scene takes every FIRST_SCENE_POSE_STEP-th arm pose (it only measures the coarse
     zeros' error; every anchor keeps two or more) and the base sweep and side board close-up,
@@ -268,8 +268,11 @@ def fine(robot: Robot, thickness: float, log: dict) -> dict:
             raise RuntimeError(f"scene poses refused: {[p['name'] for p in refused]}")
         if first:
             poses = poses[::FIRST_SCENE_POSE_STEP]
+        # No side board close-up by default (Nov 3): the front lens and camera barely move without
+        # it (k1 -0.433 vs -0.430, the camera 0.1 mm), and its 90 deg turn twice brought down the
+        # servo board's USB link mid-run.
         scene = capture_cameras.run_scene(
-            robot, poses, capture_cameras.sweep_plan() if first else [], closeup=first
+            robot, poses, capture_cameras.sweep_plan() if first else [], closeup=first and closeup
         )
         if first:
             sweeps.append(scene)
@@ -410,6 +413,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--board-thickness", type=float, required=True, help="the floor board's (m, a ruler's)")
     ap.add_argument("--check-only", action="store_true", help="step 0 only: no motion")
+    ap.add_argument("--closeup", action="store_true", help="also the side board close-up in the first scene (off by default)")
     args = ap.parse_args()
     logging.basicConfig(level=logging.WARNING)
 
@@ -441,7 +445,7 @@ def main() -> None:
             print("\n=== 1. coarse: the joints' ends ===")
             coarse(robot, log)
             print("\n=== 2-3. fine: the cameras and the joint zeros ===")
-            cams = fine(robot, args.board_thickness, log)
+            cams = fine(robot, args.board_thickness, log, closeup=args.closeup)
             log["cameras"] = {k: cams[k] for k in ("joint_offsets_deg", "board_top_z", "floor_z", "rms_px")}
             log["cameras"]["scenes"] = [s.name for s in cams["scenes"]]
             log["joint_loads"] = loads.propose()

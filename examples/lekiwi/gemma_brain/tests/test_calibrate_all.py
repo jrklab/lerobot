@@ -27,12 +27,13 @@ class Fake:
     def __init__(self, verdicts):
         self.verdicts = list(verdicts)  # to_apply per solve with fit_offsets
         self.captures, self.solves, self.corrections, self.written = [], [], [], None
-        self.swept, self.n_poses, self.extras = [], [], []
+        self.swept, self.n_poses, self.extras, self.closeups = [], [], [], []
 
     def run_scene(self, robot, poses, moves, closeup=True):
         p = Path(f"scene{len(self.captures)}")
         self.captures.append((p, poses[0]["reverse"]))
-        self.swept.append(bool(moves) and closeup)
+        self.swept.append(bool(moves))
+        self.closeups.append(closeup)
         self.n_poses.append(len(poses))
         return p
 
@@ -85,6 +86,7 @@ def test_a_correction_restarts_the_round_and_the_verdict_takes_two_scenes(fake):
     assert [s.name for s in out["scenes"]] == ["scene1", "scene2"]
     # Only the first scene sweeps the base, with every other pose; the later ones reuse its sweep.
     assert f.swept == [True, False, False] and f.n_poses == [19, 38, 38]
+    assert f.closeups == [False, False, False]  # off by default since Nov 3
     assert f.extras[-1] == ["scene0"]
 
 
