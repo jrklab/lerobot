@@ -74,31 +74,13 @@ OBJECTS = {
 }
 
 
-MOVING_DEG = 0.3  # convention: a poll-to-poll change above the reading's scatter (0.35 deg over closes)
-
-
-def close_lags(trace: list[dict]) -> dict:
-    """From a close's polled statuses: the largest lag of the jaws behind their target while they
-    were still moving, and the lag where they stopped. The Pi calls a close stalled once the lag
-    passes auto_control.GRIPPER_STALL_LAG_DEG (hand-set, 4 deg): it belongs between these two."""
-    rows = [(r["targets"]["arm_gripper"], r["joints"]["arm_gripper"]) for r in trace
-            if r.get("targets") and r.get("joints") and "arm_gripper" in r["targets"]]
-    if len(rows) < 3:
-        return {}
-    meas = [m for _, m in rows]
-    moving = [meas[i] - t for i, (t, _) in enumerate(rows[:-1]) if meas[i] - meas[i + 1] > MOVING_DEG]
-    return {"free_lag_max_deg": round(max(moving), 2) if moving else None,
-            "stall_lag_deg": round(rows[-1][1] - rows[-1][0], 2), "trace_n": len(rows)}
-
-
 def close_measured(robot) -> dict:
     """Close at the pick's speed until the stall (no squeeze: the stall itself is measured) and
-    read where the jaws stopped, with the close's lags."""
-    trace: list[dict] = []
+    read where the jaws stopped."""
     cmd = {"cmd": "gripper", "pos": 0.0, "speed": prm.CLOSE_SPEED.value, "units": JOINT_UNITS}
-    res = robot.run(cmd, trace=trace).get("result", {})
+    res = robot.run(cmd).get("result", {})
     deg = float(robot.status()["joints"]["arm_gripper"])
-    return {"deg": round(deg, 2), "stalled": bool(res.get("stalled")), **close_lags(trace)}
+    return {"deg": round(deg, 2), "stalled": bool(res.get("stalled"))}
 
 
 def curve(points: list[dict]) -> list[list[float]]:
@@ -250,31 +232,6 @@ def write_curve(points: list[dict], method: str) -> list[list[float]]:
     }
     CALIB.write_text(json.dumps(calib, indent=2) + "\n")
     return c
-
-
-def propose_stall_lag(points: list[dict]) -> dict | None:
-    """The Pi's gripper stall-lag threshold from the closes (not applied): between the largest
-    lag while the jaws still moved and the least at a stall, their middle. None without both,
-    or when they overlap."""
-    free = [p["free_lag_max_deg"] for p in points if p.get("free_lag_max_deg") is not None]
-    stall = [p["stall_lag_deg"] for p in points if p.get("stalled") and p.get("stall_lag_deg") is not None]
-    if not free or not stall or max(free) >= min(stall):
-        return None
-    return {"proposed_deg": round((max(free) + min(stall)) / 2, 2), "free_lag_max_deg": max(free),
-            "stall_lag_min_deg": min(stall), "closes": len(points)}
-
-
-def save_stall_lag(proposal: dict | None) -> None:
-    """Into calib.json for review, as the joints' stall thresholds: auto_control's hand-set
-    GRIPPER_STALL_LAG_DEG stays until the owner applies it."""
-    if proposal is None:
-        return
-    calib = json.loads(CALIB.read_text())
-    calib["gripper_stall_lag"] = {"value": proposal["proposed_deg"], "enabled": False, "unit": "deg",
-                                  "method": "calibrate_all.py gripper step: between the largest lag while moving "
-                                            "and the least at a stall", "date": datetime.date.today().isoformat(),
-                                  **proposal}
-    CALIB.write_text(json.dumps(calib, indent=2) + "\n")
 
 
 def main() -> None:

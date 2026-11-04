@@ -218,8 +218,10 @@ Built offline since the last robot run; nothing below has run on the robot yet. 
    (`calibration/demo_extract.py <dataset> --target "red block" --place-target "paper cup"`):
    the release and hover above the cup's top and the grip's squeeze come from it. Measure the
    cup with a ruler too: the front camera reads it 63-68 mm.
-5. **A gripper calibration** (`calibration/calibrate_gripper.py`): it now records each close's
-   lag, to set the stall-lag threshold (hand-set 4 deg) from data.
+5. **A gripper calibration:** now `calibrate_all.py --steps gripper` (Nov 4, done), on a 2x4
+   brick lying right of the floor board. The stall lag stays hand-set (4 deg): the Pi's rule
+   needs the lag and a load together, and the lag alone doesn't separate a moving close from a
+   stalled one (9-11 deg moving, 5 at the stall).
 6. **Picks and a cup place:** the red brick and the light green block (each object's measured
    height now sets the last look and the landing's "not the floor"; the jaw tips are 6.3 mm, the
    URDF's), then "put the red block in the paper cup".
