@@ -116,7 +116,7 @@ LAND_SEARCH_M = Param(
     "calibrate_all.py's touches and cameras agreed (3 mm; Oct 30: 1.2 mm worst); 8.4 mm, an old floor fit's "
     "worst error, if no check passed",
 )
-FRONT_HEIGHT_ERROR_M = Param(0.002, "RULE", "how far off the front camera's side-on object height can be: ~2 mm over 149 approaches (geometry.front_object_height; LOOK_CLEARANCE_M)")
+FRONT_HEIGHT_ERROR_M = Param(0.007, "RULE", "how far off the front camera's side-on object height can be: ~2 mm over 149 brick approaches, but a box short of a cup's rim read 6.5 cm as 5.0-5.7 (Nov 4); with the top snapped to the rim (vision.snap_top) 64.4-64.8 mm, the rest for a snap that finds no edge; the owner's 10 mm with LAND_SEARCH_M (Nov 4)")
 PLACE_CLEARANCE_M = Param(
     LAND_SEARCH_M.value + FRONT_HEIGHT_ERROR_M.value,
     "RULE",

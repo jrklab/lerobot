@@ -15,9 +15,14 @@
 
 """Tests for jaw_geometry on synthetic wrist frames: two blue jaws entering from the bottom."""
 
+from pathlib import Path
+
 import cv2
 import numpy as np
+from common import vision
 from common.vision import jaw_geometry
+
+FIXTURES = Path(__file__).parent / "fixtures"
 
 W, H = 640, 480
 BLUE = (200, 40, 20)  # BGR
@@ -93,3 +98,22 @@ def test_an_object_colour_cannot_tell_from_the_floor_passes():
     look = sample_look(jpeg, [0.4, 0.37, 0.6, 0.63])
     assert look is None or not look.distinct()
     assert look_matches(jpeg, [0.1, 0.1, 0.3, 0.3], look)[0]
+
+
+def test_snap_top_raises_a_box_to_the_cups_rim():
+    # Nov 4: Gemma's box stopped 20 px under a paper cup's white rim (rim at y ~140 of 480).
+    jpeg = (FIXTURES / "front_cup_20261104.jpg").read_bytes()
+    box, how = vision.snap_top(jpeg, [0.334, 0.334, 0.737, 0.658])
+    assert how.startswith("raised") and 136 <= box[1] * 480 <= 145
+    assert box[0] == 0.334 and box[2:] == [0.737, 0.658]
+
+
+def test_snap_top_never_lowers_and_leaves_a_box_without_an_edge():
+    img = np.full((100, 100, 3), 60, np.uint8)
+    img[30:80, 30:70] = 230  # a light object on a dark background, its box top already on it
+    jpeg = cv2.imencode(".jpg", img)[1].tobytes()
+    assert vision.snap_top(jpeg, [0.3, 0.3, 0.7, 0.8])[1] == "already at the edge"
+    box, how = vision.snap_top(jpeg, [0.3, 0.4, 0.7, 0.8])  # 10 px short of its top
+    assert how.startswith("raised") and abs(box[1] - 0.3) <= 0.015  # 10 px, give or take the blur
+    flat = cv2.imencode(".jpg", np.full((100, 100, 3), 200, np.uint8))[1].tobytes()
+    assert vision.snap_top(flat, [0.3, 0.6, 0.7, 0.8])[1] == "no edge within reach"

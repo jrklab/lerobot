@@ -127,6 +127,55 @@ def jaw_geometry(jpeg: bytes, fixed: dict | None = None, band: float = 0.06) -> 
     return out
 
 
+# snap_top: the object's colour is its box's top band (this share of the box's height, the
+# middle of its width); a row above the box is still the object while this share of its middle
+# is within TOP_MATCH_SPREADS of that colour's own spread (never under TOP_MIN_DELTA_E, L*a*b*);
+# searched up to TOP_REACH of the box's height above it.
+TOP_BAND = 0.15
+TOP_SIDE_MARGIN = 0.2
+TOP_ROW_SHARE = 0.5
+TOP_MATCH_SPREADS = 3.0
+TOP_MIN_DELTA_E = 12.0
+TOP_REACH = 0.5
+
+
+def snap_top(jpeg: bytes, box) -> tuple[list[float], str]:
+    """A front-camera box's top raised to the object's own top edge. Gemma's boxes leave out a
+    thin rim the colour of what's behind it: a paper cup's white lip against a light room,
+    17-32 px short, read 6.5 cm tall as 5.0-5.7 (Nov 4, run 20261104T094659); its height is
+    measured from the box's top (geometry.front_object_height). Walks up from the box's top
+    while the rows' middle keeps the colour of the box's top band. Only ever raises the top (a
+    higher top raises the place heights, the safe side); unchanged when the colour goes on past
+    TOP_REACH (no edge: the object against its own colour). Returns (box, how)."""
+    img = cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_COLOR)
+    if img is None:
+        return list(box), "no image"
+    h, w = img.shape[:2]
+    x0, y0, x1, y1 = box
+    bw, bh = (x1 - x0) * w, (y1 - y0) * h
+    c0, c1 = int(x0 * w + TOP_SIDE_MARGIN * bw), int(x1 * w - TOP_SIDE_MARGIN * bw)
+    top = int(round(y0 * h))
+    if c1 - c0 < 3 or bh < 4:
+        return list(box), "too small"
+    lab = cv2.cvtColor(cv2.GaussianBlur(img, (5, 5), 0), cv2.COLOR_BGR2LAB).astype(float)
+    band = lab[top : top + max(2, int(TOP_BAND * bh)), c0:c1].reshape(-1, 3)
+    ref = np.median(band, axis=0)
+    spread = float(np.median(np.linalg.norm(band - ref, axis=1)))
+    thr = max(TOP_MIN_DELTA_E, TOP_MATCH_SPREADS * spread)
+    lowest = max(0, top - int(TOP_REACH * bh))
+    y = top
+    while y - 1 >= lowest:
+        row = np.linalg.norm(lab[y - 1, c0:c1] - ref, axis=1)
+        if np.mean(row <= thr) < TOP_ROW_SHARE:
+            break
+        y -= 1
+    if y - 1 < lowest and y < top:
+        return list(box), "no edge within reach"
+    if y == top:
+        return list(box), "already at the edge"
+    return [x0, y / h, x1, y1], f"raised {top - y} px"
+
+
 def snap_box(jpeg: bytes, box, min_chroma: float = 25.0, look: Look | None = None) -> tuple[list[float], str]:
     """Gemma's box moved onto the coloured blob it was aimed at. E4B's wrist boxes can land a
     brick-height off the brick (Oct 24, red brick next to the jaws: the box on bare floor just

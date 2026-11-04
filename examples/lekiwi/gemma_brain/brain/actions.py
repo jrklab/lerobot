@@ -19,6 +19,7 @@ params.py or geometry.py one, so a new action adds a name, not a parameter to ca
 from __future__ import annotations
 
 import numpy as np
+from common.vision import snap_top
 
 from brain import params as prm
 from brain.geometry import (
@@ -152,9 +153,11 @@ def approach(sk: Skills, obj: str, tol=None) -> Result:
         r = sk.servo(obj, FrontApproachGoal(tol), first=first)
     det = sk.seen.get(f"front:{obj}")
     if r.ok and det is not None:  # side-on, for placing into it later (front_object_height)
-        sk.heights[obj] = front_object_height(sk.geom, det.box)
-        sk.widths[obj] = front_object_width(sk.geom, det.box)
-        sk.ev("object_height", obj=obj, height_m=round(sk.heights[obj], 4), width_m=round(sk.widths[obj], 4))
+        box, how = snap_top(det.jpeg, det.box)  # the box's top up to a rim it left out (Nov 4)
+        sk.heights[obj] = front_object_height(sk.geom, box)
+        sk.widths[obj] = front_object_width(sk.geom, box)
+        sk.ev("object_height", obj=obj, height_m=round(sk.heights[obj], 4), width_m=round(sk.widths[obj], 4),
+              top=how, unsnapped_m=round(front_object_height(sk.geom, det.box), 4))
     return r
 
 
