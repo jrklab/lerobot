@@ -338,3 +338,76 @@ def test_a_relax_lets_the_arm_settle_before_the_write(started):
     )  # held where it lies
     with pytest.raises(ValueError, match="relax_s"):
         bridge.write_arm_calibration({}, save=False, relax_s=10.0)
+
+
+class _Wheels(FakeLeKiwi):
+    """FakeLeKiwi with LeKiwi's three wheels: their velocity read, the body conversion, the stop
+    (counted) and a port handler (its reopens counted). fail_stops: that many stops fail."""
+
+    base_motors = ["base_left_wheel", "base_back_wheel", "base_right_wheel"]
+
+    def __init__(self):
+        super().__init__(FakeBus(ACTUAL, dict.fromkeys(ACTUAL, 0)))
+        self.stops, self.fail_stops, self.wheel_raw, self.wheels_fail = 0, 0, 100.0, False
+        bus, robot = self.bus, self
+        read = bus.sync_read
+
+        def sync_read(reg, motors):
+            if reg == "Present_Velocity":
+                if robot.wheels_fail:
+                    raise ConnectionError("no status packet")
+                return dict.fromkeys(motors, robot.wheel_raw)
+            return read(reg, motors)
+
+        bus.sync_read = sync_read
+        bus.port = "/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0"
+        bus.port_handler = type("PH", (), {"opened": 0, "closePort": lambda s: None,
+                                           "openPort": lambda s: setattr(s, "opened", s.opened + 1) or True})()
+
+    def _wheel_raw_to_body(self, left, back, right):
+        return {"x.vel": 0.0, "y.vel": 0.0, "theta.vel": (left + back + right) / 10.0}
+
+    def stop_base(self):
+        if self.fail_stops:
+            self.fail_stops -= 1
+            raise ConnectionError("no status packet")
+        self.stops += 1
+
+
+def test_a_camera_stall_keeps_the_base_odometry_from_the_wheels():
+    # Nov 4: a stalled camera froze the base's velocity, and a 70 deg turn ran to its 15 s timeout.
+    robot = _Wheels()
+    bridge = RobotBridge(robot, allow_uncalibrated=True)
+    bridge._read_joints_only()
+    assert bridge._latest_base_vel["theta.vel"] == pytest.approx(30.0)
+    ended = []
+    bridge._auto.abort_base = ended.append
+    robot.wheels_fail = True  # the wheels can't be read either: the move can't be driven blind
+    bridge._read_joints_only()
+    assert ended and "odometry" in ended[0] and bridge._latest_base_vel["theta.vel"] == 0.0
+
+
+def test_a_failed_wheel_stop_reopens_the_motor_port_and_stops_again():
+    robot = _Wheels()
+    bridge = RobotBridge(robot, allow_uncalibrated=True)
+    bridge._stop_wheels("test")
+    assert robot.stops == 1 and robot.bus.port_handler.opened == 0
+    robot.fail_stops = 1
+    bridge._stop_wheels("test")
+    assert robot.bus.port_handler.opened == 1 and robot.stops == 2
+    robot.fail_stops = 2
+    bridge._stop_wheels("test")  # within the cooldown: not reopened again
+    assert robot.bus.port_handler.opened == 1
+
+
+def test_a_stalled_control_loop_has_its_wheels_stopped(started):
+    robot = _Wheels()
+    started(robot, allow_uncalibrated=True)
+    time.sleep(0.2)
+    before = robot.stops
+    observe = robot.get_observation
+    robot.get_observation = lambda: (time.sleep(1.8), observe())[1]  # the loop stuck in a read
+    time.sleep(1.6)
+    assert robot.stops > before
+    robot.get_observation = observe
+    time.sleep(2.0)  # the loop back

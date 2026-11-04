@@ -100,6 +100,14 @@ MAX_RELAX_S = 3.0  # convention: a resting arm settles within a second or two
 # gripper motor (Nov 4, "Failed to write 'Max_Position_Limit' on id_=6 ... after 1 tries") stopped
 # a whole calibration run. A write sets a value, so trying it again is safe.
 CALIBRATION_WRITE_RETRIES = 2  # convention
+# The wheels keep the last speed they were sent, whatever happens to the control loop or the
+# bus (Nov 4: the base turned on its own until its power was cut). The loop counts as stalled
+# when no tick has finished in LOOP_STALL_S: a watchdog thread then stops the wheels itself,
+# checking every WATCHDOG_PERIOD_S. A failed wheel command reopens the motor port, at most once
+# per BUS_REOPEN_COOLDOWN_S (the adapter re-enumerates after a USB dropout: Nov 3).
+LOOP_STALL_S = 1.0  # convention: 30 ticks
+WATCHDOG_PERIOD_S = 0.2  # convention
+BUS_REOPEN_COOLDOWN_S = 2.0  # convention
 # Where a register auto mode lowered (AutoController.take_bus_writes) is put back from: the
 # motor's power-on value.
 REGISTER_DEFAULTS = {"Torque_Limit": "Max_Torque_Limit"}
@@ -313,6 +321,9 @@ class RobotBridge:
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
+        self._watchdog: threading.Thread | None = None
+        self._last_tick = time.monotonic()
+        self._last_bus_reopen = 0.0
 
         # Playback: None means not replaying. While active, the control loop steps through
         # these recorded actions instead of computing one from the current control mode.
@@ -419,13 +430,18 @@ class RobotBridge:
         logger.info("RobotBridge starting with initial joint targets: %s", self._joint_targets)
 
         self._stop_event.clear()
+        self._last_tick = time.monotonic()
         self._thread = threading.Thread(target=self._control_loop, name="robot_bridge_loop", daemon=True)
         self._thread.start()
+        self._watchdog = threading.Thread(target=self._wheel_watchdog, name="wheel_watchdog", daemon=True)
+        self._watchdog.start()
 
     def stop(self) -> None:
         self._stop_event.set()
         if self._thread is not None:
             self._thread.join(timeout=2.0)
+        if self._watchdog is not None:
+            self._watchdog.join(timeout=2.0)
         try:
             self._robot.stop_base()
         finally:
@@ -823,6 +839,8 @@ class RobotBridge:
             new = {j: dataclasses.replace(robot.calibration[j], **{k: int(c[k]) for k in CALIBRATION_KEYS})
                    for j, c in req["joints"].items()}
             self._robot.stop_base()  # the loop pauses for the relax: nothing may keep driving
+            # A pause on purpose, not a stall: the wheel watchdog's stop would cut into the writes.
+            self._last_tick = time.monotonic() + req["relax_s"] + 1.0
             bus.disable_torque(ARM_JOINTS)
             try:
                 if req["relax_s"]:
@@ -863,6 +881,7 @@ class RobotBridge:
         bus = getattr(self._robot, "bus", None)
         if bus is None:
             return
+        self._read_wheels_only(bus)
         try:
             pos = bus.sync_read("Present_Position", ARM_JOINTS)
             load = bus.sync_read("Present_Load", ARM_JOINTS)
@@ -875,6 +894,66 @@ class RobotBridge:
                 st["pos"], st["load"] = v, abs(load.get(joint, 0.0))
                 st["severity"] = _stall_severity(joint, st["load"], st.get("speed", 0.0))
                 st["stalled"] = st["severity"] > 0.0
+
+    def _read_wheels_only(self, bus) -> None:
+        """Control-loop thread only: the base's velocity straight from the wheels when
+        get_observation() failed, for auto mode's odometry. Without it a camera stall froze the
+        odometry while the wheels turned on: a 70 deg turn ran 15 s to its timeout (Nov 4). If
+        the wheels can't be read either, a running base move ends: it can't be driven blind."""
+        motors = getattr(self._robot, "base_motors", None)
+        if not motors:
+            return
+        try:
+            raw = bus.sync_read("Present_Velocity", motors)
+            vel = self._robot._wheel_raw_to_body(raw["base_left_wheel"], raw["base_back_wheel"], raw["base_right_wheel"])
+        except Exception as e:
+            logger.exception("reading the wheels failed too")
+            self._auto.abort_base(f"the base's odometry was lost (reading the wheels failed: {e})")
+            with self._lock:
+                self._latest_base_vel = {"x.vel": 0.0, "y.vel": 0.0, "theta.vel": 0.0}
+            return
+        with self._lock:
+            self._latest_base_vel = {k: float(vel.get(k, 0.0)) for k in ("x.vel", "y.vel", "theta.vel")}
+
+    def _stop_wheels(self, why: str) -> None:
+        """Stop the wheels now (any thread): the stop, and where it fails, the motor port reopened
+        (at most once per BUS_REOPEN_COOLDOWN_S) and the stop again."""
+        try:
+            self._robot.stop_base()
+            return
+        except Exception:
+            logger.exception("stopping the wheels failed (%s)", why)
+        bus = getattr(self._robot, "bus", None)
+        now = time.monotonic()
+        if bus is None or now - self._last_bus_reopen < BUS_REOPEN_COOLDOWN_S:
+            return
+        self._last_bus_reopen = now
+        try:
+            ph = bus.port_handler
+            ph.closePort()
+            if not ph.openPort():
+                raise OSError(f"couldn't open {bus.port}")
+            logger.warning("motor port %s reopened (%s)", bus.port, why)
+            self._robot.stop_base()
+        except Exception:
+            logger.exception("reopening the motor port failed (%s)", why)
+
+    def _wheel_watchdog(self) -> None:
+        """Its own thread: when the control loop stalls (no tick finished in LOOP_STALL_S), stop
+        the wheels, once per stall. The loop may be stuck inside a bus call, so this write can
+        collide with it; a garbled packet is the lesser risk than wheels left turning."""
+        stalled = False
+        while not self._stop_event.wait(WATCHDOG_PERIOD_S):
+            if time.monotonic() - self._last_tick <= LOOP_STALL_S:
+                stalled = False
+                continue
+            if not stalled:
+                stalled = True
+                logger.error("control loop stalled for over %.1f s: stopping the wheels", LOOP_STALL_S)
+                self._stop_wheels("control loop stalled")  # first: nothing below may hold it up
+                self._auto.abort_base("the control loop stalled")
+                with self._lock:
+                    self._latest_base_vel = {"x.vel": 0.0, "y.vel": 0.0, "theta.vel": 0.0}
 
     def _apply_bus_writes(self, writes: list[tuple[str, str, int | None]]) -> None:
         """Control-loop thread only: the register writes auto mode asked for
@@ -1184,6 +1263,7 @@ class RobotBridge:
                 self._robot.send_action(action)
             except Exception:
                 logger.exception("send_action failed")
+                self._stop_wheels("send_action failed")
 
             try:
                 obs = self._robot.get_observation()
@@ -1235,5 +1315,6 @@ class RobotBridge:
                 self._read_joints_only()
                 self._maybe_recover_cameras(loop_start)
 
-            elapsed = time.monotonic() - loop_start
+            self._last_tick = time.monotonic()
+            elapsed = self._last_tick - loop_start
             time.sleep(max(period - elapsed, 0.0))

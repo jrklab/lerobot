@@ -294,6 +294,17 @@ class AutoController:
         with self._lock:
             self._finish_locked("aborted", reason)
 
+    def abort_base(self, reason: str) -> None:
+        """End a running base move (with what it covered so far): it can't be driven without
+        its odometry."""
+        with self._lock:
+            cmd = self._cmd
+            if cmd is None or cmd["kind"] != "base":
+                return
+            if "odom_start" in cmd:
+                cmd["result"] = {"moved": self._base_moved(cmd)}
+            self._finish_locked("aborted", reason)
+
     def status(self, measured_units: dict[str, float]) -> dict:
         """The current (or last finished) command, the arm's commanded and measured joints
         (degrees; measured_units is RobotBridge's normalized reading), its TCP pose from the
