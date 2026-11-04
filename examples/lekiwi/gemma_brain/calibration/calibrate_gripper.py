@@ -146,6 +146,20 @@ def _ok(r, what: str):
     return r
 
 
+def _square(sk: Skills) -> float:
+    """Square the jaws to the brick: within ALIGN_TOL, or, where the roll stops short of it (the
+    joint's play: Nov 4, it stayed 4.8 deg off for 7 looks), within a pick's ANGLE_TOL_DEG (the
+    closing jaws square it up). The angle left (deg)."""
+    r = sk.servo(BRICK, AngleGoal(ALIGN_TOL))
+    if r.ok:
+        return 0.0
+    left = (r.data.get("err") or [None])[0]
+    if left is None or abs(left) > prm.ANGLE_TOL_DEG.value:
+        raise RuntimeError(f"align: {r.reason}")
+    print(f"    squared to {left:+.1f} deg (the roll stopped short of {ALIGN_TOL.value:.0f})")
+    return float(left)
+
+
 def _grasp_once(sk: Skills, robot, wide: float, side: str, short_roll: float) -> dict:
     """From the hover: back to the short side's roll, square the jaws to the brick there
     (ALIGN_TOL), a quarter turn more for its long side, centre high and low as a pick does,
@@ -153,7 +167,7 @@ def _grasp_once(sk: Skills, robot, wide: float, side: str, short_roll: float) ->
     hover. Squared from the quarter-turned roll instead, the roll it wanted was past the wrist's
     range and it stayed 8.5 deg off (Nov 4)."""
     _ok(sk.move("arm", delta=(0.0, 0.0, 0.0), roll=short_roll), "roll back")
-    _ok(sk.servo(BRICK, AngleGoal(ALIGN_TOL)), "align")
+    left = _square(sk)
     if side == "long":
         _ok(sk.move("arm", delta=(0.0, 0.0, 0.0), roll=_turned(sk, sk.roll)), "quarter turn")
     _ok(sk.servo(BRICK, JawGoal(tol_m=prm.REACH_TOL_M, plane_h=sk.object_height(BRICK))), "centre high")
@@ -170,7 +184,8 @@ def _grasp_once(sk: Skills, robot, wide: float, side: str, short_roll: float) ->
     _ok(actions.hover_at(sk, prm.HOVER_HEIGHT_M), "up")
     mm = lego_width_mm(measured)
     print(f"    {side} side: measured {1000 * measured:.1f} mm -> {mm} mm, closed at {c['deg']} deg")
-    return {"mm": mm, "what": f"2x4 brick, {side} side", "measured_mm": round(1000 * measured, 1), **c}
+    return {"mm": mm, "what": f"2x4 brick, {side} side", "measured_mm": round(1000 * measured, 1),
+            "angle_left_deg": left, **c}
 
 
 def auto(robot, board_pose, out: Path, repeats: int = AUTO_REPEATS, moves: list | None = None) -> list[dict]:
@@ -203,7 +218,7 @@ def auto(robot, board_pose, out: Path, repeats: int = AUTO_REPEATS, moves: list 
         if sk.find(BRICK, "wrist") is None:
             raise RuntimeError("no brick in the wrist camera's view right of the floor board")
         _ok(actions.line_up(sk, BRICK), "line up")
-        _ok(sk.servo(BRICK, AngleGoal(ALIGN_TOL)), "align")
+        _square(sk)
         short_roll = sk.roll
         for side in ("short", "long"):
             got = 0
