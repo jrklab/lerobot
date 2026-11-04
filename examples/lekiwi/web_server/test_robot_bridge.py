@@ -47,13 +47,20 @@ class FakeBus:
         self.torque = dict.fromkeys(actual, True)
         self.calibration: dict[str, MotorCalibration] = {}
         self.fail_writes = False
+        self.missed = 0  # the next writes that get no status packet (each try counts)
 
     def read(self, reg, motor, normalize=True):
         return self.regs[motor][reg]
 
-    def write(self, reg, motor, value, normalize=True):
+    def write(self, reg, motor, value, normalize=True, num_retry=0):
         if self.fail_writes:
             raise ConnectionError("no status packet")
+        for _ in range(num_retry + 1):
+            if not self.missed:
+                break
+            self.missed -= 1
+        else:
+            raise ConnectionError(f"no status packet after {num_retry + 1} tries")
         if reg in EEPROM and self.torque[motor]:
             raise RuntimeError(f"{motor}: {reg} written with the torque on")
         self.regs[motor][reg] = int(value)
@@ -238,6 +245,23 @@ def test_a_calibration_write_moves_nothing_and_saves_only_when_asked(started):
     time.sleep(0.1)
     assert abs(robot.bus.goal_actual("arm_elbow_flex") - ACTUAL["arm_elbow_flex"]) <= 1
 
+
+
+def test_a_missed_reply_during_a_calibration_write_is_tried_again(started):
+    # Nov 4: one missed status packet from the gripper motor stopped a calibration run.
+    from robot_bridge import CALIBRATION_WRITE_RETRIES
+
+    robot = _new_arm()
+    bridge = started(robot, allow_uncalibrated=True)
+    time.sleep(0.1)
+    new = {"arm_elbow_flex": {"homing_offset": ACTUAL["arm_elbow_flex"] - 2047, "range_min": 1100, "range_max": 3000}}
+    robot.bus.missed = CALIBRATION_WRITE_RETRIES  # missed this many times, then answered
+    result = bridge.write_arm_calibration(new, save=False)
+    assert result["motors_match"] and robot.bus.regs["arm_elbow_flex"]["Min_Position_Limit"] == 1100
+    robot.bus.missed = CALIBRATION_WRITE_RETRIES + 1  # one more than the retries: refused
+    with pytest.raises(ValueError, match="no status packet"):
+        bridge.write_arm_calibration(new, save=False)
+    assert all(robot.bus.torque.values())  # the torque back on after a failed write
 
 def test_bad_calibration_writes_are_refused(started):
     bridge = started(_new_arm(), allow_uncalibrated=True)

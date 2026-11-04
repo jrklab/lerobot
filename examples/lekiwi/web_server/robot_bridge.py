@@ -96,6 +96,10 @@ HOMING_TICK = MOTOR_RESOLUTION // 2 - 1  # 2047: where calibration homes "middle
 HOMING_OFFSET_MAX = MOTOR_RESOLUTION // 2 - 1
 CALIBRATION_KEYS = ("homing_offset", "range_min", "range_max")
 MAX_RELAX_S = 3.0  # convention: a resting arm settles within a second or two
+# A calibration register write tried this many times more: one missed status packet from the
+# gripper motor (Nov 4, "Failed to write 'Max_Position_Limit' on id_=6 ... after 1 tries") stopped
+# a whole calibration run. A write sets a value, so trying it again is safe.
+CALIBRATION_WRITE_RETRIES = 2  # convention
 # Where a register auto mode lowered (AutoController.take_bus_writes) is put back from: the
 # motor's power-on value.
 REGISTER_DEFAULTS = {"Torque_Limit": "Max_Torque_Limit"}
@@ -202,6 +206,19 @@ def _stall_severity(joint: str, load: float, speed: float) -> float:
     if load <= threshold:
         return 0.0
     return min(1.0, (load - threshold) / (1000 - threshold))
+
+
+
+def _write_calibration_registers(bus, calibration: dict) -> None:
+    """The registers FeetechMotorsBus.write_calibration writes (the homing offset on protocol 0,
+    the position limits), each retried CALIBRATION_WRITE_RETRIES times, without touching the
+    bus's cached calibration."""
+    for motor, c in calibration.items():
+        regs = [("Min_Position_Limit", c.range_min), ("Max_Position_Limit", c.range_max)]
+        if getattr(bus, "protocol_version", 0) == 0:
+            regs.insert(0, ("Homing_Offset", c.homing_offset))
+        for reg, value in regs:
+            bus.write(reg, motor, value, num_retry=CALIBRATION_WRITE_RETRIES)
 
 
 class RobotLike(Protocol):
@@ -810,7 +827,7 @@ class RobotBridge:
             try:
                 if req["relax_s"]:
                     time.sleep(req["relax_s"])
-                bus.write_calibration(new, cache=False)
+                _write_calibration_registers(bus, new)
                 calib = {**robot.calibration, **new}
                 robot.calibration = calib
                 bus.calibration = calib
