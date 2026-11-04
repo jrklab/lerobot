@@ -170,7 +170,9 @@ def check(robot: Robot) -> dict:
             "note: the front camera doesn't see the floor board: it will be placed through the upright board"
         )
     if FLOOR_BOARD not in seen["wrist"]:
-        problems.append("the wrist camera (the arm at rest) doesn't see the floor board")
+        # A board placed further out than the wrist's rest view: the base drives up to it before
+        # the first scene (position_for_floor_board), and the wrist's view is checked there.
+        print("note: the wrist camera (the arm at rest) doesn't see the floor board: the base moves up to it first")
     if st.get("arm_calibration") == "calibrated":
         # The coarse stage takes its zeros from where the arm lies. Calibrated, its readings
         # can tell whether it does: held in the planner's rest pose instead, the elbow sits 13 deg
@@ -198,6 +200,10 @@ def lay_down(robot: Robot) -> None:
     calib = Calibration.from_robot(robot)
     pose = {j: min(max(sc.REST[j], calib.limits(j)[0]), calib.limits(j)[1]) for j in sc.IK_ARM_JOINTS}
     sc._move(Arm(robot), pose, "down to rest")
+
+
+def wrist_sees_floor_board(robot) -> bool:
+    return FLOOR_BOARD in boards.detect(boards.decode(robot.frame("wrist", after=time.time())[0]))
 
 
 def touch_points(board_pose: np.ndarray) -> list[tuple[float, str]]:
@@ -250,6 +256,8 @@ def fine(robot: Robot, thickness: float, log: dict) -> dict:
     reverse = False
     print("the base placed for the floor board:")
     log["positioned"] = capture_cameras.position_for_floor_board(robot)
+    if not wrist_sees_floor_board(robot):
+        raise RuntimeError("after the base moved, the wrist camera (the arm at rest) still doesn't see the floor board")
     while True:
         first = not sweeps
         poses = capture_cameras.plan(

@@ -61,6 +61,7 @@ def fake(monkeypatch):
         monkeypatch.setattr(ca.capture_cameras, "run_scene", f.run_scene)
         monkeypatch.setattr(ca.capture_cameras, "sweep_plan", lambda: [{"turn_deg": 10}])
         monkeypatch.setattr(ca.capture_cameras, "position_for_floor_board", lambda robot: {"ok": True})
+        monkeypatch.setattr(ca, "wrist_sees_floor_board", lambda robot: True)
         monkeypatch.setattr(ca.solve_cameras, "solve", f.solve)
         monkeypatch.setattr(ca.sc, "correct", lambda robot, offsets: f.corrections.append(offsets))
         monkeypatch.setattr(ca.Calibration, "from_robot", classmethod(lambda cls, robot: None))
