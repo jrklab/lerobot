@@ -149,7 +149,8 @@ FLOOR_BOARD = "wrist"  # the floor board's name (boards.py)
 GOOD_BOARD_CORNERS = 15
 LOOK_FRAMES = 3  # convention: the best of a few frames
 REPOSITION_STEP_M = 0.03  # convention
-MAX_REPOSITION_M = 0.12  # convention: a board placed within a hand's width of right
+MAX_REPOSITION_M = 0.20  # convention (12 until Nov 3: a board placed far was still 18 cm ahead after it)
+WRIST_NEAR_ROW = 0.85  # the board's lowest corners below this in the wrist camera at rest: no nearer
 NEAR_ROW = 0.88  # the board's lowest corners below this (fraction of the image height): no nearer
 SIDEWAYS_STEP_M = 0.02  # convention
 MAX_SIDEWAYS_M = 0.10  # convention
@@ -489,19 +490,20 @@ def return_to_start(robot, measure) -> tuple[float, float, float]:
     raise RuntimeError(f"not back at the start after {RETURN_TRIES} moves")
 
 
-def floor_board_look(robot, frames: int = LOOK_FRAMES) -> tuple[int, float | None, float | None]:
-    """The front camera's best of a few frames at the floor board: (corners, mean u, lowest v),
-    image fractions; (0, None, None) when it isn't read (edge-on from 5 cm up, it comes and goes)."""
+def floor_board_look(robot, frames: int = LOOK_FRAMES, cam: str = "front") -> tuple[int, float | None, float | None]:
+    """A camera's best of a few frames at the floor board: (corners, mean u, lowest v), image
+    fractions; (0, None, None) when it isn't read (the front camera, edge-on from 5 cm up: it
+    comes and goes)."""
     best = (0, None, None)
     for _ in range(frames):
-        d = boards.detect(robot.frame("front", after=time.time())[0]).get(FLOOR_BOARD)
+        d = boards.detect(robot.frame(cam, after=time.time())[0]).get(FLOOR_BOARD)
         if d and len(d["ids"]) > best[0]:
             px = np.asarray(d["px"], float).reshape(-1, 2) / np.array([640.0, 480.0])
             best = (len(d["ids"]), float(px[:, 0].mean()), float(px[:, 1].max()))
     return best
 
 
-def position_for_floor_board(robot, look=None) -> dict:
+def position_for_floor_board(robot, look=None, wrist_look=None) -> dict:
     """Before a run's first scene: the base moved (forward or back, then sideways) until the front
     camera reads the floor board well (GOOD_BOARD_CORNERS), so a board placed a little far or to one
     side needs no one to move it (Oct 30: the front camera read 0-26 of its corners as placed). By
@@ -510,6 +512,14 @@ def position_for_floor_board(robot, look=None) -> dict:
     the best position seen if none reads well. Returns where it went and what it read."""
     if look is None:
         look = lambda: floor_board_look(robot)  # noqa: E731
+    if wrist_look is None:
+        wrist_look = lambda: floor_board_look(robot, frames=1, cam="wrist")  # noqa: E731
+
+    def too_near() -> bool:
+        # The wrist camera at rest reads the board even where the front camera can't: it slides
+        # down its view as the base comes nearer (the front camera's rule needs the board read).
+        _, _, wv = wrist_look()
+        return wv is not None and wv > WRIST_NEAR_ROW
     moved = np.zeros(2)  # (forward, left) m, open loop: short moves
     seen = []  # (forward, corners)
 
@@ -525,7 +535,7 @@ def position_for_floor_board(robot, look=None) -> dict:
         step = -REPOSITION_STEP_M if v is not None and v > NEAR_ROW else REPOSITION_STEP_M
         for _ in range(2):  # one way, then the other
             while n < GOOD_BOARD_CORNERS and abs(moved[0] + step) <= MAX_REPOSITION_M:
-                if step > 0 and v is not None and v > NEAR_ROW:
+                if step > 0 and ((v is not None and v > NEAR_ROW) or too_near()):
                     break  # its near edge low in the view: no nearer
                 before = n
                 robot.base(dx=step)

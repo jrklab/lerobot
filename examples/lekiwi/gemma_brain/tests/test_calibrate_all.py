@@ -186,6 +186,10 @@ class Base:
     def look(self):
         return self.view(self.fwd, self.left)
 
+    def wrist(self, near_at=1.0):
+        # The board in the wrist view at rest: down the image as the base comes nearer.
+        return 30, 0.5, 0.5 + 0.35 * self.fwd / near_at
+
 
 def _far_board(fwd, left, need=0.06, u0=0.5):
     """A board read well from `need` forward on; nearer, its lowest corners drop down the image."""
@@ -197,32 +201,32 @@ def _far_board(fwd, left, need=0.06, u0=0.5):
 
 def test_a_far_board_is_driven_up_to():
     b = Base(_far_board)
-    out = capture_cameras.position_for_floor_board(b, look=b.look)
+    out = capture_cameras.position_for_floor_board(b, look=b.look, wrist_look=b.wrist)
     assert out["ok"] and out["forward_m"] == pytest.approx(0.06) and b.moves == [(0.03, 0.0), (0.03, 0.0)]
 
 
 def test_the_default_look_uses_the_robots_front_camera(monkeypatch):
     b = Base(lambda f, left: (20, 0.5, 0.7))
-    monkeypatch.setattr(capture_cameras, "floor_board_look", lambda robot: b.look() if robot is b else None)
+    monkeypatch.setattr(capture_cameras, "floor_board_look", lambda robot, frames=3, cam="front": b.look() if robot is b else None)
     assert capture_cameras.position_for_floor_board(b)["ok"]
 
 
 def test_a_well_read_board_moves_nothing():
     b = Base(lambda f, left: (20, 0.5, 0.7))
-    assert capture_cameras.position_for_floor_board(b, look=b.look)["ok"] and b.moves == []
+    assert capture_cameras.position_for_floor_board(b, look=b.look, wrist_look=b.wrist)["ok"] and b.moves == []
 
 
 def test_a_board_too_near_is_backed_away_from():
     # Read poorly with its near edge low in the view: back up until it reads well.
     b = Base(lambda f, left: (18, 0.5, 0.8) if f <= -0.06 + 1e-9 else (8, 0.5, 0.92))
-    out = capture_cameras.position_for_floor_board(b, look=b.look)
+    out = capture_cameras.position_for_floor_board(b, look=b.look, wrist_look=b.wrist)
     assert out["ok"] and out["forward_m"] == pytest.approx(-0.06)
 
 
 def test_never_nearer_than_the_near_row():
     # Read better the nearer it is, but well only past the near row: stop there, nothing better.
     b = Base(lambda f, left: (int(6 + 60 * f), 0.5, 0.80 + f))
-    out = capture_cameras.position_for_floor_board(b, look=b.look)
+    out = capture_cameras.position_for_floor_board(b, look=b.look, wrist_look=b.wrist)
     assert not out["ok"]
     stop = max(f for f in (0.0, 0.03, 0.06, 0.09) if 0.80 + f - 0.03 <= capture_cameras.NEAR_ROW)
     assert out["forward_m"] == pytest.approx(stop)  # one step past the row at most, then no further
@@ -231,7 +235,7 @@ def test_never_nearer_than_the_near_row():
 
 def test_a_board_off_to_one_side_is_centred():
     b = Base(lambda f, left: _far_board(f, left, need=0.0, u0=0.75))  # read well, right of centre
-    out = capture_cameras.position_for_floor_board(b, look=b.look)
+    out = capture_cameras.position_for_floor_board(b, look=b.look, wrist_look=b.wrist)
     assert out["left_m"] < 0  # moved right
     assert abs(0.75 + 2.5 * out["left_m"] - 0.5) <= capture_cameras.CENTRED_U
 
@@ -271,3 +275,11 @@ def test_too_few_samples_propose_nothing():
     log = ca.LoadLog()
     log(_status([100] * 5))
     assert log.propose() == {}
+
+
+def test_an_unread_board_is_driven_up_to_only_until_the_wrist_sees_it_near():
+    """Nov 3: the front camera read nothing until 12 cm forward; blind, the wrist camera stops it."""
+    b = Base(lambda f, left: (0, None, None))  # the front camera never reads it
+    b.wrist = lambda: (30, 0.5, 0.5 + 0.35 * b.fwd / 0.09)  # near enough at 9 cm
+    out = capture_cameras.position_for_floor_board(b, look=b.look, wrist_look=b.wrist)
+    assert out["forward_m"] <= 0.09 + 1e-9 and not out["ok"]
