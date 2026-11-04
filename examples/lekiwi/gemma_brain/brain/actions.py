@@ -88,16 +88,18 @@ def measure_width(sk: Skills, obj: str) -> dict | None:
 
 def open_to_fit(sk: Skills, obj: str) -> Result:
     """Open the jaws to the object before landing on it (Nov 4; the demo's one opening before):
-    its measured extent across the jaws, the taught gap on the fixed jaw's side, and the
-    servo's tolerance either way on the moving jaw's. Refused when that is wider than the
-    gripper opens; unmeasured, the jaws stay as they are, noted."""
+    its measured extent across the jaws, the taught gap on the fixed jaw's side, and on the
+    moving jaw's the servo's tolerance and the width's error, each either way (the owner: room
+    to spare, Nov 4). Refused when that is wider than the gripper opens; unmeasured, the jaws
+    stay as they are, noted."""
     w = measure_width(sk, obj)
     sk.grasp_width = None if w is None else w["short_m"]
     if w is None:
         sk.ev("grasp_width", obj=obj, measured=False)
         return Result(True, "width not measured: the jaws stay as they are")
     top = sk.object_height(obj)
-    mm = MM_PER_M * (w["extent_m"] + sk.geom.fixed_jaw_gap(top) + 2 * prm.SERVO_TOL_M.value)
+    room = 2 * (prm.SERVO_TOL_M.value + prm.WIDTH_ERROR_M.value)
+    mm = MM_PER_M * (w["extent_m"] + sk.geom.fixed_jaw_gap(top) + room)
     sk.ev("grasp_width", obj=obj, measured=True, extent_mm=round(MM_PER_M * w["extent_m"], 1),
           short_mm=round(MM_PER_M * w["short_m"], 1), open_mm=round(mm, 1))
     if mm > sk.geom.gripper_max_mm():
@@ -108,8 +110,8 @@ def open_to_fit(sk: Skills, obj: str) -> Result:
 def close(sk: Skills) -> Result:
     """Close the jaws on the object, noting how far it reaches below them: the jaw tips' height
     above the floor it stands on (what the release and the carry clear by). Missed when they
-    close well past its measured width (open_to_fit), beyond the camera's reading wide by
-    WIDTH_ERROR_M twice over: on an edge, or on something else."""
+    close well past its measured width (open_to_fit), more than WIDTH_ERROR_M twice over:
+    on an edge, or on something else."""
     sk.held_below = max(sk.height(), 0.0)
     r = sk.grip("close")
     if not r.ok or sk.grasp_width is None or r.data.get("mm") is None:

@@ -450,10 +450,10 @@ def _width_sk(monkeypatch, extent, short):
 
 
 def test_the_jaws_open_to_the_measured_width_before_landing(monkeypatch):
-    # Nov 4: the brick's 15.8 mm short side read 18.0-18.7 mm; at a residual angle it spans more.
+    # Nov 4: the brick's 15.8 mm short side read 14.8-16.7 mm; at a residual angle it spans more.
     sk, opened = _width_sk(monkeypatch, extent=0.0195, short=0.0182)
     assert actions.open_to_fit(sk, "red block").ok
-    want = 1000 * (0.0195 + 0.0023 + 2 * prm.SERVO_TOL_M.value)
+    want = 1000 * (0.0195 + 0.0023 + 2 * (prm.SERVO_TOL_M.value + prm.WIDTH_ERROR_M.value))
     assert opened == [("open", pytest.approx(want))] and sk.grasp_width == pytest.approx(0.0182)
     sk, opened = _width_sk(monkeypatch, extent=0.050, short=0.03)
     r = actions.open_to_fit(sk, "red block")

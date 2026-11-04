@@ -124,7 +124,7 @@ PLACE_CLEARANCE_M = Param(
     "verified accuracy (the arm's own height) plus the front camera's height error (the target's top); "
     "the release's contact stop guards the rest (Nov 4; the demo's brick released ~2.4 mm above the cup's rim)",
 )
-WIDTH_ERROR_M = Param(0.003, "RULE", "how much wider than it is the wrist camera reads an object's width across (vision.brick_angle's blob takes in its edge shading): the red brick's 15.8 mm short side read 18.0-18.7 mm in six looks (Nov 4, run 20261104T101100)")
+WIDTH_ERROR_M = Param(0.001, "RULE", "how far off, either way, the wrist camera reads an object's width across (vision.brick_angle with its sampled colour, as find() has it): the red brick's 15.8 mm short side read 14.8-16.7 mm over 27 looks in four runs, 0.1-0.7 mm narrow at the final looks (Nov 4; without the colour the blob took in its edge shading, 18-19 mm)")
 SERVO_TOL_M = Param(0.002, "RULE", "servo position tolerance at the object: under the last descent's landing scatter (2.5 mm), so the servo isn't what limits a grasp")
 REACH_TOL_M = Param(0.015, "RULE", "line-up: close enough for the arm to take the rest, with room: vertical reach at the hover goes 3 cm past the reach point, half of it (at 3 cm the arm then needed 4.4 cm after a large roll and was refused, Oct 27; v1's ARM_REACH_M was 1.5 cm)")
 ANGLE_TOL_DEG = Param(12.0, "RULE", "roll tolerance: squeezing jaws square up a brick that far off (v1, Oct 23)")
