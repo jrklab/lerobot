@@ -146,7 +146,8 @@ def snap_top(jpeg: bytes, box) -> tuple[list[float], str]:
     measured from the box's top (geometry.front_object_height). Walks up from the box's top
     while the rows' middle keeps the colour of the box's top band. Only ever raises the top (a
     higher top raises the place heights, the safe side); unchanged when the colour goes on past
-    TOP_REACH (no edge: the object against its own colour). Returns (box, how)."""
+    TOP_REACH (no edge: the object against its own colour); within the walk, the top goes on
+    the strongest horizontal edge. Returns (box, how)."""
     img = cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_COLOR)
     if img is None:
         return list(box), "no image"
@@ -172,6 +173,14 @@ def snap_top(jpeg: bytes, box) -> tuple[list[float], str]:
     if y - 1 < lowest and y < top:
         return list(box), "no edge within reach"
     if y == top:
+        return list(box), "already at the edge"
+    # The colour can run on past the rim into a background of nearly its colour (Nov 4: a
+    # light wall behind the cup's white rim, 18 px past it): the top is the strongest
+    # horizontal edge between where the colour ends and the box's own top, across the middle.
+    rows = lab[y - 1 : top + 2, c0:c1]
+    edge = np.linalg.norm(rows[2:] - rows[:-2], axis=2).mean(axis=1)  # row k+1 against its neighbours
+    y = y + int(np.argmax(edge))
+    if y >= top:
         return list(box), "already at the edge"
     return [x0, y / h, x1, y1], f"raised {top - y} px"
 
