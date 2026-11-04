@@ -56,6 +56,7 @@ def pick(sk: Skills, obj: str, drive: bool = True, start: str | None = None) -> 
         ("centre_high", lambda: sk.servo(obj, JawGoal(tol_m=prm.REACH_TOL_M, plane_h=sk.object_height(obj)))),
         ("down", lambda: sk.move("arm", height=sk.final_look_height(obj))),
         ("centre_low", lambda: sk.servo(obj, JawGoal(plane_h=sk.object_height(obj)))),
+        ("open", lambda: actions.open_to_fit(sk, obj)),
         ("land", lambda: actions.land(sk, obj)),
         ("close", lambda: actions.close(sk)),
         ("lift", lambda: actions.lift(sk)),

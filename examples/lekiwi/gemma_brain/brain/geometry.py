@@ -56,6 +56,7 @@ MIDDLE_ROW_ENDS = ((0.0, 0.5), (1.0, 0.5))  # convention: image fractions
 BOTTOM_CENTRE = (0.5, 1.0)  # convention: image fractions
 EDGE_MIDPOINTS = ((0.0, 0.5), (1.0, 0.5), (0.5, 0.0), (0.5, 1.0))  # convention: image fractions
 FAR_M = 100.0  # convention: a floor point far enough ahead to stand for the horizon
+MM_PER_M = 1000.0  # convention: units (the gripper works in mm)
 VIEW_HEIGHT_STEP_M = 0.005  # convention: finer than the place's clearances matter
 MAX_VIEW_HEIGHT_M = 0.30  # convention: above the vertical gripper's reach (~0.28 m at the reach point)
 JACOBIAN_STEP_M = 1e-4  # convention: a TCP move small next to the view, large next to rounding
@@ -78,6 +79,7 @@ class Geometry:
     grasp_target_height: float | None = None  # jaw tips above the floor when it was taught
     grasp_box: list | None = None  # the whole taught box (x0, y0, x1, y1)
     gripper_curve: list | None = None  # [[deg, mm], ...]: calibrate_gripper.py
+    fixed_jaw_u: float | None = None  # the fixed jaw's inner edge in the wrist image (calibrate_jaws.py)
 
     @classmethod
     def load(
@@ -111,6 +113,7 @@ class Geometry:
             else None,
             grasp_box=calib["wrist_grasp_target"].get("box") if "wrist_grasp_target" in calib else None,
             gripper_curve=calib["gripper_opening"]["value"]["curve"],
+            fixed_jaw_u=calib["wrist_jaws"]["value"]["fixed_inner_u"] if "wrist_jaws" in calib else None,
         )
 
     def _gripper(self) -> tuple[np.ndarray, np.ndarray]:
@@ -135,6 +138,25 @@ class Geometry:
         if mm > m[-1]:
             return float(d[-1] + (mm - m[-1]) * (d[-1] - d[-2]) / (m[-1] - m[-2]))
         return float(np.interp(mm, m, d))
+
+    def gripper_max_mm(self) -> float:
+        """The widest jaw opening calibrate_gripper.py measured (mm)."""
+        return float(self._gripper()[1][-1])
+
+    def wrist_distance(self, a, b, height: float, plane_h: float, roll_deg: float = 0.0) -> float:
+        """How far apart (m) two wrist-image points are on a plane `plane_h` above the floor, the
+        jaw tips `height` above it."""
+        pa, pb = self.wrist_point(a, height, plane_h, roll_deg), self.wrist_point(b, height, plane_h, roll_deg)
+        return float(np.hypot(*(pa[:2] - pb[:2])))
+
+    def fixed_jaw_gap(self, object_height: float) -> float:
+        """How far (m) the taught grasp put the object's right edge from the fixed jaw's inner edge,
+        on its top: the servo puts every object there, so the jaws open by this beyond its width
+        on that side. 0 without the teach or the jaw calibration."""
+        if self.grasp_target is None or self.grasp_target_height is None or self.fixed_jaw_u is None:
+            return 0.0
+        u, v = self.grasp_target
+        return self.wrist_distance((u, v), (self.fixed_jaw_u, v), self.grasp_target_height, object_height)
 
     def floor(self, x: float, y: float) -> float:
         return float(self.floor_coef @ np.array([1.0, x, y]))

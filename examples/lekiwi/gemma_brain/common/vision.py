@@ -74,8 +74,21 @@ def brick_angle(jpeg: bytes, box, pad: float = 0.25, look: Look | None = None) -
     long_angle = a if rw < rh else a - 90.0
     long_angle = (long_angle + 90.0) % 180.0 - 90.0
     box_area = bw * w * bh * h
+    # The two midpoints of the rectangle's long sides: the object's width across its long axis.
+    t = math.radians(long_angle)
+    half = min(rw, rh) / 2
+    nx, ny = math.cos(t) * half, math.sin(t) * half  # normal to the long axis (image vertical + angle)
+    across = [[round((X0 + cx - nx) / w, 4), round((Y0 + cy - ny) / h, 4)],
+              [round((X0 + cx + nx) / w, 4), round((Y0 + cy + ny) / h, 4)]]
+    # Its extent along the image's horizontal through the centre: what the jaws (closing
+    # left-right in the wrist image) have to clear, a residual angle included.
+    us = cv2.boxPoints(((cx, cy), (rw, rh), a))[:, 0]
+    extent_u = [[round((X0 + float(us.min())) / w, 4), round((Y0 + cy) / h, 4)],
+                [round((X0 + float(us.max())) / w, 4), round((Y0 + cy) / h, 4)]]
     return {
         "angle_deg": round(float(long_angle), 1),
+        "across": across,
+        "extent_u": extent_u,
         "aspect": round(float(max(rw, rh) / max(1.0, min(rw, rh))), 2),
         "fill": round(float(cv2.contourArea(c) / max(1.0, box_area)), 2),
         "center": [round((X0 + cx) / w, 4), round((Y0 + cy) / h, 4)],

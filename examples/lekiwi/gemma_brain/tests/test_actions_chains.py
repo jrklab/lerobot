@@ -251,6 +251,7 @@ def test_pick_chain_runs_its_steps_in_order_and_stops_at_the_first_failure(monke
         monkeypatch.setattr(chains.actions, name, ok(name))
     sk = Skills.__new__(Skills)
     sk.log, sk.heights, sk._height_fallbacks = None, {}, set()
+    sk.seen, sk.looks, sk.grasp_width = {}, {}, None
     sk.height = lambda: 0.004
     sk.servo = lambda obj, goal, part=None: (calls.append(type(goal).__name__), Result(True))[1]
     sk.move = lambda part, **k: (calls.append("down"), Result(True))[1]
@@ -341,6 +342,7 @@ def _height_sk(heights):
     sk = Skills.__new__(Skills)
     sk.log, sk.heights, sk._height_fallbacks = None, dict(heights), set()
     sk.widths, sk.held_below, sk.geom = {}, None, None
+    sk.seen, sk.looks, sk.grasp_width = {}, {}, None
     sk.height = lambda: 0.004
     sk.events = []
     sk.ev = lambda name, **k: sk.events.append((name, k))
@@ -419,3 +421,56 @@ def test_without_a_measured_target_the_demos_absolute_heights_stand():
     assert actions.place_height(sk, "bowl", "release") == prm.RELEASE_ABOVE_FLOOR_M.value
     assert actions.place_height(sk, "bowl", "hover") == prm.PLACE_HOVER_M.value
     assert [k["why"] for _, k in sk.events] == ["the target's height wasn't measured"] * 2
+
+
+class _Geom:
+    """A wrist camera reading 1 image fraction as 0.1 m, the taught gap 2.3 mm, jaws to 47.8 mm."""
+
+    def wrist_distance(self, a, b, height, plane_h, roll_deg=0.0):
+        return 0.1 * float(np.hypot(a[0] - b[0], a[1] - b[1]))
+
+    def fixed_jaw_gap(self, object_height):
+        return 0.0023
+
+    def gripper_max_mm(self):
+        return 47.8
+
+
+def _width_sk(monkeypatch, extent, short):
+    from brain.goals import Detection
+    from brain.primitives import Result
+
+    sk = _height_sk({"red block": 0.0144})
+    sk.geom, sk.roll, sk.closed_mm, opened = _Geom(), 0.0, None, []
+    sk.seen = {"wrist:red block": Detection(box=[0.4, 0.5, 0.55, 0.77], jpeg=b"x")}
+    monkeypatch.setattr(actions, "brick_angle", lambda jpeg, box, look=None: {
+        "extent_u": [[0.4, 0.6], [0.4 + extent / 0.1, 0.6]], "across": [[0.4, 0.6], [0.4 + short / 0.1, 0.6]]})
+    sk.grip = lambda how, width=None, **k: (opened.append((how, width)), Result(True, data={"mm": sk.closed_mm}))[1]
+    return sk, opened
+
+
+def test_the_jaws_open_to_the_measured_width_before_landing(monkeypatch):
+    # Nov 4: the brick's 15.8 mm short side read 18.0-18.7 mm; at a residual angle it spans more.
+    sk, opened = _width_sk(monkeypatch, extent=0.0195, short=0.0182)
+    assert actions.open_to_fit(sk, "red block").ok
+    want = 1000 * (0.0195 + 0.0023 + 2 * prm.SERVO_TOL_M.value)
+    assert opened == [("open", pytest.approx(want))] and sk.grasp_width == pytest.approx(0.0182)
+    sk, opened = _width_sk(monkeypatch, extent=0.050, short=0.03)
+    r = actions.open_to_fit(sk, "red block")
+    assert not r.ok and "wider than they open" in r.reason and opened == []
+
+
+def test_unmeasured_the_jaws_stay_open_as_they_are(monkeypatch):
+    sk, opened = _width_sk(monkeypatch, 0.02, 0.018)
+    monkeypatch.setattr(actions, "brick_angle", lambda *a, **k: None)
+    assert actions.open_to_fit(sk, "red block").ok and opened == [] and sk.grasp_width is None
+
+
+def test_a_close_well_past_the_measured_width_is_a_miss(monkeypatch):
+    sk, _ = _width_sk(monkeypatch, 0.0195, 0.0182)
+    sk.grasp_width = 0.0182
+    sk.closed_mm = 16.7  # the brick, squeezed: Nov 4
+    assert actions.close(sk).ok
+    sk.closed_mm = 9.0  # on an edge of it, or something smaller
+    r = actions.close(sk)
+    assert not r.ok and "missed it" in r.reason

@@ -82,6 +82,9 @@ class Skills:
         # How far the held object reaches below the jaw tips: their height above the floor when
         # they closed on it (actions.close); None until a grasp.
         self.held_below: float | None = None
+        # The object's width across the jaws, as measured before the grasp (actions.open_to_fit);
+        # None when it wasn't.
+        self.grasp_width: float | None = None
         self._height_fallbacks: set[str] = set()  # objects whose height wasn't measured (logged once)
         # Each object's colour per camera, sampled from the main model's boxes (vision.Look):
         # the fast model's boxes must match it.

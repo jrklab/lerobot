@@ -19,10 +19,11 @@ params.py or geometry.py one, so a new action adds a name, not a parameter to ca
 from __future__ import annotations
 
 import numpy as np
-from common.vision import snap_top
+from common.vision import brick_angle, snap_top
 
 from brain import params as prm
 from brain.geometry import (
+    MM_PER_M,
     front_object_height,
     front_object_width,
     grasp_spot,
@@ -69,11 +70,55 @@ def land(sk: Skills, obj: str | None = None) -> Result:
     return sk.move("arm", delta=(0.0, 0.0, r.data["contact_z"] + prm.GRASP_LIFT_M.value - sk.tcp()[2]))
 
 
+def measure_width(sk: Skills, obj: str) -> dict | None:
+    """The object's width from the last wrist look (the final look, the jaws over it): its
+    extent along the jaws' closing direction (the image's horizontal, any residual angle
+    included) and its short side (what squeezing jaws close to), both on its measured top (m).
+    None when the look has no brick-shaped blob."""
+    det = sk.seen.get(f"wrist:{obj}")
+    m = None if det is None else brick_angle(det.jpeg, det.box, look=sk.looks.get(f"wrist:{obj}"))
+    if m is None:
+        return None
+    h, top = sk.height(), sk.object_height(obj)
+    return {
+        "extent_m": sk.geom.wrist_distance(*m["extent_u"], h, top, sk.roll),
+        "short_m": sk.geom.wrist_distance(*m["across"], h, top, sk.roll),
+    }
+
+
+def open_to_fit(sk: Skills, obj: str) -> Result:
+    """Open the jaws to the object before landing on it (Nov 4; the demo's one opening before):
+    its measured extent across the jaws, the taught gap on the fixed jaw's side, and the
+    servo's tolerance either way on the moving jaw's. Refused when that is wider than the
+    gripper opens; unmeasured, the jaws stay as they are, noted."""
+    w = measure_width(sk, obj)
+    sk.grasp_width = None if w is None else w["short_m"]
+    if w is None:
+        sk.ev("grasp_width", obj=obj, measured=False)
+        return Result(True, "width not measured: the jaws stay as they are")
+    top = sk.object_height(obj)
+    mm = MM_PER_M * (w["extent_m"] + sk.geom.fixed_jaw_gap(top) + 2 * prm.SERVO_TOL_M.value)
+    sk.ev("grasp_width", obj=obj, measured=True, extent_mm=round(MM_PER_M * w["extent_m"], 1),
+          short_mm=round(MM_PER_M * w["short_m"], 1), open_mm=round(mm, 1))
+    if mm > sk.geom.gripper_max_mm():
+        return Result(False, f"the {obj} needs the jaws {mm:.0f} mm open: wider than they open")
+    return sk.grip("open", width=mm)
+
+
 def close(sk: Skills) -> Result:
     """Close the jaws on the object, noting how far it reaches below them: the jaw tips' height
-    above the floor it stands on (what the release and the carry clear by)."""
+    above the floor it stands on (what the release and the carry clear by). Missed when they
+    close well past its measured width (open_to_fit), beyond the camera's reading wide by
+    WIDTH_ERROR_M twice over: on an edge, or on something else."""
     sk.held_below = max(sk.height(), 0.0)
-    return sk.grip("close")
+    r = sk.grip("close")
+    if not r.ok or sk.grasp_width is None or r.data.get("mm") is None:
+        return r
+    least = MM_PER_M * (sk.grasp_width - 2 * prm.WIDTH_ERROR_M.value)
+    if r.data["mm"] < least:
+        return Result(False, f"closed to {r.data['mm']} mm, past the measured width "
+                             f"({MM_PER_M * sk.grasp_width:.1f} mm): missed it", r.data)
+    return r
 
 
 def hang(sk: Skills) -> float:
