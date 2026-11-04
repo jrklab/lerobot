@@ -135,6 +135,7 @@ MIN_BASE_TURN_DEG = Param(3.0, "RULE", "smallest base turn that moves: the Pi fi
 LOW_MOVE_GUARD_M = Param(0.002, "RULE", "below a low move's lowest point the Pi's z_min sits this much lower: room for servo jitter, not for the jaws")
 CLOSE_SPEED = Param(39.0, "RULE", "gripper closing speed (deg/s; 30 units/s until Oct 29): slow enough for the Pi's stall detection to stop on the brick")
 LOOK_SETTLE_S = Param(0.3, "RULE", "longest wait after a move before a frame (servo settling); after an arm move it ends once the measured TCP stops (skills._settle)")
+PLACE_TRIES = Param(2, "RULE", "a place step that fails before letting go (still holding: the approach lost its target, the centring) retries this many times in code before the planner replans: Nov 4, the model boxed white sneakers as the cup once and the replan asked to pick the cup while holding the brick")
 PICK_TRIES = Param(3, "RULE", "a pick step retries this many times in code before the planner replans (owner's choice, Oct 24)")
 MAX_REPLANS = Param(2, "RULE", "replans per task before giving up")
 FOLD_CLEAR_M = Param(0.165, "RULE", "fold: jaw tips above the floor beyond which folding can't catch a place target, so a fold that can't lift straight up still goes (v1's cup rim plane 0.105 + 0.06; Oct 26 the fold dragged a cup with the jaws ~13 cm up)")

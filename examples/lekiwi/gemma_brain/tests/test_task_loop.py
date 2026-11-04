@@ -250,8 +250,8 @@ def test_a_pick_that_gripped_before_a_later_step_failed_keeps_it(world, monkeypa
 
 
 def test_replan_after_failure(world):
-    # The place fails once; the replan continues from "holding the red block".
-    world.fail = {"place red block in cup": 1}
+    # The place fails all its tries in code; the replan continues from "holding the red block".
+    world.fail = {"place red block in cup": int(prm.PLACE_TRIES.value)}
     planner = FakePlanner('pick "red block"\nplace "red block" in "cup"\ndone', 'place "red block" in "cup"\ndone')
     ok, _ = brain(planner, FakeSkills()).run("red in cup")
     assert ok, world.calls
@@ -273,7 +273,7 @@ def test_identical_replan_runs_once_more_only(world):
     plans = ['pick "red block"\nplace "red block" in "cup"'] + ['place "red block" in "cup"'] * 2
     ok, why = brain(FakePlanner(*plans), FakeSkills()).run("red in cup")
     assert not ok and "didn't change" in why, why
-    assert world.calls.count("place red block in cup") == 2, world.calls
+    assert world.calls.count("place red block in cup") == 2 * int(prm.PLACE_TRIES.value), world.calls
 
 
 def test_released_then_failed_counts_as_placed(world):
@@ -355,3 +355,23 @@ def test_a_run_starts_from_rest_folding_a_raised_arm_first(world):
     sk = FakeSkills()  # already at rest: nothing moves first
     brain(FakePlanner('pick "a"'), sk).run("pick a")
     assert sk.arm.moves == []
+
+
+def test_a_place_failing_before_the_release_retries_in_code_while_holding(world):
+    # Nov 4: the model boxed white sneakers as the cup, the approach lost it, and the replan
+    # asked to pick the cup while holding the brick.
+    world.fail = {"place red block in cup": 1}
+    sk = FakeSkills()
+    sk.gripped = True
+    r = brain(FakePlanner(), sk, holding="red block").place("in", "cup")
+    assert r.ok and world.calls == ["place red block in cup", "hover", "place red block in cup"], world.calls
+    assert sk.holding is None
+
+
+def test_a_place_keeps_failing_holding_and_gives_up_after_its_tries(world):
+    world.fail = {"place red block in cup": 5}
+    sk = FakeSkills()
+    sk.gripped = True
+    r = brain(FakePlanner(), sk, holding="red block").place("in", "cup")
+    assert not r.ok and "failed 2 times" in r.reason and world.calls.count("place red block in cup") == 2
+    assert sk.holding == "red block"

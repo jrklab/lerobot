@@ -125,14 +125,30 @@ class PlanBrain:
         return Result(False, f"failed {tries} times ({'; '.join(reasons)})")
 
     def place(self, rel: str, target: str) -> Result:
+        """The place chain, retried PLACE_TRIES times while the object is still held (it failed
+        before letting go: a lost or wrongly found target, the centring), from the start with
+        the detections forgotten, so the look-around finds the target afresh. Refused: no retry,
+        as for a pick. Released: never retried (a check that failed after it goes to the
+        planner)."""
         what = self.sk.holding or "object"
         chain = {"in": chains.place_in, "next_to": chains.place_next_to}.get(rel)
         if chain is None:  # check_plan stops these before anything moves; never run another chain
             return Result(False, f"no chain for 'place {rel}'")
-        r = chain(self.sk, what, target)
-        if not self.sk.held():  # released, whether or not the steps after it went well
-            self.sk.holding = None
-        return r
+        tries = int(prm.PLACE_TRIES.value)
+        reasons = []
+        for attempt in range(1, tries + 1):
+            r = chain(self.sk, what, target)
+            held = self.sk.held()
+            if not held:  # released, whether or not the steps after it went well
+                self.sk.holding = None
+            if r.ok or not held or r.data.get("refused"):
+                return r if not reasons else Result(r.ok, r.reason or f"after: {'; '.join(reasons)}", r.data)
+            reasons.append(r.reason)
+            self.log.ev("place_retry", attempt=attempt, reason=r.reason)
+            print(f"    place attempt {attempt} failed, still holding: {r.reason}")
+            if attempt < tries:
+                self._park()
+        return Result(False, f"failed {tries} times ({'; '.join(reasons)})", r.data)
 
     def run_step(self, s: Step) -> Result:
         if s.verb == "pick":
