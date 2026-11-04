@@ -146,10 +146,13 @@ def _ok(r, what: str):
     return r
 
 
-def _grasp_once(sk: Skills, robot, wide: float, side: str) -> dict:
-    """From the hover: square the jaws to the brick (ALIGN_TOL), a quarter turn more for its long
-    side, centre high and low as a pick does, measure the side, open to fit, land, close until
-    the stall; then open and back up to the hover."""
+def _grasp_once(sk: Skills, robot, wide: float, side: str, short_roll: float) -> dict:
+    """From the hover: back to the short side's roll, square the jaws to the brick there
+    (ALIGN_TOL), a quarter turn more for its long side, centre high and low as a pick does,
+    measure the side, open to fit, land, close until the stall; then open and back up to the
+    hover. Squared from the quarter-turned roll instead, the roll it wanted was past the wrist's
+    range and it stayed 8.5 deg off (Nov 4)."""
+    _ok(sk.move("arm", delta=(0.0, 0.0, 0.0), roll=short_roll), "roll back")
     _ok(sk.servo(BRICK, AngleGoal(ALIGN_TOL)), "align")
     if side == "long":
         _ok(sk.move("arm", delta=(0.0, 0.0, 0.0), roll=_turned(sk, sk.roll)), "quarter turn")
@@ -174,8 +177,9 @@ def auto(robot, board_pose, out: Path, repeats: int = AUTO_REPEATS, moves: list 
     """The gripper's points with no one there: closed on nothing at the hover; then the 2x4 brick
     beside the floor board, the base moved across to it, found by colour, lined up as a pick
     does, and closed on across its short side and (a quarter turn) its long side, `repeats`
-    times each. The base stays where the line-up left it: each base move, as the Pi reported it
-    ((dx, dy, dtheta_deg)), goes into `moves` for the caller to undo."""
+    times each; a grasp that fails is skipped (the arm back up to the hover), and a width with
+    no close at all fails the step. The base stays where the line-up left it: each base move, as
+    the Pi reported it ((dx, dy, dtheta_deg)), goes into `moves` for the caller to undo."""
     arm = Arm(robot)
     sk = Skills(robot, arm, Geometry.load(), Log(out), main=ColourBoxes())
     log_ev = sk.ev
@@ -199,9 +203,20 @@ def auto(robot, board_pose, out: Path, repeats: int = AUTO_REPEATS, moves: list 
         if sk.find(BRICK, "wrist") is None:
             raise RuntimeError("no brick in the wrist camera's view right of the floor board")
         _ok(actions.line_up(sk, BRICK), "line up")
+        _ok(sk.servo(BRICK, AngleGoal(ALIGN_TOL)), "align")
+        short_roll = sk.roll
         for side in ("short", "long"):
+            got = 0
             for _ in range(repeats):
-                points.append(_grasp_once(sk, robot, wide, side))
+                try:
+                    points.append(_grasp_once(sk, robot, wide, side, short_roll))
+                    got += 1
+                except RuntimeError as e:  # one bad grasp shouldn't lose the others (Nov 4)
+                    print(f"    {side} side: grasp skipped ({e})")
+                    robot.gripper(wide)
+                    actions.hover_at(sk, prm.HOVER_HEIGHT_M)
+            if not got:
+                raise RuntimeError(f"no close across the brick's {side} side")
     finally:
         robot.gripper(wide)
         arm.reset()
