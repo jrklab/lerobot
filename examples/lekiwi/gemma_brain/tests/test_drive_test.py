@@ -99,3 +99,38 @@ def test_one_bad_leg_doesnt_sway_a_direction_with_three_repeats():
     assert v["same_every_way"] and v["by_direction_deg"]["back"] == pytest.approx(2.6)
     assert v["pan_offset_deg"] == pytest.approx(2.75, abs=0.01)
     assert v["outliers"] == [{"dir": "back", "repeat": 0, "angle_deg": 8.3}] and v["repeats"] == 3
+
+
+def _legs(angles):
+    return [{"dir": d, "repeat": k, "angle_deg": a} for d, v in angles.items() for k, a in enumerate(v)]
+
+
+def test_scattered_legs_widen_what_counts_as_the_same_angle():
+    # Nov 4, after the pan correction: medians -1.5..+1.2 (spread 2.7), legs scattered ~1.3 deg.
+    v = dt.verdict(
+        _legs(
+            {
+                "back": [-0.43, -1.53, -4.23],
+                "forward": [1.56, 1.16, -3.55],
+                "left": [2.4, -0.09, -0.83],
+                "right": [-0.3, -1.31, -0.93],
+            }
+        )
+    )
+    assert v["spread_deg"] > dt.SAME_ANGLE_DEG and v["same_every_way"]
+    assert v["pan_offset_deg"] == pytest.approx(-0.34, abs=0.01)
+
+
+def test_tight_legs_keep_the_floor_and_still_tell_the_wheels():
+    # Each direction's legs agree within 0.2 deg but the directions differ by 3: the wheels.
+    v = dt.verdict(
+        _legs(
+            {
+                "back": [3.0, 3.1, 2.9],
+                "forward": [0.0, 0.1, -0.1],
+                "left": [1.0, 1.1, 0.9],
+                "right": [2.0, 1.9, 2.1],
+            }
+        )
+    )
+    assert v["tolerance_deg"] == dt.SAME_ANGLE_DEG and not v["same_every_way"]

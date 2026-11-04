@@ -61,9 +61,17 @@ LEG_M = 0.20  # convention: long enough that the camera's ~2 mm reads a directio
 # (dx, dy) in the base's frame: each pair goes out and back to the start, the floor board ahead
 # never driven onto.
 LEGS = (("back", (-1.0, 0.0)), ("forward", (1.0, 0.0)), ("left", (0.0, 1.0)), ("right", (0.0, -1.0)))
-# The same angle every way when the directions' means agree within this (deg): the 22 return
-# drives scattered +/-3.6 deg one by one; averaged over a direction's repeats, less.
+# The same angle every way when the directions' medians agree within this (deg), or within what
+# the legs' own scatter makes of four medians when that is more (same_angle_tolerance): the 22
+# return drives scattered +/-3.6 deg one by one; Nov 4, after the pan correction, the legs scattered
+# ~1.3 deg and their medians, all near zero, spread 2.7.
 SAME_ANGLE_DEG = 2.0
+# Statistics, not tuning: the range of 4 normal samples (one median per direction) stays under this
+# many standard deviations 95% of the time; a median of n legs varies by MEDIAN_SE_FACTOR / sqrt(n)
+# of their standard deviation; a normal sample's median absolute deviation is 1 / MAD_TO_SD of it.
+RANGE_95_OF_4 = 3.63
+MEDIAN_SE_FACTOR = 1.2533
+MAD_TO_SD = 1.4826
 
 
 def _rot(deg: float) -> np.ndarray:
@@ -89,6 +97,20 @@ def leg_result(before, after, cmd_base, centre) -> dict:
     }
 
 
+def same_angle_tolerance(by: dict[str, list[float]], medians: dict[str, float]) -> float:
+    """How far the directions' medians can spread with one angle every way: SAME_ANGLE_DEG, or
+    the 95% range of four medians given the legs' scatter about their direction's median if that
+    is more. The scatter is robust (the median deviation, the zero of each direction's own middle
+    leg left out), so one bad leg doesn't widen it."""
+    devs = [abs(a - medians[d]) for d, v in by.items() for a in v]
+    devs = [x for x in devs if x > 1e-9]
+    if not devs:
+        return SAME_ANGLE_DEG
+    sd = MAD_TO_SD * float(np.median(devs))
+    n = min(len(v) for v in by.values())
+    return max(SAME_ANGLE_DEG, RANGE_95_OF_4 * MEDIAN_SE_FACTOR * sd / math.sqrt(n))
+
+
 def verdict(legs: list[dict]) -> dict:
     """The per-direction medians, and what they say: one angle every way (the arm's frame turned
     on the base: a pan correction of it) or not (the wheels). Medians, not means: Nov 3's
@@ -101,7 +123,8 @@ def verdict(legs: list[dict]) -> dict:
     medians = {d: round(float(np.median(v)), 2) for d, v in by.items()}
     spread = max(medians.values()) - min(medians.values())
     mean = float(np.mean(list(medians.values())))
-    same = spread <= SAME_ANGLE_DEG
+    tolerance = same_angle_tolerance(by, medians)
+    same = spread <= tolerance
     outliers = [
         {"dir": leg["dir"], "repeat": leg["repeat"], "angle_deg": leg["angle_deg"]}
         for leg in legs
@@ -113,6 +136,7 @@ def verdict(legs: list[dict]) -> dict:
     return {
         "by_direction_deg": medians,
         "spread_deg": round(spread, 2),
+        "tolerance_deg": round(tolerance, 2),
         "mean_deg": round(mean, 2),
         "same_every_way": same,
         "outliers": outliers,
@@ -171,6 +195,7 @@ def main() -> None:
     v = verdict(legs)
     print(
         f"\nby direction (median deg off the command): {v['by_direction_deg']}; spread {v['spread_deg']} deg"
+        f" (the same within {v['tolerance_deg']})"
     )
     for o in v["outliers"]:
         print(
