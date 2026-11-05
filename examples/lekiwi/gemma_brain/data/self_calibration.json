@@ -157,6 +157,13 @@
     "arm_shoulder_pan": 5.3
    },
    "date": "2026-11-03T23:53:11.229821"
+  },
+  {
+   "offsets": {
+    "arm_elbow_flex": 8.0,
+    "arm_wrist_flex": -6.0
+   },
+   "date": "2026-11-04T16:28:17.214345"
   }
  ]
 }
