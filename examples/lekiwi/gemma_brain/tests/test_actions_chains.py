@@ -501,3 +501,31 @@ def test_a_red_thing_far_from_the_cup_is_not_the_missed_brick():
     assert actions.check_in(S([0.941, 0.303, 0.993, 0.373]), "red block", "paper cup").ok  # far: not it
     r = actions.check_in(S([0.4, 0.62, 0.5, 0.7]), "red block", "paper cup")  # by the cup: missed
     assert not r.ok and "on the floor" in r.reason
+
+
+def test_a_box_on_the_containers_face_is_not_the_object_on_the_floor():
+    # Nov 4: the cup's green band boxed as the light green block (in the cup).
+    from types import SimpleNamespace
+
+    from brain.goals import Detection
+
+    class G:
+        def front_point(self, uv):
+            return np.array([0.26, 0.0, 0.0])  # by the cup: near enough to be a miss
+
+    class S:
+        geom, widths, events = G(), {"paper cup": 0.095}, []
+
+        def __init__(self, box):
+            self.box = box
+            self.main = SimpleNamespace(box=lambda jpeg, prompt: SimpleNamespace(value=[0.31, 0.30, 0.84, 0.84]))
+
+        def find(self, obj, cam, fast_ok=True, **k):
+            return Detection(box=self.box, jpeg=b"frame")
+
+        def ev(self, name, **k):
+            self.events.append(k)
+
+    assert actions.check_in(S([0.354, 0.583, 0.742, 0.812]), "light green block", "paper cup").ok  # on its face
+    r = actions.check_in(S([0.45, 0.80, 0.52, 0.90]), "light green block", "paper cup")  # below its bottom: fallen
+    assert not r.ok and "on the floor" in r.reason

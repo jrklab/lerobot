@@ -377,10 +377,36 @@ def check_in(sk: Skills, obj: str, container: str) -> Result:
             sk.ev("place_check", obj=obj, target=container, on_floor=False, box=det.box,
                   far_m=None if p is None else round(off, 3), why="seen too far from the release to be it")
             return Result(True)
+    if det is not None and on_container(sk, det, container):
+        return Result(True)
     sk.ev("place_check", obj=obj, target=container, on_floor=det is not None, box=None if det is None else det.box)
     if det is not None:
         return Result(False, f"the {obj} is on the floor, not in the {container}", {"box": det.box})
     return Result(True)
+
+
+def on_container(sk: Skills, det, container: str) -> bool:
+    """Whether the object's box in the check's frame is the container's own face: mostly inside
+    the container's box (ON_CONTAINER_SHARE) and not reaching below its bottom, where an object
+    fallen in front of it would (nearer the camera, lower in the image). The container asked of
+    the main model in the same frame (Nov 4: the cup's green band boxed as the light green
+    block)."""
+    main = getattr(sk, "main", None)
+    if main is None or not det.jpeg:
+        return False
+    c = main.box(det.jpeg, f"the {container} on the floor").value
+    if c is None:
+        return False
+    x0, y0, x1, y1 = det.box
+    area = (x1 - x0) * (y1 - y0)
+    if area <= 0.0:
+        return False
+    share = max(0.0, min(x1, c[2]) - max(x0, c[0])) * max(0.0, min(y1, c[3]) - max(y0, c[1])) / area
+    ok = share >= prm.ON_CONTAINER_SHARE.value and y1 <= c[3]
+    if ok:
+        sk.ev("place_check", obj=container, target=container, on_floor=False, box=det.box, container_box=c,
+              share=round(share, 2), why="the box is on the container's face")
+    return ok
 
 
 def check_beside(sk: Skills, obj: str, ref: str) -> Result:
