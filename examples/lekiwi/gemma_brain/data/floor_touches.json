@@ -4,21 +4,21 @@
   {
    "x": 0.18,
    "y": 0.0,
-   "z": -0.1009,
+   "z": -0.1006,
    "how": "probe on the floor",
    "run": "calibrate_all.py 2026-11-04"
   },
   {
-   "x": 0.253,
+   "x": 0.259,
    "y": 0.0,
-   "z": -0.1023,
+   "z": -0.1018,
    "how": "probe on the board",
    "run": "calibrate_all.py 2026-11-04"
   },
   {
    "x": 0.3,
    "y": 0.0,
-   "z": -0.1024,
+   "z": -0.1018,
    "how": "probe on the board",
    "run": "calibrate_all.py 2026-11-04"
   }
@@ -50,21 +50,21 @@
   {
    "x": 0.18,
    "y": 0.0,
-   "z": -0.1032,
+   "z": -0.1009,
    "how": "probe on the floor",
    "run": "calibrate_all.py 2026-11-04"
   },
   {
-   "x": 0.25,
+   "x": 0.253,
    "y": 0.0,
-   "z": -0.1022,
+   "z": -0.1023,
    "how": "probe on the board",
    "run": "calibrate_all.py 2026-11-04"
   },
   {
    "x": 0.3,
    "y": 0.0,
-   "z": -0.1022,
+   "z": -0.1024,
    "how": "probe on the board",
    "run": "calibrate_all.py 2026-11-04"
   }
