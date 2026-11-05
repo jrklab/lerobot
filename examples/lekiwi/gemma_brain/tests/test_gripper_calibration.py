@@ -87,3 +87,13 @@ def test_the_wide_end_is_measured_until_the_jaw_leaves_the_view(monkeypatch, tmp
     # Kept separately from the brick points: re-measured each run, not carried over.
     old = [{"mm": 47.8, "deg": 34.67}, {"mm": 60.0, "deg": 45.0, "what": "camera"}]
     assert [p["mm"] for p in cg.merged(pts, old)] == [55.9, 71.5, 87.1, 47.8]
+
+
+def test_the_quarter_turn_goes_the_way_nearer_zero():
+    # Nov 4: from about -65 deg it turned to -155, and the centring there lost the brick twice.
+    from calibration import calibrate_gripper as cg
+
+    sk = type("S", (), {"roll_range": (-180.0, 180.0)})()
+    assert cg._turned(sk, -65.0) == 25.0 and cg._turned(sk, 70.0) == -20.0
+    sk.roll_range = (-160.0, 10.0)  # only one way fits: the range decides
+    assert cg._turned(sk, -65.0) == -155.0

@@ -161,12 +161,15 @@ def wide_end(sk: Skills, robot, wide: float, start_deg: float) -> list[dict]:
 
 
 def _turned(sk: Skills, roll: float) -> float:
-    """The roll a quarter turn from `roll`, either way, within the wrist's range."""
+    """The roll a quarter turn from `roll`, within the wrist's range, the nearer zero when both
+    fit (the picks work within about -70..0). Nov 4 (run 20261104T221606): the range was
+    -158..+4.6, so from -65 only -155 fitted, and there the long side's centring moved the arm
+    3.4 cm and lost the brick, twice; why is open (the roll and the wrist joint are logged since)."""
     lo, hi = sk.roll_range
-    for r in (roll + 90.0, roll - 90.0):
-        if lo <= r <= hi:
-            return r
-    raise RuntimeError(f"no quarter turn from roll {roll:.0f} deg within {lo:.0f}..{hi:.0f}")
+    options = [r for r in (roll + 90.0, roll - 90.0) if lo <= r <= hi]
+    if not options:
+        raise RuntimeError(f"no quarter turn from roll {roll:.0f} deg within {lo:.0f}..{hi:.0f}")
+    return min(options, key=abs)
 
 
 def _ok(r, what: str):
@@ -199,6 +202,10 @@ def _grasp_once(sk: Skills, robot, wide: float, side: str, short_roll: float) ->
     left = _square(sk)
     if side == "long":
         _ok(sk.move("arm", delta=(0.0, 0.0, 0.0), roll=_turned(sk, sk.roll)), "quarter turn")
+    # The roll the planner holds and the wrist joint's reading, for the long side's centring at
+    # large rolls (Nov 4: the brick lost at -155, the cause open).
+    sk.ev("grasp_roll", side=side, roll=round(sk.roll, 1),
+          wrist_roll_joint=round(float(robot.status()["joints"]["arm_wrist_roll"]), 1), roll_range=[round(v, 1) for v in sk.roll_range])
     _ok(sk.servo(BRICK, JawGoal(tol_m=prm.REACH_TOL_M, plane_h=sk.object_height(BRICK))), "centre high")
     _ok(sk.move("arm", height=sk.final_look_height(BRICK)), "down")
     _ok(sk.servo(BRICK, JawGoal(plane_h=sk.object_height(BRICK))), "centre low")
@@ -222,7 +229,7 @@ def auto(robot, board_pose, out: Path, repeats: int = AUTO_REPEATS, moves: list 
     beside the floor board, the base moved across to it, found by colour, lined up as a pick
     does, and closed on across its short side and (a quarter turn) its long side, `repeats`
     times each; a grasp that fails is skipped (the arm back up to the hover), and a width with
-    no close at all fails the step. The base stays where the line-up left it: each base move, as
+    no close at all keeps its point from before (merged). The base stays where the line-up left it: each base move, as
     the Pi reported it ((dx, dy, dtheta_deg)), goes into `moves` for the caller to undo."""
     arm = Arm(robot)
     sk = Skills(robot, arm, Geometry.load(), Log(out), main=ColourBoxes())
@@ -263,7 +270,9 @@ def auto(robot, board_pose, out: Path, repeats: int = AUTO_REPEATS, moves: list 
                     robot.gripper(wide)
                     actions.hover_at(sk, prm.HOVER_HEIGHT_M)
             if not got:
-                raise RuntimeError(f"no close across the brick's {side} side")
+                # Its point from before stays (merged): the run's other points, the camera's wide
+                # end among them, aren't lost to it (Nov 4: the long side lost the brick twice).
+                print(f"    {side} side: no close; its width keeps its point from before")
     finally:
         robot.gripper(wide)
         arm.reset()
