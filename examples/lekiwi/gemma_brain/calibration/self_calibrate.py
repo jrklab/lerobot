@@ -77,6 +77,7 @@ from common.arm import (
     IK_ARM_JOINTS,
     NAMED_POSES,
     Arm,
+    Calibration,
     PlanError,
     arm_points,
 )
@@ -425,15 +426,23 @@ def probe_joint(robot: Robot, joint: str) -> dict[str, float]:
     return found
 
 
+def rest_within_limits(robot: Robot) -> dict[str, float]:
+    """The rest pose clipped to the joints' calibrated limits: the arm lies at the elbow's 94.4,
+    a few degrees past its folded end less the back-off (Oct 30: 91.1), and the Pi refuses a
+    goal outside the range (Nov 4: "arm_elbow_flex = 94.4 deg is outside -96.8..91.8")."""
+    calib = Calibration.from_robot(robot)
+    return {j: min(max(REST[j], calib.limits(j)[0]), calib.limits(j)[1]) for j in IK_ARM_JOINTS}
+
+
 def _to_rest_for_a_write(robot: Robot) -> None:
     """A write turns the torque off for a moment: the arm should lie at rest. Not moved when it's
     already within REST_TOLERANCE_DEG of rest on every joint: a corrected zero moves where rest
     reads, and commanding the nominal angles would press the resting arm into the base (Oct 30:
-    the shoulder lift, 2.5 deg)."""
+    the shoulder lift, 2.5 deg). Otherwise to rest within the limits (rest_within_limits)."""
     at = _at(robot)
     if all(abs(at[j] - REST[j]) <= REST_TOLERANCE_DEG for j in IK_ARM_JOINTS):
         return
-    _move(Arm(robot), REST, "to rest for the write")
+    _move(Arm(robot), rest_within_limits(robot), "to rest for the write")
 
 
 def write(robot: Robot, dry_run: bool) -> None:

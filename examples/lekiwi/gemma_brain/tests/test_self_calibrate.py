@@ -198,3 +198,15 @@ def test_a_joint_short_of_the_urdf_is_probed_again_then_kept(state, monkeypatch,
     ends = sc.probe_joint(robot, "arm_wrist_roll")
     assert "again at torque 0.30" in capsys.readouterr().out
     assert abs(ends["+"] - (120.0 - REST_ERROR["arm_wrist_roll"])) < 1.0  # read from the rest placement
+
+
+def test_rest_is_clipped_to_the_joints_limits(monkeypatch):
+    # Nov 4: the move to rest before a correction's write asked the elbow for 94.4 deg, past its
+    # calibrated end (91.8), and the Pi refused it, stopping the run.
+    class C:
+        def limits(self, j):
+            return (-96.8, 91.8) if j == "arm_elbow_flex" else (-180.0, 180.0)
+
+    monkeypatch.setattr(sc.Calibration, "from_robot", staticmethod(lambda robot: C()))
+    pose = sc.rest_within_limits(None)
+    assert pose["arm_elbow_flex"] == 91.8 and pose["arm_wrist_flex"] == sc.REST["arm_wrist_flex"]

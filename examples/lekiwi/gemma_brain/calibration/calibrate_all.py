@@ -242,9 +242,7 @@ def lay_down(robot: Robot) -> None:
     """The arm down onto the base: the rest pose, clipped to the joints' limits (Oct 30: the
     calibrated elbow may be commanded to 91.1 deg, its folded end less the back-off; it lies at
     the rest pose's 94.4 in the bootstrap's own readings, a few degrees past)."""
-    calib = Calibration.from_robot(robot)
-    pose = {j: min(max(sc.REST[j], calib.limits(j)[0]), calib.limits(j)[1]) for j in sc.IK_ARM_JOINTS}
-    sc._move(Arm(robot), pose, "down to rest")
+    sc._move(Arm(robot), sc.rest_within_limits(robot), "down to rest")
 
 
 def wrist_sees_floor_board(robot) -> bool:
