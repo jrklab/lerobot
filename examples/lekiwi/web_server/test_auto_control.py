@@ -647,3 +647,11 @@ def test_a_drop_is_seen_with_the_squeeze_eased():
     sim.walls.pop(GRIPPER)
     sim.run(0.5)
     assert hold(sim)["state"] == "dropped", hold(sim)
+
+
+def test_the_web_pages_summary_names_the_command_and_its_end():
+    sim = Sim()
+    assert sim.auto.summary() == {"command": None, "hold": None}
+    sim.submit({"cmd": "base", "dx": 0.10})
+    sim.run_until_done()
+    assert sim.auto.summary()["command"] == {"kind": "base", "state": "done", "reason": ""}

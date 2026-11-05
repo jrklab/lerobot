@@ -316,6 +316,9 @@ async def _status_pusher(websocket: WebSocket) -> None:
                             "control_mode": bridge.get_control_mode(),
                             "recording": bridge.get_recording_status(),
                             "internet_reachable": _internet_reachable,
+                            "arm_calibration": bridge.arm_calibration_state(),
+                            "auto": bridge.auto.summary(),
+                            "health": bridge.health(),
                         }
                     )
                 )
@@ -461,6 +464,10 @@ def _handle_message(raw: str) -> dict | None:
             logger.warning("Dropping vr_pose message with non-numeric fields: %s", raw)
     elif msg_type == "emergency_stop":
         bridge.emergency_stop()
+        if msg.get("to_gamepad"):
+            # The web page's STOP (owner, Nov 4): control goes back to the gamepad, so nothing
+            # on the page keeps driving afterwards.
+            bridge.set_control_mode("gamepad")
     else:
         logger.warning("Dropping WS message with unknown type: %s", msg_type)
 

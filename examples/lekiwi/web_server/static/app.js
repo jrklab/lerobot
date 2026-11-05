@@ -4,8 +4,10 @@
 
 let ws = null;
 let currentSpeed = "medium";
+let lastKnownMode = null;
 // Matches the server's 30Hz control loop (robot_bridge.py FPS), well under the 400ms watchdog.
 const SEND_INTERVAL_MS = 1000 / 30;
+const DESKTOP = window.matchMedia("(min-width: 1024px) and (min-height: 600px)");
 
 function connectWs() {
   const proto = location.protocol === "https:" ? "wss" : "ws";
@@ -21,13 +23,13 @@ function connectWs() {
     try {
       const msg = JSON.parse(ev.data);
       if (msg.type === "state") {
-        setGamepadStatus(!!msg.gamepad_connected);
         updateJointLoads(msg.joints);
         updateStallTone(msg.joints);
-        updateModeUI(msg.control_mode);
+        updateModeUI(msg.control_mode, msg.auto);
         updateRecordingUI(msg.recording, msg.internet_reachable);
+        updateStatus(msg);
       } else if (msg.type === "error") {
-        showToast(msg.message);
+        showToast(msg.message, true);
       }
     } catch (_) {
       /* ignore malformed status messages */
@@ -35,11 +37,17 @@ function connectWs() {
   });
 }
 
-// Simple one-off notification for server-reported errors (e.g. a rejected start_recording/
-// start_playback) -- these are otherwise invisible: the UI would just silently not change.
+function send(obj) {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify(obj));
+  }
+}
+
+// One-off notifications: server-reported errors (otherwise invisible: the UI would just not
+// change) and the STOP's confirmation.
 let toastTimer = null;
 
-function showToast(message) {
+function showToast(message, isError = false) {
   let el = document.getElementById("toast");
   if (!el) {
     el = document.createElement("div");
@@ -48,35 +56,88 @@ function showToast(message) {
     document.body.appendChild(el);
   }
   el.textContent = message;
+  el.classList.toggle("error", isError);
   el.classList.add("visible");
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => el.classList.remove("visible"), 4000);
 }
 
+// --- Status: the top bar's badges and the Status pane ---
+
+function setBadge(id, text, level) {
+  const el = document.getElementById(id);
+  el.textContent = text;
+  el.className = "badge" + (level ? " " + level : "");
+}
+
+function setStatus(id, text, level) {
+  const el = document.getElementById(id);
+  el.textContent = text;
+  el.className = level || "";
+}
+
 function setConnStatus(connected) {
-  const el = document.getElementById("conn-status");
-  el.textContent = connected ? "connected" : "disconnected";
-  el.className = "status " + (connected ? "status-connected" : "status-disconnected");
-  if (!connected) setGamepadStatus(false);
+  setBadge("conn-status", connected ? "online" : "offline", connected ? "good" : "bad");
+  setStatus("st-link", connected ? "connected" : "disconnected: reconnecting…", connected ? "good" : "bad");
 }
 
-function setGamepadStatus(connected) {
-  const el = document.getElementById("gamepad-status");
-  el.textContent = connected ? "gamepad: connected" : "gamepad: disconnected";
-  el.className = "status " + (connected ? "status-connected" : "status-disconnected");
+function updateStatus(msg) {
+  const cal = msg.arm_calibration;
+  const calLevel = cal === "calibrated" ? "good" : cal ? "warn" : "";
+  setBadge("arm-badge", cal ? `arm ${cal}` : "arm --", calLevel);
+  setStatus("st-arm", cal || "no arm", calLevel);
+
+  // The servo link: failing while a motor transfer failed in the last 2 s (robot_bridge.health).
+  const h = msg.health || {};
+  if (h.bus_ok === false) {
+    setBadge("bus-badge", "servos FAILING", "bad");
+    setStatus("st-bus", `failing (last error ${h.bus_error_age_s} s ago)`, "bad");
+  } else {
+    setBadge("bus-badge", "servos ok", "good");
+    setStatus("st-bus", h.bus_error_age_s == null ? "ok" : `ok (last error ${fmtAge(h.bus_error_age_s)} ago)`, "good");
+  }
+  document.getElementById("status-dot").hidden = h.bus_ok !== false;
+
+  const cmd = msg.auto && msg.auto.command;
+  if (!cmd) {
+    setStatus("st-auto", "no command yet", "");
+  } else {
+    const level = cmd.state === "running" ? "good" : cmd.state === "done" ? "" : "warn";
+    setStatus("st-auto", `${cmd.kind}: ${cmd.state}${cmd.reason ? " (" + cmd.reason + ")" : ""}`, level);
+  }
+
+  const grip = (msg.joints || {}).arm_gripper || {};
+  const hold = msg.auto && msg.auto.hold;
+  const parts = [hold ? `hold: ${hold}` : "not holding"];
+  if (grip.temp != null) parts.push(`${Math.round(grip.temp)} °C`);
+  setStatus("st-grip", parts.join(", "), "");
+
+  setStatus("st-mode", modeName(msg.control_mode), "");
+  setStatus("st-gamepad", msg.gamepad_connected ? "connected" : "not connected", msg.gamepad_connected ? "good" : "");
+  setStatus("st-internet", msg.internet_reachable ? "reachable" : "not reachable", msg.internet_reachable ? "good" : "");
 }
 
-// Per-joint load readout + stall coloring (see robot_bridge.py's _stall_severity(), which
-// mirrors the stall condition documented in examples/lekiwi/torque_feedback.md).
+function fmtAge(s) {
+  return s < 120 ? `${Math.round(s)} s` : s < 7200 ? `${Math.round(s / 60)} min` : `${Math.round(s / 3600)} h`;
+}
+
+const MODE_NAMES = { gamepad: "Gamepad", web: "This page", leader_keyboard: "Leader arm", vr: "VR (Quest)", auto: "Auto (brain)" };
+
+function modeName(mode) {
+  return MODE_NAMES[mode] || mode || "--";
+}
+
+// Per-joint load (Present_Load is 0.1% of full scale: 1000 = full torque) and stall coloring
+// (robot_bridge.py's _stall_severity, the condition in examples/lekiwi/torque_feedback.md).
 function updateJointLoads(joints) {
   if (!joints) return;
   document.querySelectorAll(".jog-card").forEach((card) => {
     const info = joints[card.dataset.joint];
-    const el = card.querySelector(".jog-load");
-    if (!info || !el) return;
-    el.textContent = Math.round(info.load);
-    el.classList.toggle("load-stall", !!info.stalled);
-    el.classList.toggle("load-ok", !info.stalled);
+    if (!info) return;
+    const pct = Math.min(100, Math.abs(info.load) / 10);
+    card.querySelector(".jog-load").textContent = `${Math.round(pct)}%`;
+    card.querySelector(".load-bar i").style.width = `${pct}%`;
+    card.classList.toggle("stalled", !!info.stalled);
   });
 }
 
@@ -149,70 +210,107 @@ function updateStallTone(joints) {
 // the first tap/click anywhere so it's already unlocked by the time a stall can occur.
 window.addEventListener("pointerdown", () => ensureAudioContext(), { once: true });
 
-function send(obj) {
-  if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify(obj));
+// --- Control mode and speed (segmented buttons) ---
+
+function setSegActive(segId, attr, value) {
+  document.querySelectorAll(`#${segId} button`).forEach((b) => b.classList.toggle("active", b.dataset[attr] === value));
+}
+
+function setupModeAndSpeed() {
+  document.querySelectorAll("#mode-seg button").forEach((b) => {
+    b.addEventListener("click", () => send({ type: "set_mode", mode: b.dataset.mode }));
+  });
+  document.querySelectorAll("#speed-seg button").forEach((b) => {
+    b.addEventListener("click", () => {
+      currentSpeed = b.dataset.speed;
+      setSegActive("speed-seg", "speed", currentSpeed);
+    });
+  });
+  setSegActive("speed-seg", "speed", currentSpeed);
+}
+
+// The page's controls only act in "web" mode (the server ignores the rest): greyed out
+// otherwise. VR and Auto are entered elsewhere and shown as a pill.
+function updateModeUI(mode, auto) {
+  if (mode && mode !== lastKnownMode) {
+    lastKnownMode = mode;
+    document.body.classList.toggle("locked", mode !== "web");
+    setSegActive("mode-seg", "mode", mode);
+    if (mode !== "web") releaseAll();
+  }
+  const extra = document.getElementById("mode-extra");
+  if (mode === "vr") {
+    extra.hidden = false;
+    extra.textContent = "VR is driving";
+  } else if (mode === "auto") {
+    const cmd = auto && auto.command;
+    extra.hidden = false;
+    extra.textContent = cmd && cmd.state === "running" ? `Auto: ${cmd.kind}` : "Auto: idle";
+  } else {
+    extra.hidden = true;
   }
 }
 
-// --- Control mode selector ---
+// --- STOP: the base and arm jogs halted, Auto ended, control back to the gamepad ---
 
-function setupModeSelector() {
-  document.querySelectorAll('input[name="mode"]').forEach((input) => {
-    input.addEventListener("change", (e) => {
-      if (e.target.checked) send({ type: "set_mode", mode: e.target.value });
-    });
-  });
+function emergencyStop() {
+  releaseAll();
+  send({ type: "emergency_stop", to_gamepad: true });
+  showToast("Stopped. Control is back on the gamepad.");
 }
 
-// Grays out (and disables pointer interaction on) the on-page joystick/jog/speed controls
-// whenever "web" isn't the currently active control mode -- they'd be no-ops on the server
-// anyway (RobotBridge ignores commands from a source that isn't the active mode), but this
-// makes it visually obvious instead of just silently not working. Also keeps the mode radios
-// in sync in case another client (or the leader/keyboard script) changed the mode.
-let lastKnownMode = null;
+// --- Tabs (phone) and cameras ---
 
-function updateModeUI(mode) {
-  if (!mode || mode === lastKnownMode) return;
-  lastKnownMode = mode;
-  const webActive = mode === "web";
-  document.querySelectorAll(".joystick, .jog-btn").forEach((el) => {
-    el.classList.toggle("mode-locked", !webActive);
-  });
-  document.querySelector(".speed-bar").classList.toggle("mode-locked", !webActive);
-  document.querySelectorAll('input[name="mode"]').forEach((input) => {
-    input.checked = input.value === mode;
-  });
+let camChoice = { drive: "front", arm: "wrist", rec: "front" }; // the phone's camera per tab
+
+function currentTab() {
+  return document.body.dataset.tab;
 }
 
-// --- Tabs ---
+function showTab(tab) {
+  document.querySelectorAll(".tabbar button").forEach((x) => x.classList.toggle("active", x.dataset.tab === tab));
+  document.body.dataset.tab = tab;
+  history.replaceState(null, "", `#${tab}`); // a tab can be bookmarked: /#arm
+  releaseAll();
+  updateVideoStreams();
+}
 
 function setupTabs() {
-  const buttons = document.querySelectorAll(".tab-btn");
-  buttons.forEach((btn) => {
-    btn.addEventListener("click", () => {
-      if (btn.disabled) return;
-      buttons.forEach((b) => b.classList.remove("active"));
-      document.querySelectorAll(".tab-panel").forEach((p) => p.classList.remove("active"));
-      btn.classList.add("active");
-      const tab = btn.dataset.tab;
-      document.getElementById(`tab-${tab}`).classList.add("active");
-      updateVideoStreams(tab);
+  document.querySelectorAll(".tabbar button").forEach((b) => b.addEventListener("click", () => showTab(b.dataset.tab)));
+  const start = location.hash.slice(1);
+  if (document.querySelector(`.tabbar button[data-tab="${start}"]`)) showTab(start);
+  document.querySelectorAll(".cam-switch button").forEach((b) => {
+    b.addEventListener("click", () => {
+      camChoice[currentTab()] = b.dataset.cam;
+      updateVideoStreams();
     });
   });
+  DESKTOP.addEventListener("change", updateVideoStreams);
 }
 
-// Only stream from the camera whose tab is actually visible, to avoid paying MJPEG
-// encode/bandwidth cost for a feed nobody's looking at.
-function updateVideoStreams(activeTab) {
-  const baseImg = document.getElementById("video-base");
-  const armImg = document.getElementById("video-arm");
-  const armFrontImg = document.getElementById("video-arm-front");
-  const recImg = document.getElementById("video-rec");
-  baseImg.src = activeTab === "base" ? "/video/front" : "";
-  armImg.src = activeTab === "arm" ? "/video/wrist" : "";
-  armFrontImg.src = activeTab === "arm" ? "/video/front" : "";
-  recImg.src = activeTab === "rec" ? "/video/front" : "";
+// Only the feeds on screen stream (MJPEG costs the Pi encode time and bandwidth): on a desktop
+// the front and the wrist camera; on a phone the one picked for the tab, none on Status.
+function setSrc(img, src) {
+  if (img.getAttribute("src") !== src) img.setAttribute("src", src);
+}
+
+function updateVideoStreams() {
+  const main = document.getElementById("cam-main");
+  const side = document.getElementById("cam-side");
+  if (DESKTOP.matches) {
+    setSrc(main, "/video/front");
+    setSrc(side, "/video/wrist");
+    return;
+  }
+  setSrc(side, "");
+  const tab = currentTab();
+  if (tab === "status") {
+    setSrc(main, "");
+    return;
+  }
+  const cam = camChoice[tab] || "front";
+  setSrc(main, `/video/${cam}`);
+  document.querySelectorAll(".cam-switch button").forEach((b) => b.classList.toggle("active", b.dataset.cam === cam));
 }
 
 // --- Joystick widget (Pointer Events cover mouse + touch uniformly) ---
@@ -228,9 +326,9 @@ class Joystick {
 
     el.addEventListener("pointerdown", (e) => this._start(e));
     el.addEventListener("pointermove", (e) => this._move(e));
-    el.addEventListener("pointerup", (e) => this._end(e));
-    el.addEventListener("pointercancel", (e) => this._end(e));
-    el.addEventListener("pointerleave", (e) => this._end(e));
+    el.addEventListener("pointerup", () => this.release());
+    el.addEventListener("pointercancel", () => this.release());
+    el.addEventListener("pointerleave", () => this.release());
   }
 
   _start(e) {
@@ -259,7 +357,7 @@ class Joystick {
     this.onChange(this.x, this.y);
   }
 
-  _end(e) {
+  release() {
     if (!this.active) return;
     this.active = false;
     this.x = 0;
@@ -269,37 +367,61 @@ class Joystick {
   }
 }
 
-function setupBaseJoysticks() {
-  let translate = { x: 0, y: 0 };
-  let rotate = { x: 0, y: 0 };
+// --- Driving: joysticks, or the keyboard on a desktop (W/S, A/D, Q/E while held) ---
 
-  new Joystick(document.getElementById("joy-translate"), (x, y) => {
-    translate = { x, y };
+let translate = { x: 0, y: 0 };
+let rotate = { x: 0, y: 0 };
+const joysticks = [];
+const keysDown = new Set();
+const DRIVE_KEYS = new Set(["w", "a", "s", "d", "q", "e"]);
+
+function typing(e) {
+  const t = e.target;
+  return t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable);
+}
+
+function setupDriving() {
+  joysticks.push(new Joystick(document.getElementById("joy-translate"), (x, y) => (translate = { x, y })));
+  joysticks.push(new Joystick(document.getElementById("joy-rotate"), (x) => (rotate = { x, y: 0 })));
+
+  window.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" || (e.key === " " && !typing(e))) {
+      e.preventDefault();
+      emergencyStop();
+      return;
+    }
+    const k = e.key.toLowerCase();
+    if (!DRIVE_KEYS.has(k) || typing(e) || e.metaKey || e.ctrlKey || e.altKey) return;
+    e.preventDefault();
+    if (lastKnownMode === "web") keysDown.add(k);
   });
-  new Joystick(document.getElementById("joy-rotate"), (x) => {
-    rotate = { x, y: 0 };
-  });
+  window.addEventListener("keyup", (e) => keysDown.delete(e.key.toLowerCase()));
+  window.addEventListener("blur", () => keysDown.clear());
+  document.addEventListener("visibilitychange", () => document.hidden && releaseAll());
 
   // Always send, even when idle/zero: the server's watchdog relies on a steady stream
   // of "this is the true current state" messages. Skipping sends while at rest meant
   // releasing the joystick never actually told the server to stop (see robot_bridge.py's
   // per-input-source watchdog timestamps).
   setInterval(() => {
-    send({
-      type: "base",
-      x: translate.y, // forward/back
-      y: -translate.x, // left/right (screen-right should strafe right)
-      theta: -rotate.x, // twist joystick left/right => rotate
-      speed: currentSpeed,
-    });
+    let x = translate.y; // forward/back
+    let y = -translate.x; // left/right (screen-right should strafe right)
+    let theta = -rotate.x; // twist joystick left/right => rotate
+    if (keysDown.size) {
+      const k = (c) => (keysDown.has(c) ? 1 : 0);
+      x = k("w") - k("s");
+      y = k("a") - k("d");
+      theta = k("q") - k("e");
+    }
+    send({ type: "base", x, y, theta, speed: currentSpeed });
   }, SEND_INTERVAL_MS);
 }
 
 // --- Arm jog buttons (hold-to-jog, Pointer Events) ---
 
-function setupJogButtons() {
-  const activeJogs = new Map(); // joint -> dir
+const activeJogs = new Map(); // joint -> dir
 
+function setupJogButtons() {
   document.querySelectorAll(".jog-card").forEach((card) => {
     const joint = card.dataset.joint;
     card.querySelectorAll(".jog-btn").forEach((btn) => {
@@ -332,18 +454,36 @@ function setupJogButtons() {
   }, SEND_INTERVAL_MS);
 }
 
-function setupSpeedSelector() {
-  document.querySelectorAll('input[name="speed"]').forEach((input) => {
-    input.addEventListener("change", (e) => {
-      if (e.target.checked) currentSpeed = e.target.value;
-    });
-  });
+// Everything the page is holding down, let go (tab switch, mode change, STOP, hidden page).
+function releaseAll() {
+  joysticks.forEach((j) => j.release());
+  keysDown.clear();
+  activeJogs.forEach((_, joint) => send({ type: "jog", joint, dir: 0, speed: currentSpeed }));
+  activeJogs.clear();
 }
 
+// "Reset arm to rest" needs a 0.8 s hold: a stray tap mustn't swing the arm home.
+const HOLD_MS = 800;
+
 function setupResetButton() {
-  document.getElementById("arm-reset-btn").addEventListener("click", () => {
-    send({ type: "reset_arm" });
+  const btn = document.getElementById("arm-reset-btn");
+  let timer = null;
+  const cancel = () => {
+    clearTimeout(timer);
+    timer = null;
+    btn.classList.remove("holding");
+  };
+  btn.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    btn.setPointerCapture(e.pointerId);
+    btn.classList.add("holding");
+    timer = setTimeout(() => {
+      send({ type: "reset_arm" });
+      showToast("Arm going to rest.");
+      cancel();
+    }, HOLD_MS);
   });
+  ["pointerup", "pointercancel", "pointerleave"].forEach((ev) => btn.addEventListener(ev, cancel));
 }
 
 // --- Record tab: episode recording, playback, and Hub upload ---
@@ -397,6 +537,7 @@ function setupRecordingUI() {
 }
 
 function updateRecordingUI(recording, internetReachable) {
+  setBadge("internet-status", internetReachable ? "internet ok" : "no internet", internetReachable ? "good" : "");
   if (!recording) return;
 
   const toggleBtn = document.getElementById("rec-toggle-btn");
@@ -405,13 +546,12 @@ function updateRecordingUI(recording, internetReachable) {
   const liveStatus = document.getElementById("rec-live-status");
   const uploadBtn = document.getElementById("upload-btn");
   const uploadStatus = document.getElementById("upload-status");
-  const internetBadge = document.getElementById("internet-status");
   const episodeList = document.getElementById("episode-list");
 
   const busy = recording.recording || recording.saving || recording.playback_active;
 
   if (recording.recording) {
-    toggleBtn.textContent = "■ Stop";
+    toggleBtn.textContent = "■ Stop recording";
     toggleBtn.classList.add("is-recording");
     taskInput.value = recording.task;
     liveStatus.hidden = false;
@@ -438,9 +578,6 @@ function updateRecordingUI(recording, internetReachable) {
     "rec-upload-status" +
     (recording.upload_status === "success" ? " upload-success" : "") +
     (recording.upload_status === "error" ? " upload-error" : "");
-
-  internetBadge.textContent = internetReachable ? "internet: connected" : "internet: disconnected";
-  internetBadge.className = "status " + (internetReachable ? "status-connected" : "status-disconnected");
 
   // Full re-render only when the episode set itself changes (a new one saved); every other
   // tick just syncs each row's play/stop button in place, to avoid flicker on every 0.2s
@@ -482,7 +619,7 @@ function renderEpisodeList(recording, container) {
           <button class="episode-play-btn${isPlaying ? " is-playing" : ""}" data-episode="${ep.index}" ${playDisabled ? "disabled" : ""}>
             ${isPlaying ? "■ Stop" : "▶ Play"}
           </button>
-          <button class="episode-delete-btn" data-episode="${ep.index}" ${deleteDisabled ? "disabled" : ""} title="Delete episode">
+          <button class="episode-delete-btn" data-episode="${ep.index}" ${deleteDisabled ? "disabled" : ""} title="Delete episode" aria-label="Delete episode">
             &#128465;
           </button>
         </div>`;
@@ -497,13 +634,13 @@ function escapeHtml(str) {
 }
 
 window.addEventListener("DOMContentLoaded", () => {
+  document.getElementById("stop-btn").addEventListener("click", emergencyStop);
   setupTabs();
-  setupBaseJoysticks();
+  setupModeAndSpeed();
+  setupDriving();
   setupJogButtons();
-  setupSpeedSelector();
   setupResetButton();
-  setupModeSelector();
   setupRecordingUI();
-  updateVideoStreams("base");
+  updateVideoStreams();
   connectWs();
 });

@@ -305,6 +305,15 @@ class AutoController:
                 cmd["result"] = {"moved": self._base_moved(cmd)}
             self._finish_locked("aborted", reason)
 
+    def summary(self) -> dict:
+        """What the web page shows: the current (or last finished) command's kind, state and
+        reason, and the gripper's hold state."""
+        with self._lock:
+            cur = self._cmd if self._cmd is not None else self._last
+            hold = None if self._hold is None else self._hold.get("state")
+        cmd = None if cur is None else {k: cur.get(k) for k in ("kind", "state", "reason")}
+        return {"command": cmd, "hold": hold}
+
     def status(self, measured_units: dict[str, float]) -> dict:
         """The current (or last finished) command, the arm's commanded and measured joints
         (degrees; measured_units is RobotBridge's normalized reading), its TCP pose from the

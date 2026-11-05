@@ -413,3 +413,11 @@ def test_a_stalled_control_loop_has_its_wheels_stopped(started):
     assert robot.stops > before
     robot.get_observation = observe
     time.sleep(2.0)  # the loop back
+
+
+def test_the_web_pages_bus_health_shows_a_recent_motor_error():
+    bridge = RobotBridge(_Wheels(), allow_uncalibrated=True)
+    assert bridge.health() == {"bus_ok": True, "bus_error_age_s": None}
+    bridge._last_bus_error = time.monotonic()
+    h = bridge.health()
+    assert h["bus_ok"] is False and h["bus_error_age_s"] < 1.0

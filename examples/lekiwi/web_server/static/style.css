@@ -1,358 +1,238 @@
 :root {
   --bg: #12151a;
   --panel: #1c2129;
+  --panel-2: #232a35;
+  --line: #2a303c;
   --accent: #3b82f6;
   --text: #e6e9ef;
   --muted: #8a93a3;
   --danger: #ef4444;
+  --warn: #f59e0b;
   --ok: #22c55e;
+  --tap: 44px; /* the smallest touch target */
 }
 
 * { box-sizing: border-box; }
 
 html, body {
   margin: 0;
-  height: 100%;
+  min-height: 100%;
   background: var(--bg);
   color: var(--text);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  user-select: none;
-  -webkit-user-select: none;
-  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
 }
+/* The page scrolls; only the controls take touch for themselves (the whole page used to, and
+   the Record tab's list couldn't be scrolled on a phone). */
+.ctl { touch-action: none; user-select: none; -webkit-user-select: none; }
+button { font: inherit; color: inherit; touch-action: manipulation; cursor: pointer; }
+button:disabled { cursor: default; }
+h2 { font-size: 0.8rem; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); margin: 0 0 0.6rem; }
 
+/* --- top bar: status badges and STOP, always on screen --- */
 .topbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0.6rem 1rem;
-  background: var(--panel);
-  border-bottom: 1px solid #2a303c;
-}
-.title { font-weight: 700; font-size: 1.1rem; }
-.status-group { display: flex; gap: 0.4rem; }
-.status { font-size: 0.85rem; padding: 0.2rem 0.6rem; border-radius: 999px; white-space: nowrap; }
-.status-connected { background: rgba(34,197,94,0.15); color: var(--ok); }
-.status-disconnected { background: rgba(239,68,68,0.15); color: var(--danger); }
-
-.mode-bar {
-  display: flex;
-  flex-wrap: nowrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
-  padding: 0.5rem 0.75rem;
-  background: var(--panel);
-  border-bottom: 1px solid #2a303c;
-  font-size: 0.8rem;
-}
-.mode-bar label {
-  display: flex;
-  align-items: center;
-  gap: 0.25rem;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-/* VR / Auto can't be picked here (see index.html), only shown: dim unless active. */
-.mode-indicator { opacity: 0.45; }
-.mode-indicator:has(input:checked) { opacity: 1; color: var(--accent, #60a5fa); font-weight: 600; }
-
-/* Only the currently-selected control mode's on-page inputs should do anything -- everything
-   else is a no-op on the server side anyway (RobotBridge ignores commands from a source that
-   isn't the active mode), but graying it out here makes that obvious instead of surprising. */
-.mode-locked { opacity: 0.35; pointer-events: none; }
-
-.tabs {
-  display: flex;
-  gap: 0.4rem;
-  padding: 0.5rem 1rem 0;
-}
-.tab-btn {
-  flex: 1;
-  padding: 0.6rem;
-  background: var(--panel);
-  color: var(--muted);
-  border: 1px solid #2a303c;
-  border-bottom: none;
-  border-radius: 8px 8px 0 0;
-  font-size: 1rem;
-}
-.tab-btn.active { color: var(--text); background: #232a35; }
-.tab-btn:disabled { opacity: 0.4; }
-
-main {
-  padding: 0 1rem;
-}
-.tab-panel { display: none; }
-.tab-panel.active { display: block; }
-
-.video-wrap {
-  width: 100%;
-  aspect-ratio: 4 / 3;
-  background: #000;
-  border-radius: 8px;
-  overflow: hidden;
-  margin: 0.75rem 0;
-}
-.video-wrap img { width: 100%; height: 100%; object-fit: cover; }
-
-/* Arm tab: wrist + front feeds side by side (both are live tools while jogging, not one
-   primary + one decorative, so neither should be occluded by a picture-in-picture inset). */
-.video-row {
-  display: flex;
-  gap: 0.5rem;
-  margin: 0.75rem 0;
-}
-.video-row .video-wrap { margin: 0; min-width: 0; flex: 1 1 0; }
-
-.joystick-row {
-  display: flex;
-  justify-content: space-around;
-  padding: 1rem 0 2rem;
-}
-.joystick-block { display: flex; flex-direction: column; align-items: center; gap: 0.4rem; }
-.joystick {
-  width: 130px;
-  height: 130px;
-  border-radius: 50%;
-  background: var(--panel);
-  border: 2px solid #2a303c;
-  position: relative;
-  touch-action: none;
-}
-.joystick-knob {
-  width: 54px;
-  height: 54px;
-  border-radius: 50%;
-  background: var(--accent);
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  transform: translate(-50%, -50%);
-  pointer-events: none;
-}
-.joystick-label { color: var(--muted); font-size: 0.85rem; }
-
-.video-compact { aspect-ratio: 16 / 9; margin: 0.5rem 0; }
-
-.reset-btn {
-  width: 100%;
-  padding: 0.6rem;
-  margin-bottom: 0.6rem;
-  background: #3a2230;
-  color: #f3b7c8;
-  border: 1px solid #5a2f42;
-  border-radius: 8px;
-  font-size: 0.95rem;
-}
-.reset-btn:active { background: #5a2f42; }
-
-/* Two joints per row to keep all 6 controls visible without scrolling on a phone. */
-.jog-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 0.5rem;
-  padding-bottom: 1rem;
-}
-.jog-card {
-  background: var(--panel);
-  border: 1px solid #232a35;
-  border-radius: 8px;
-  padding: 0.4rem 0.5rem;
-}
-.jog-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.4rem;
-  margin-bottom: 0.3rem;
-}
-.jog-label {
-  font-size: 0.8rem;
-  color: var(--muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.jog-load {
-  font-size: 0.8rem;
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-}
-.jog-load.load-ok { color: var(--ok); }
-.jog-load.load-stall { color: var(--danger); }
-.jog-btns { display: flex; gap: 0.4rem; }
-.jog-btn {
-  flex: 1;
-  padding: 0.55rem 0;
-  font-size: 1.1rem;
-  background: #232a35;
-  color: var(--text);
-  border: 1px solid #2a303c;
-  border-radius: 6px;
-}
-.jog-btn:active { background: var(--accent); }
-.jog-card[data-joint="arm_gripper"] .jog-btn { font-size: 0.8rem; }
-
-.stub-note { color: var(--muted); padding: 2rem 0; text-align: center; }
-
-.toast {
-  position: fixed;
-  left: 50%;
-  bottom: 5rem;
-  transform: translate(-50%, 0.5rem);
-  max-width: 90vw;
-  padding: 0.7rem 1.1rem;
-  background: var(--danger);
-  color: white;
-  border-radius: 8px;
-  font-size: 0.9rem;
-  text-align: center;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 0.2s ease, transform 0.2s ease;
-  z-index: 100;
-}
-.toast.visible { opacity: 1; transform: translate(-50%, 0); }
-
-/* --- Record tab --- */
-.rec-controls { display: flex; flex-direction: column; gap: 0.5rem; margin-bottom: 1rem; }
-#rec-task {
-  width: 100%;
-  padding: 0.6rem 0.7rem;
-  background: var(--panel);
-  color: var(--text);
-  border: 1px solid #2a303c;
-  border-radius: 8px;
-  font-size: 0.95rem;
-}
-.rec-btn-row { display: flex; gap: 0.5rem; }
-.rec-btn {
-  flex: 1;
-  padding: 0.65rem 0;
-  border-radius: 8px;
-  font-size: 0.95rem;
-  border: 1px solid #2a303c;
-}
-.rec-btn-start { background: #3a2230; color: #f3b7c8; border-color: #5a2f42; }
-.rec-btn-start:active { background: #5a2f42; }
-.rec-btn-start.is-recording { background: var(--danger); color: white; border-color: var(--danger); }
-.rec-btn-discard { background: #232a35; color: var(--text); flex: 0 0 auto; padding: 0.65rem 1rem; }
-.rec-btn-upload { width: 100%; background: #1e2a3a; color: #93c5fd; border-color: #2a4a6a; margin-top: 0.6rem; }
-.rec-btn:disabled { opacity: 0.4; }
-
-.rec-live-status {
-  font-size: 0.9rem;
-  color: var(--danger);
-  font-variant-numeric: tabular-nums;
-}
-
-.rec-section { margin-bottom: 1.5rem; }
-.rec-section-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 0.5rem;
-  font-size: 0.9rem;
-  color: var(--muted);
-}
-
-.episode-list { display: flex; flex-direction: column; gap: 0.4rem; margin-bottom: 0.5rem; }
-.episode-row {
+  position: sticky;
+  top: 0;
+  z-index: 20;
   display: flex;
   align-items: center;
   gap: 0.6rem;
+  padding: 0.5rem 0.75rem;
+  padding-top: max(0.5rem, env(safe-area-inset-top));
   background: var(--panel);
-  border: 1px solid #232a35;
-  border-radius: 8px;
-  padding: 0.5rem 0.7rem;
-  font-size: 0.85rem;
+  border-bottom: 1px solid var(--line);
 }
-.episode-row-info { flex: 1; min-width: 0; }
-.episode-row-task {
+.title { font-weight: 700; font-size: 1.1rem; }
+.badges { display: flex; gap: 0.35rem; flex: 1; min-width: 0; overflow: hidden; }
+.badge {
+  font-size: 0.78rem;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  display: block;
+  background: rgba(138, 147, 163, 0.15);
+  color: var(--muted);
 }
-.episode-row-meta { color: var(--muted); font-size: 0.8rem; }
-.episode-play-btn {
-  flex: 0 0 auto;
-  padding: 0.4rem 0.8rem;
-  background: #232a35;
-  color: var(--text);
-  border: 1px solid #2a303c;
-  border-radius: 6px;
+.badge.good { background: rgba(34, 197, 94, 0.15); color: var(--ok); }
+.badge.warn { background: rgba(245, 158, 11, 0.15); color: var(--warn); }
+.badge.bad { background: rgba(239, 68, 68, 0.18); color: var(--danger); }
+.stop-btn {
+  min-width: 5.5rem;
+  min-height: var(--tap);
+  padding: 0 1rem;
+  border: 2px solid #ff8a8a;
+  border-radius: 10px;
+  background: var(--danger);
+  color: white;
+  font-weight: 800;
+  font-size: 1.05rem;
+  letter-spacing: 0.08em;
 }
-.episode-play-btn.is-playing { background: var(--accent); color: white; }
-.episode-delete-btn {
-  flex: 0 0 auto;
-  padding: 0.4rem 0.6rem;
-  background: #232a35;
-  color: var(--danger);
-  border: 1px solid #2a303c;
-  border-radius: 6px;
-  font-size: 0.95rem;
-}
-.episode-play-btn:disabled, .episode-delete-btn:disabled { opacity: 0.4; }
+.stop-btn:active { background: #b91c1c; }
 
+/* --- control bar: who controls, and the speed --- */
+.controlbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.25rem;
+  padding: 0.5rem 0.75rem;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+}
+.seg-group { display: flex; align-items: center; gap: 0.5rem; min-width: 0; }
+.seg-label { font-size: 0.78rem; color: var(--muted); }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.seg button {
+  min-height: 36px;
+  padding: 0 0.8rem;
+  background: var(--panel-2);
+  border: 0;
+  border-left: 1px solid var(--line);
+  font-size: 0.88rem;
+  white-space: nowrap;
+}
+.seg button:first-child { border-left: 0; }
+.seg button.active { background: var(--accent); color: white; font-weight: 600; }
+.pill { font-size: 0.8rem; padding: 0.25rem 0.6rem; border-radius: 999px; background: rgba(59, 130, 246, 0.2); color: #93c5fd; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 18rem; }
+
+/* --- the panes: one at a time on a phone (the tab bar picks), all at once on a desktop --- */
+.layout { padding: 0.75rem; display: grid; grid-template-columns: minmax(0, 1fr); gap: 0.75rem; }
+.col { display: contents; }
+.pane { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 0.75rem; min-width: 0; }
+.pane.cams { padding: 0; background: transparent; border: 0; }
+/* A pane shows on the tabs its data-tab lists (the cameras on drive, arm and record). */
+.pane { display: none; }
+body[data-tab="drive"] .pane[data-tab~="drive"],
+body[data-tab="arm"] .pane[data-tab~="arm"],
+body[data-tab="rec"] .pane[data-tab~="rec"],
+body[data-tab="status"] .pane[data-tab~="status"] { display: block; }
+
+.cam { position: relative; background: #000; border-radius: 12px; overflow: hidden; aspect-ratio: 4 / 3; }
+.cam img { display: block; width: 100%; max-width: 100%; height: 100%; object-fit: contain; }
+.cam-side { display: none; }
+.cam-label { position: absolute; left: 0.5rem; top: 0.4rem; font-size: 0.75rem; color: #fff; background: rgba(0, 0, 0, 0.5); padding: 0.1rem 0.45rem; border-radius: 6px; }
+.cam-switch { position: absolute; right: 0.5rem; bottom: 0.5rem; display: flex; border-radius: 10px; overflow: hidden; background: rgba(0, 0, 0, 0.55); }
+.cam-switch button { min-height: 36px; min-width: 4rem; border: 0; background: transparent; color: #cfd6e0; font-size: 0.85rem; }
+.cam-switch button.active { background: rgba(59, 130, 246, 0.85); color: white; }
+
+/* --- drive --- */
+.joystick-row { display: flex; justify-content: space-around; padding: 0.5rem 0 0.75rem; }
+.joystick-block { display: flex; flex-direction: column; align-items: center; gap: 0.4rem; }
+.joystick { width: 140px; height: 140px; border-radius: 50%; background: var(--panel-2); border: 2px solid var(--line); position: relative; }
+.joystick-knob { width: 58px; height: 58px; border-radius: 50%; background: var(--accent); position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); pointer-events: none; }
+.joystick-label { color: var(--muted); font-size: 0.85rem; }
+.hint { color: var(--muted); font-size: 0.82rem; margin: 0.25rem 0 0; text-align: center; }
+kbd { display: inline-block; min-width: 1.4em; padding: 0 0.3em; border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; background: var(--panel-2); font: 0.78rem ui-monospace, monospace; text-align: center; }
+.keys-hint { display: none; }
+.locked-hint { display: none; color: var(--warn); }
+body.locked .locked-hint { display: block; }
+/* Only the selected control mode's inputs do anything (the server ignores the rest): greyed out. */
+body.locked .joystick, body.locked .jog-btn, body.locked .hold-btn { opacity: 0.35; pointer-events: none; }
+
+/* --- arm --- */
+.jog-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; }
+.jog-card { background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; padding: 0.5rem; }
+.jog-header { display: flex; align-items: center; justify-content: space-between; gap: 0.4rem; }
+.jog-label { font-size: 0.85rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.jog-load { font-size: 0.78rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+.jog-card.stalled .jog-load { color: var(--danger); font-weight: 700; }
+.load-bar { height: 4px; margin: 0.35rem 0 0.45rem; border-radius: 2px; background: #11151b; overflow: hidden; }
+.load-bar i { display: block; height: 100%; width: 0; background: var(--ok); transition: width 0.15s linear; }
+.jog-card.stalled .load-bar i { background: var(--danger); }
+.jog-btns { display: flex; gap: 0.4rem; }
+.jog-btn { flex: 1; min-height: var(--tap); font-size: 1.2rem; background: #2b3340; border: 1px solid var(--line); border-radius: 8px; }
+.jog-btn.small { font-size: 0.9rem; }
+.jog-btn:active { background: var(--accent); }
+.hold-btn { position: relative; width: 100%; min-height: var(--tap); margin-top: 0.75rem; overflow: hidden; background: #3a2230; color: #f3b7c8; border: 1px solid #5a2f42; border-radius: 10px; }
+.hold-fill { position: absolute; inset: 0; width: 0; background: #7a3150; }
+.hold-btn.holding .hold-fill { width: 100%; transition: width 0.8s linear; }
+.hold-text { position: relative; }
+
+/* --- record --- */
+.rec-controls { display: flex; flex-direction: column; gap: 0.5rem; margin-bottom: 0.75rem; }
+#rec-task { width: 100%; min-height: var(--tap); padding: 0 0.7rem; background: var(--panel-2); color: var(--text); border: 1px solid var(--line); border-radius: 10px; font-size: 1rem; }
+.rec-btn-row { display: flex; gap: 0.5rem; }
+.rec-btn { flex: 1; min-height: var(--tap); border-radius: 10px; font-size: 0.95rem; border: 1px solid var(--line); background: var(--panel-2); }
+.rec-btn-start { background: #3a2230; color: #f3b7c8; border-color: #5a2f42; }
+.rec-btn-start.is-recording { background: var(--danger); color: white; border-color: var(--danger); }
+.rec-btn-discard { flex: 0 0 auto; padding: 0 1rem; }
+.rec-btn-upload { width: 100%; background: #1e2a3a; color: #93c5fd; border-color: #2a4a6a; margin-top: 0.6rem; }
+.rec-btn:disabled { opacity: 0.4; }
+.rec-live-status { font-size: 0.9rem; color: var(--danger); font-variant-numeric: tabular-nums; }
+.rec-section summary { display: flex; align-items: center; justify-content: space-between; min-height: var(--tap); cursor: pointer; color: var(--muted); font-size: 0.9rem; list-style: none; }
+.rec-section summary::-webkit-details-marker { display: none; }
+.episode-list { display: flex; flex-direction: column; gap: 0.4rem; }
+.episode-row { display: flex; align-items: center; gap: 0.5rem; background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; padding: 0.4rem 0.6rem; font-size: 0.85rem; }
+.episode-row-info { flex: 1; min-width: 0; }
+.episode-row-task { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.episode-row-meta { color: var(--muted); font-size: 0.8rem; }
+.episode-play-btn, .episode-delete-btn { flex: 0 0 auto; min-height: 38px; padding: 0 0.8rem; background: #2b3340; border: 1px solid var(--line); border-radius: 8px; }
+.episode-play-btn.is-playing { background: var(--accent); color: white; }
+.episode-delete-btn { color: var(--danger); }
+.episode-play-btn:disabled, .episode-delete-btn:disabled { opacity: 0.4; }
 .rec-upload-status { font-size: 0.85rem; color: var(--muted); margin-top: 0.4rem; }
 .rec-upload-status.upload-success { color: var(--ok); }
 .rec-upload-status.upload-error { color: var(--danger); }
+.stub-note { color: var(--muted); padding: 1rem 0; text-align: center; margin: 0; }
 
-.speed-bar {
-  position: sticky;
+/* --- status --- */
+.status-list { display: grid; grid-template-columns: auto 1fr; gap: 0.45rem 1rem; margin: 0; font-size: 0.9rem; }
+.status-list dt { color: var(--muted); }
+.status-list dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.status-list .good { color: var(--ok); }
+.status-list .warn { color: var(--warn); }
+.status-list .bad { color: var(--danger); }
+
+/* --- the phone's tab bar, within thumb reach --- */
+body { padding-bottom: calc(52px + env(safe-area-inset-bottom)); } /* room for the tab bar */
+.tabbar {
+  position: fixed;
+  left: 0;
+  right: 0;
   bottom: 0;
+  z-index: 20;
   display: flex;
-  align-items: center;
-  gap: 1rem;
-  padding: 0.6rem 1rem;
   background: var(--panel);
-  border-top: 1px solid #2a303c;
-  font-size: 0.9rem;
+  border-top: 1px solid var(--line);
+  padding-bottom: env(safe-area-inset-bottom);
 }
-.speed-bar label { display: flex; align-items: center; gap: 0.25rem; }
+.tabbar button { position: relative; flex: 1; min-height: 52px; border: 0; background: transparent; color: var(--muted); font-size: 0.9rem; }
+.tabbar button.active { color: var(--text); box-shadow: inset 0 3px 0 var(--accent); }
+.dot { position: absolute; top: 10px; margin-left: 4px; width: 8px; height: 8px; border-radius: 50%; background: var(--danger); }
 
-/* Desktop / wide screens: two-column layout, both tabs' controls reachable without
-   the phone-style single-panel-at-a-time constraint feeling cramped. */
-@media (min-width: 900px) {
-  main {
-    display: grid;
-    grid-template-columns: 1fr 380px;
-    gap: 1.5rem;
-    max-width: 1200px;
-    margin: 0 auto;
-  }
-  .tab-panel { display: grid !important; grid-template-columns: 1fr; }
-  .tab-panel:not(.active) { display: none !important; }
-  .tab-panel.active { grid-column: 1 / -1; grid-template-columns: 1fr 380px; gap: 1.5rem; }
-  .video-wrap { aspect-ratio: 4 / 3; max-height: 70vh; }
-  .joystick-row { flex-direction: column; align-items: center; gap: 1.5rem; padding-top: 2rem; }
-  .joystick { width: 160px; height: 160px; }
-  .joystick-knob { width: 64px; height: 64px; }
+.toast {
+  position: fixed; left: 50%; bottom: 5.5rem; transform: translate(-50%, 0.5rem);
+  max-width: 90vw; padding: 0.7rem 1.1rem; background: var(--panel-2); color: var(--text);
+  border: 1px solid var(--line); border-radius: 10px; font-size: 0.9rem; text-align: center;
+  opacity: 0; pointer-events: none; transition: opacity 0.2s ease, transform 0.2s ease; z-index: 100;
+}
+.toast.error { background: var(--danger); color: white; border-color: var(--danger); }
+.toast.visible { opacity: 1; transform: translate(-50%, 0); }
 
-  /* Arm tab: keep the same single-column stacked flow as phone (video row, then reset,
-     then joint grid) instead of the video|sidebar split used for Base -- the reset
-     button and jog grid don't belong crammed into a narrow sidebar next to the video.
-     Wider than the phone layout's implicit width so the two side-by-side camera feeds
-     stay legible instead of shrinking to fit a single-video-width column. 760px -> 1140px
-     (+50%) since desktop has the room and the feeds are more useful larger. */
-  #tab-arm.active {
-    grid-template-columns: 1fr;
-    max-width: 1140px;
-    margin: 0 auto;
-  }
-  #tab-arm .video-compact { aspect-ratio: 16 / 9; max-height: 60vh; }
-  #tab-arm .jog-grid { max-width: 420px; margin: 0 auto; width: 100%; }
+/* --- phone in landscape: the camera beside the controls --- */
+@media (orientation: landscape) and (max-height: 520px) {
+  .layout { grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); align-items: start; }
+  .controlbar { padding: 0.35rem 0.75rem; }
+  .joystick { width: 120px; height: 120px; }
+  .joystick-knob { width: 50px; height: 50px; }
+}
 
-  /* Record tab: same single-column stacked flow as Arm -- video, then recording controls,
-     then episode list, none of which belong crammed into a narrow sidebar. */
-  #tab-rec.active {
-    grid-template-columns: 1fr;
-    max-width: 560px;
+/* --- desktop: every pane at once, no tabs; keyboard driving --- */
+@media (min-width: 1024px) and (min-height: 600px) {
+  .tabbar { display: none; }
+  body { padding-bottom: 0; }
+  .keys-hint { display: block; }
+  body.locked .keys-hint { display: none; }
+  .layout {
+    max-width: 1500px;
     margin: 0 auto;
+    grid-template-columns: minmax(0, 1.5fr) minmax(380px, 1fr);
+    align-items: start;
   }
-  #tab-rec .video-compact { aspect-ratio: 16 / 9; max-height: 40vh; }
+  .col { display: flex; flex-direction: column; gap: 0.75rem; min-width: 0; }
+  body .pane { display: block !important; }
+  /* The front and the wrist camera side by side: driving and the arm both in view. */
+  .pane.cams { display: grid !important; grid-template-columns: 1fr 1fr; gap: 0.75rem; }
+  .pane.cams .cam-side { display: block; }
+  .cam-switch { display: none; }
+  .jog-grid { grid-template-columns: 1fr 1fr 1fr; }
 }

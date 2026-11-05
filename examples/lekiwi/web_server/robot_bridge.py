@@ -108,6 +108,7 @@ CALIBRATION_WRITE_RETRIES = 2  # convention
 LOOP_STALL_S = 1.0  # convention: 30 ticks
 WATCHDOG_PERIOD_S = 0.2  # convention
 BUS_REOPEN_COOLDOWN_S = 2.0  # convention
+BUS_ERROR_RECENT_S = 2.0  # convention: the web page shows the bus as failing this long after an error
 # Where a register auto mode lowered (AutoController.take_bus_writes) is put back from: the
 # motor's power-on value.
 REGISTER_DEFAULTS = {"Torque_Limit": "Max_Torque_Limit"}
@@ -324,6 +325,7 @@ class RobotBridge:
         self._watchdog: threading.Thread | None = None
         self._last_tick = time.monotonic()
         self._last_bus_reopen = 0.0
+        self._last_bus_error: float | None = None  # monotonic time of the last failed motor transfer
 
         # Playback: None means not replaying. While active, the control loop steps through
         # these recorded actions instead of computing one from the current control mode.
@@ -781,6 +783,13 @@ class RobotBridge:
             if j in ARM_JOINTS
         }
 
+    def health(self) -> dict:
+        """The motor bus for the web page: ok unless a motor transfer failed in the last
+        BUS_ERROR_RECENT_S, and how long ago the last one failed (None: none since start)."""
+        last = self._last_bus_error
+        age = None if last is None else time.monotonic() - last
+        return {"bus_ok": age is None or age > BUS_ERROR_RECENT_S, "bus_error_age_s": None if age is None else round(age, 1)}
+
     def arm_calibration_state(self) -> str | None:
         return self._arm_calibration
 
@@ -887,6 +896,7 @@ class RobotBridge:
             load = bus.sync_read("Present_Load", ARM_JOINTS)
         except Exception:
             logger.exception("reading the arm's motors failed too")
+            self._last_bus_error = time.monotonic()
             return
         with self._lock:
             for joint, v in pos.items():
@@ -908,6 +918,7 @@ class RobotBridge:
             vel = self._robot._wheel_raw_to_body(raw["base_left_wheel"], raw["base_back_wheel"], raw["base_right_wheel"])
         except Exception as e:
             logger.exception("reading the wheels failed too")
+            self._last_bus_error = time.monotonic()
             self._auto.abort_base(f"the base's odometry was lost (reading the wheels failed: {e})")
             with self._lock:
                 self._latest_base_vel = {"x.vel": 0.0, "y.vel": 0.0, "theta.vel": 0.0}
@@ -1267,6 +1278,7 @@ class RobotBridge:
                 self._robot.send_action(action)
             except Exception:
                 logger.exception("send_action failed")
+                self._last_bus_error = time.monotonic()
                 self._stop_wheels("send_action failed")
 
             try:

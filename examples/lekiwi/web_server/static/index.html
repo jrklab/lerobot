@@ -2,136 +2,79 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#12151a" />
   <title>LeKiwi Control</title>
   <link rel="stylesheet" href="/static/style.css" />
 </head>
-<body>
+<body data-tab="drive">
   <header class="topbar">
     <span class="title">LeKiwi</span>
-    <span class="status-group">
-      <span id="conn-status" class="status status-disconnected">connecting...</span>
-      <span id="gamepad-status" class="status status-disconnected">gamepad: --</span>
+    <span class="badges">
+      <span id="conn-status" class="badge bad" title="Link to the robot">offline</span>
+      <span id="arm-badge" class="badge" title="Arm calibration">arm --</span>
+      <span id="bus-badge" class="badge" title="Servo link (motors)">servos --</span>
     </span>
+    <!-- Halts the base and any arm jog, ends Auto, and hands control back to the gamepad
+         (robot_bridge.emergency_stop). Also Escape, and Space when not typing. -->
+    <button id="stop-btn" class="stop-btn" title="Stop everything (Esc / Space)">STOP</button>
   </header>
 
-  <div class="mode-bar">
-    <label><input type="radio" name="mode" value="gamepad" checked /> Gamepad</label>
-    <label><input type="radio" name="mode" value="web" /> Web App</label>
-    <label><input type="radio" name="mode" value="leader_keyboard" /> Leader Arm</label>
-    <!-- Indicators only: VR is entered by the Quest's /vr page, Auto by the off-board planner
-         (gemma_brain) via /auto/enable. Picking any mode above takes control back. -->
-    <label class="mode-indicator" title="Active while the Quest's /vr page is driving"><input type="radio" name="mode" value="vr" disabled /> VR</label>
-    <label class="mode-indicator" title="Active while the Gemma brain on the host is driving"><input type="radio" name="mode" value="auto" disabled /> Auto</label>
+  <div class="controlbar">
+    <div class="seg-group">
+      <span class="seg-label">Control</span>
+      <div class="seg" id="mode-seg" role="radiogroup" aria-label="Who controls the robot">
+        <button data-mode="gamepad">Gamepad</button>
+        <button data-mode="web">This page</button>
+        <button data-mode="leader_keyboard">Leader</button>
+      </div>
+      <!-- VR is entered by the Quest's /vr page, Auto by the off-board planner (gemma_brain):
+           shown, not picked here. Picking a mode above takes control back. -->
+      <span id="mode-extra" class="pill" hidden></span>
+    </div>
+    <div class="seg-group">
+      <span class="seg-label">Speed</span>
+      <div class="seg" id="speed-seg" role="radiogroup" aria-label="Speed">
+        <button data-speed="slow">Slow</button>
+        <button data-speed="medium">Medium</button>
+        <button data-speed="fast">Fast</button>
+      </div>
+    </div>
   </div>
 
-  <nav class="tabs">
-    <button class="tab-btn active" data-tab="base">Base</button>
-    <button class="tab-btn" data-tab="arm">Arm</button>
-    <button class="tab-btn" data-tab="rec">Record</button>
-  </nav>
-
-  <main>
-    <!-- BASE TAB -->
-    <section id="tab-base" class="tab-panel active">
-      <div class="video-wrap">
-        <img id="video-base" alt="front camera" />
+  <main class="layout">
+    <!-- Two columns on a desktop; on a phone the wrappers drop out (display: contents) and
+         the tab bar shows one pane under the camera. -->
+    <div class="col col-a">
+    <section class="pane cams" data-tab="drive arm rec">
+      <div class="cam cam-main">
+        <img id="cam-main" alt="camera" />
+        <div class="cam-switch" role="radiogroup" aria-label="Camera">
+          <button data-cam="front">Front</button>
+          <button data-cam="wrist">Wrist</button>
+        </div>
       </div>
-      <div class="joystick-row">
-        <div class="joystick-block">
-          <div class="joystick" id="joy-translate"><div class="joystick-knob"></div></div>
-          <span class="joystick-label">translate</span>
-        </div>
-        <div class="joystick-block">
-          <div class="joystick" id="joy-rotate"><div class="joystick-knob"></div></div>
-          <span class="joystick-label">rotate</span>
-        </div>
+      <div class="cam cam-side">
+        <img id="cam-side" alt="wrist camera" />
+        <span class="cam-label">Wrist</span>
       </div>
     </section>
 
-    <!-- ARM TAB -->
-    <section id="tab-arm" class="tab-panel">
-      <div class="video-row">
-        <div class="video-wrap video-compact">
-          <img id="video-arm-front" alt="front camera" />
-        </div>
-        <div class="video-wrap video-compact">
-          <img id="video-arm" alt="wrist camera" />
-        </div>
-      </div>
-
-      <button id="arm-reset-btn" class="reset-btn">&#8634; Reset arm to neutral</button>
-
-      <div class="jog-grid">
-        <div class="jog-card" data-joint="arm_shoulder_pan">
-          <div class="jog-header">
-            <span class="jog-label">Base rotation</span>
-            <span class="jog-load load-ok">--</span>
-          </div>
-          <div class="jog-btns">
-            <button class="jog-btn" data-dir="-1">&larr;</button>
-            <button class="jog-btn" data-dir="1">&rarr;</button>
-          </div>
-        </div>
-        <div class="jog-card" data-joint="arm_shoulder_lift">
-          <div class="jog-header">
-            <span class="jog-label">Shoulder</span>
-            <span class="jog-load load-ok">--</span>
-          </div>
-          <div class="jog-btns">
-            <button class="jog-btn" data-dir="-1">&darr;</button>
-            <button class="jog-btn" data-dir="1">&uarr;</button>
-          </div>
-        </div>
-        <div class="jog-card" data-joint="arm_elbow_flex">
-          <div class="jog-header">
-            <span class="jog-label">Elbow</span>
-            <span class="jog-load load-ok">--</span>
-          </div>
-          <div class="jog-btns">
-            <button class="jog-btn" data-dir="-1">&darr;</button>
-            <button class="jog-btn" data-dir="1">&uarr;</button>
-          </div>
-        </div>
-        <div class="jog-card" data-joint="arm_wrist_flex">
-          <div class="jog-header">
-            <span class="jog-label">Wrist tilt</span>
-            <span class="jog-load load-ok">--</span>
-          </div>
-          <div class="jog-btns">
-            <button class="jog-btn" data-dir="-1">&darr;</button>
-            <button class="jog-btn" data-dir="1">&uarr;</button>
-          </div>
-        </div>
-        <div class="jog-card" data-joint="arm_wrist_roll">
-          <div class="jog-header">
-            <span class="jog-label">Wrist twist</span>
-            <span class="jog-load load-ok">--</span>
-          </div>
-          <div class="jog-btns">
-            <button class="jog-btn" data-dir="-1">&#8634;</button>
-            <button class="jog-btn" data-dir="1">&#8635;</button>
-          </div>
-        </div>
-        <div class="jog-card" data-joint="arm_gripper">
-          <div class="jog-header">
-            <span class="jog-label">Gripper</span>
-            <span class="jog-load load-ok">--</span>
-          </div>
-          <div class="jog-btns">
-            <button class="jog-btn" data-dir="-1">close</button>
-            <button class="jog-btn" data-dir="1">open</button>
-          </div>
-        </div>
-      </div>
+    <section class="pane status" data-tab="status">
+      <h2>Status</h2>
+      <dl class="status-list">
+        <dt>Link</dt><dd id="st-link">--</dd>
+        <dt>Control</dt><dd id="st-mode">--</dd>
+        <dt>Arm calibration</dt><dd id="st-arm">--</dd>
+        <dt>Servo link</dt><dd id="st-bus">--</dd>
+        <dt>Auto (brain)</dt><dd id="st-auto">--</dd>
+        <dt>Gripper</dt><dd id="st-grip">--</dd>
+        <dt>Gamepad</dt><dd id="st-gamepad">--</dd>
+        <dt>Internet</dt><dd id="st-internet">--</dd>
+      </dl>
     </section>
-
-    <!-- RECORD TAB -->
-    <section id="tab-rec" class="tab-panel">
-      <div class="video-wrap video-compact">
-        <img id="video-rec" alt="front camera" />
-      </div>
-
+    <section class="pane rec" data-tab="rec">
+      <h2>Record</h2>
       <div class="rec-controls">
         <input id="rec-task" type="text" placeholder="Task description (e.g. Pick up the block)" />
         <div class="rec-btn-row">
@@ -140,27 +83,79 @@
         </div>
         <div id="rec-live-status" class="rec-live-status" hidden></div>
       </div>
-
-      <div class="rec-section">
-        <div class="rec-section-header">
-          <span>Episodes</span>
-          <span id="internet-status" class="status status-disconnected">internet: --</span>
-        </div>
-        <div id="episode-list" class="episode-list">
-          <p class="stub-note">No episodes recorded yet.</p>
-        </div>
+      <details class="rec-section" open>
+        <summary><span>Episodes</span><span id="internet-status" class="badge">internet --</span></summary>
+        <div id="episode-list" class="episode-list"><p class="stub-note">No episodes recorded yet.</p></div>
         <button id="upload-btn" class="rec-btn rec-btn-upload">&#8593; Upload all to Hub</button>
         <div id="upload-status" class="rec-upload-status"></div>
-      </div>
+      </details>
     </section>
+
+    </div>
+    <div class="col col-b">
+    <section class="pane drive" data-tab="drive">
+      <h2>Drive</h2>
+      <div class="joystick-row">
+        <div class="joystick-block">
+          <div class="joystick ctl" id="joy-translate"><div class="joystick-knob"></div></div>
+          <span class="joystick-label">move</span>
+        </div>
+        <div class="joystick-block">
+          <div class="joystick ctl" id="joy-rotate"><div class="joystick-knob"></div></div>
+          <span class="joystick-label">turn</span>
+        </div>
+      </div>
+      <p class="hint keys-hint">Keys: <kbd>W</kbd><kbd>S</kbd> forward/back, <kbd>A</kbd><kbd>D</kbd> sideways,
+        <kbd>Q</kbd><kbd>E</kbd> turn, <kbd>Space</kbd> stop</p>
+      <p class="hint locked-hint">Pick <b>This page</b> under Control to drive from here.</p>
+    </section>
+
+    <section class="pane arm" data-tab="arm">
+      <h2>Arm</h2>
+      <div class="jog-grid">
+        <div class="jog-card" data-joint="arm_shoulder_pan">
+          <div class="jog-header"><span class="jog-label">Base rotation</span><span class="jog-load">--</span></div>
+          <div class="load-bar"><i></i></div>
+          <div class="jog-btns"><button class="jog-btn ctl" data-dir="-1" aria-label="left">&larr;</button><button class="jog-btn ctl" data-dir="1" aria-label="right">&rarr;</button></div>
+        </div>
+        <div class="jog-card" data-joint="arm_shoulder_lift">
+          <div class="jog-header"><span class="jog-label">Shoulder</span><span class="jog-load">--</span></div>
+          <div class="load-bar"><i></i></div>
+          <div class="jog-btns"><button class="jog-btn ctl" data-dir="-1" aria-label="down">&darr;</button><button class="jog-btn ctl" data-dir="1" aria-label="up">&uarr;</button></div>
+        </div>
+        <div class="jog-card" data-joint="arm_elbow_flex">
+          <div class="jog-header"><span class="jog-label">Elbow</span><span class="jog-load">--</span></div>
+          <div class="load-bar"><i></i></div>
+          <div class="jog-btns"><button class="jog-btn ctl" data-dir="-1" aria-label="down">&darr;</button><button class="jog-btn ctl" data-dir="1" aria-label="up">&uarr;</button></div>
+        </div>
+        <div class="jog-card" data-joint="arm_wrist_flex">
+          <div class="jog-header"><span class="jog-label">Wrist tilt</span><span class="jog-load">--</span></div>
+          <div class="load-bar"><i></i></div>
+          <div class="jog-btns"><button class="jog-btn ctl" data-dir="-1" aria-label="down">&darr;</button><button class="jog-btn ctl" data-dir="1" aria-label="up">&uarr;</button></div>
+        </div>
+        <div class="jog-card" data-joint="arm_wrist_roll">
+          <div class="jog-header"><span class="jog-label">Wrist twist</span><span class="jog-load">--</span></div>
+          <div class="load-bar"><i></i></div>
+          <div class="jog-btns"><button class="jog-btn ctl" data-dir="-1" aria-label="counter-clockwise">&#8634;</button><button class="jog-btn ctl" data-dir="1" aria-label="clockwise">&#8635;</button></div>
+        </div>
+        <div class="jog-card" data-joint="arm_gripper">
+          <div class="jog-header"><span class="jog-label">Gripper</span><span class="jog-load">--</span></div>
+          <div class="load-bar"><i></i></div>
+          <div class="jog-btns"><button class="jog-btn ctl small" data-dir="-1">close</button><button class="jog-btn ctl small" data-dir="1">open</button></div>
+        </div>
+      </div>
+      <button id="arm-reset-btn" class="hold-btn ctl"><span class="hold-fill"></span><span class="hold-text">Hold to reset arm to rest</span></button>
+    </section>
+
+    </div>
   </main>
 
-  <footer class="speed-bar">
-    <span>Speed:</span>
-    <label><input type="radio" name="speed" value="slow" /> Slow</label>
-    <label><input type="radio" name="speed" value="medium" checked /> Medium</label>
-    <label><input type="radio" name="speed" value="fast" /> Fast</label>
-  </footer>
+  <nav class="tabbar">
+    <button data-tab="drive" class="active">Drive</button>
+    <button data-tab="arm">Arm</button>
+    <button data-tab="rec">Record</button>
+    <button data-tab="status">Status<span id="status-dot" class="dot" hidden></span></button>
+  </nav>
 
   <script src="/static/app.js"></script>
 </body>
