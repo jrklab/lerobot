@@ -55,7 +55,7 @@ ROOT = Path(__file__).resolve().parents[1]  # gemma_brain: common/, brain/, data
 sys.path.insert(0, str(ROOT))
 
 from brain import actions, params as prm
-from brain.geometry import Geometry
+from brain.geometry import Geometry, jaw_opening
 from brain.goals import AngleGoal, JawGoal
 from brain.params import Param
 from brain.primitives import Skills
@@ -99,6 +99,11 @@ LEGO_PITCH_MM, LEGO_PLAY_MM = 8.0, 0.2  # a brick is 8 mm per stud less the 0.2 
 BRICK_PAST_EDGE_M = 0.05  # convention
 # Each grasp squares the brick to the jaws first, tighter than a pick's 12 deg: a long-side close on a
 # brick a few degrees off closed 2.2 deg (~3 mm) wider than the one before (Nov 4).
+# The jaws' wide end, measured by the wrist camera on the jaws themselves (geometry.jaw_opening:
+# 43.6-44.1 mm in 12 frames at 44.4, Nov 4): from this far past the widest brick point, in these
+# steps, up to the gripper's limit or until the moving jaw leaves the view or stops widening.
+CAMERA_FROM_DEG, CAMERA_STEP_DEG = 8.0, 12.0  # convention
+JAW_SETTLE_S = 0.5  # convention: the jaws stop well within this after an opening
 ALIGN_TOL = Param(3.0, "RULE", "the gripper calibration's grasps: the brick within this of square to the jaws (deg)")
 
 
@@ -129,6 +134,30 @@ def brick_side_y(board_pose) -> float:
     pose = np.asarray(board_pose)
     pts = (pose[:3, :3] @ corners.T).T + pose[:3, 3]
     return float(pts[:, 1].min() - board.getSquareLength() - BRICK_PAST_EDGE_M)
+
+
+def wide_end(sk: Skills, robot, wide: float, start_deg: float) -> list[dict]:
+    """The jaws opened from `start_deg` in CAMERA_STEP_DEG steps to `wide`, each opening measured
+    by the wrist camera (at the hover, nothing between them): points as the closes', what
+    "camera". Stops where the moving jaw isn't seen or the opening no longer grows."""
+    import time
+
+    fixed = json.loads(CALIB.read_text()).get("wrist_jaws", {}).get("value")
+    points: list[dict] = []
+    deg = start_deg
+    while deg <= wide + 1e-6:
+        robot.gripper(deg)
+        time.sleep(JAW_SETTLE_S)
+        read = float(robot.status()["joints"]["arm_gripper"])
+        jaws = vision.jaw_geometry(robot.frame("wrist", after=time.time())[0], fixed)
+        mm = jaw_opening(sk.geom, jaws, sk.height())
+        if mm is None or (points and 1000.0 * mm <= points[-1]["mm"]):
+            print(f"    opened to {read:.1f} deg: {'the moving jaw out of view' if mm is None else 'no wider'}: the wide end")
+            break
+        points.append({"mm": round(1000.0 * mm, 1), "deg": round(read, 2), "stalled": False, "what": "camera"})
+        print(f"    opened to {read:.1f} deg: {1000.0 * mm:.1f} mm (camera)")
+        deg = wide if deg < wide and deg + CAMERA_STEP_DEG > wide else deg + CAMERA_STEP_DEG
+    return points
 
 
 def _turned(sk: Skills, roll: float) -> float:
@@ -213,6 +242,9 @@ def auto(robot, board_pose, out: Path, repeats: int = AUTO_REPEATS, moves: list 
             robot.gripper(wide)
             points.append({"mm": 0.0, "what": "nothing", **close_measured(robot)})
         print(f"    nothing: closed at {[p['deg'] for p in points]} deg")
+        brick_widest = max((p["deg"] for p in json.loads(CALIB.read_text()).get("gripper_opening", {}).get("points", [])
+                            if p.get("what") != "camera"), default=0.0)
+        points += wide_end(sk, robot, wide, brick_widest + CAMERA_FROM_DEG)
         robot.gripper(wide)
         _ok(sk.move("base", delta=(0.0, brick_side_y(board_pose))), "across to the brick")
         if sk.find(BRICK, "wrist") is None:
@@ -240,9 +272,10 @@ def auto(robot, board_pose, out: Path, repeats: int = AUTO_REPEATS, moves: list 
 
 def merged(points: list[dict], old: list[dict]) -> list[dict]:
     """These points, and the old ones of widths these don't measure (the 2x6 brick's 47.8 mm,
-    which the gripper step doesn't grasp: it's at the jaws' widest)."""
+    which the gripper step doesn't grasp: it's at the jaws' widest); old camera points are
+    measured again each run, never kept."""
     widths = {p["mm"] for p in points}
-    return points + [p for p in old if p["mm"] not in widths]
+    return points + [p for p in old if p["mm"] not in widths and p.get("what") != "camera"]
 
 
 def write_curve(points: list[dict], method: str) -> list[list[float]]:

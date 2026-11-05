@@ -117,3 +117,12 @@ def test_snap_top_never_lowers_and_leaves_a_box_without_an_edge():
     assert how.startswith("raised") and abs(box[1] - 0.3) <= 0.015  # 10 px, give or take the blur
     flat = cv2.imencode(".jpg", np.full((100, 100, 3), 200, np.uint8))[1].tobytes()
     assert vision.snap_top(flat, [0.3, 0.6, 0.7, 0.8])[1] == "no edge within reach"
+
+
+def test_side_profile_follows_a_silhouette_row_by_row():
+    img = np.full((240, 320, 3), (150, 170, 190), np.uint8)  # a wooden floor
+    cv2.circle(img, (160, 120), 40, (60, 200, 200), -1)  # a yellow-green ball, side on
+    rows = vision.side_profile(cv2.imencode(".png", img)[1].tobytes(), [0.35, 0.3, 0.65, 0.7])
+    widths = [(u1 - u0) * 320 for _, u0, u1 in rows]
+    mid = widths[len(widths) // 2]
+    assert 75 <= mid <= 84 and widths[2] < mid / 2 and widths[-3] < mid / 2

@@ -171,6 +171,10 @@ def coloured_blobs(jpeg: bytes, min_chroma: float = BLOB_MIN_CHROMA) -> list[lis
             for x, y, bw, bh, _ in blobs]
 
 
+# An outline at least this much longer than wide has a long side to align the jaws to (a 2x4
+# brick ~2); under it, round enough for any roll (a ball ~1).
+ELONGATED_ASPECT = 1.4
+
 # snap_top: the object's colour is its box's top band (this share of the box's height, the
 # middle of its width); a row above the box is still the object while this share of its middle
 # is within TOP_MATCH_SPREADS of that colour's own spread (never under TOP_MIN_DELTA_E, L*a*b*);
@@ -393,12 +397,50 @@ def _nearer_look(lab: np.ndarray, look: Look, floor_ab: np.ndarray) -> np.ndarra
     return np.linalg.norm(ab - look.ab, axis=-1) < np.linalg.norm(ab - floor_ab, axis=-1)
 
 
+def side_profile(jpeg: bytes, box, look: Look | None = None) -> list[tuple[float, float, float]]:
+    """The object's silhouette row by row in a side-on (front camera) box: [(v, u_left, u_right)],
+    image fractions, top to bottom, for the rows where the object's blob is. The blob as
+    brick_angle finds it (the object's sampled colour, else its difference from the floor around
+    it), the largest one; each row's extent across it. Empty when there's no blob."""
+    img = cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_COLOR)
+    if img is None:
+        return []
+    h, w = img.shape[:2]
+    x0, y0, x1, y1 = box
+    bw, bh = x1 - x0, y1 - y0
+    pad = 0.15  # convention: some floor and background around the box, for its colour
+    cx0, cy0 = int(max(0, (x0 - pad * bw) * w)), int(max(0, (y0 - pad * bh) * h))
+    cx1, cy1 = int(min(w, (x1 + pad * bw) * w)), int(min(h, (y1 + pad * bh) * h))
+    crop = img[cy0:cy1, cx0:cx1]
+    if crop.size == 0 or min(crop.shape[:2]) < 8:
+        return []
+    lab = cv2.GaussianBlur(cv2.cvtColor(crop, cv2.COLOR_BGR2LAB).astype(np.float32), (5, 5), 0)
+    ring = np.concatenate([lab[:3].reshape(-1, 3), lab[-3:].reshape(-1, 3), lab[:, :3].reshape(-1, 3), lab[:, -3:].reshape(-1, 3)])
+    if look is not None and look.distinct():
+        mask = _nearer_look(lab, look, np.median(ring[:, 1:], axis=0)).astype(np.uint8) * 255
+    else:
+        score = np.linalg.norm(lab - np.median(ring, axis=0), axis=2)
+        score = cv2.normalize(score, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+        _, mask = cv2.threshold(score, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((5, 5), np.uint8))
+    n, labels, stats, _ = cv2.connectedComponentsWithStats(mask)
+    if n <= 1:
+        return []
+    blob = labels == 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
+    out = []
+    for r in range(blob.shape[0]):
+        cols = np.nonzero(blob[r])[0]
+        if cols.size:
+            out.append(((cy0 + r) / h, (cx0 + cols.min()) / w, (cx0 + cols.max() + 1) / w))
+    return out
+
+
 def measured_angle_of(jpeg: bytes, box, look: Look | None = None) -> tuple[float | None, str]:
     """The object's long-side angle from image vertical and how it was measured, or (None,
     "unmeasured") when the colour blob isn't brick-shaped: v2 doesn't fall back to a guess (v1's
     box-shape fallback said 0 deg for bricks 15-22 deg off, Oct 27)."""
     m = brick_angle(jpeg, box, look=look)
-    if m is not None and 0.4 <= m["fill"] <= 1.15 and m["aspect"] >= 1.4:
+    if m is not None and 0.4 <= m["fill"] <= 1.15 and m["aspect"] >= ELONGATED_ASPECT:
         return m["angle_deg"], "fit"
     return None, "unmeasured"
 

@@ -278,6 +278,39 @@ def lowest_view_height(geom: Geometry, width: float, plane_h: float, start: floa
     return min(h, MAX_VIEW_HEIGHT_M)
 
 
+def front_profile(geom: Geometry, box, rows) -> list[tuple[float, float]]:
+    """An object's width at each height (m), from its side-on silhouette rows
+    (vision.side_profile) in its front-camera box: every row taken at the object's distance,
+    which its box's bottom (its near edge on the floor) gives, as front_object_height does.
+    [(height above the floor, width)], bottom up; empty without the distance."""
+    bottom = geom.front_point(((box[0] + box[2]) / 2, box[3]))
+    if bottom is None:
+        return []
+    o = geom.cams.T_base_cam[:3, 3]
+    rot = geom.cams.T_base_cam[:3, :3]
+    dist = np.hypot(*(bottom[:2] - o[:2]))
+
+    def at(uv):
+        d = rot @ geom.cams.front.ray(uv)
+        return o + dist / np.hypot(*d[:2]) * d
+
+    out = []
+    for v, u0, u1 in rows:
+        a, b = at((u0, v)), at((u1, v))
+        out.append((float((a[2] + b[2]) / 2 - geom.floor_seen_z), float(np.hypot(*(b[:2] - a[:2])))))
+    return sorted(out)
+
+
+def jaw_opening(geom: Geometry, jaws: dict, height: float) -> float | None:
+    """The jaws' opening (m) at their tips, from the wrist image (vision.jaw_geometry: both inner
+    edges, at the fixed jaw's tip row), the tips `height` above the floor: on the tips' own plane.
+    Nov 4: 43.6-44.1 mm in 12 hover frames with the jaws at 44.4. None without the moving jaw."""
+    if jaws is None or jaws.get("moving_inner_u") is None:
+        return None
+    v = jaws["fixed_tip_v"]
+    return geom.wrist_distance((jaws["moving_inner_u"], v), (jaws["fixed_inner_u"], v), height, height)
+
+
 def locate_from_one_view(geom: Geometry, c, h: float, height: float, roll_deg: float = 0.0) -> np.ndarray:
     """(dx, dy) in metres from the point under the gripper to an object's point seen at image
     `c`, the jaw tips h above the floor, the point `height` above the floor. The point under the

@@ -19,13 +19,14 @@ params.py or geometry.py one, so a new action adds a name, not a parameter to ca
 from __future__ import annotations
 
 import numpy as np
-from common.vision import brick_angle, snap_top
+from common.vision import ELONGATED_ASPECT, brick_angle, side_profile, snap_top
 
 from brain import params as prm
 from brain.geometry import (
     MM_PER_M,
     front_object_height,
     front_object_width,
+    front_profile,
     grasp_spot,
     locate_from_one_view,
     look_offsets,
@@ -45,6 +46,55 @@ from brain.params import Param
 from brain.primitives import Result, Skills
 
 
+def widest_band(profile: list[tuple[float, float]], height: float) -> tuple[float, float] | None:
+    """The heights (from, to: m above the floor) where an object's side silhouette is within
+    PROFILE_BAND_M of its widest, its rows inside its measured height; None without rows. A
+    brick: ~4 to ~10 mm (its rows narrow at the floor's shadow and its receding top face); a
+    ball: about its middle."""
+    rows = [(h, w) for h, w in profile if 0.0 <= h <= height]
+    if not rows:
+        return None
+    widest = max(w for _, w in rows)
+    band = [h for h, w in rows if w >= widest - prm.PROFILE_BAND_M.value]
+    return min(band), max(band)
+
+
+def plan_grasp(sk: Skills, obj: str) -> Result:
+    """How to grasp the object, from what the cameras measured, the same for every object:
+      roll     to its long side if its outline from above is elongated (ELONGATED_ASPECT), else
+               any (a ball)
+      close    the jaw tips' height when closing: the lowest height where its side silhouette is
+               widest (approach), at least GRASP_LIFT_M, and not so low that its top meets the
+               gripper's palm (JAW_DEPTH_M); GRASP_LIFT_M without a profile
+      outline  the height of the outline the wrist camera sees from above: its top for an
+               elongated object (as before), the top of its widest part for a round one
+    The opening and the expected width come later, from the last look (open_to_fit)."""
+    h = sk.object_height(obj)
+    det = sk.seen.get(f"wrist:{obj}")
+    m = None if det is None else brick_angle(det.jpeg, det.box, look=sk.looks.get(f"wrist:{obj}"))
+    is_round = m is not None and m["aspect"] < ELONGATED_ASPECT
+    widest = sk.widest.get(obj)
+    close = prm.GRASP_LIFT_M.value if widest is None else max(prm.GRASP_LIFT_M.value, widest[0])
+    close = max(close, h - prm.JAW_DEPTH_M.value)
+    outline = widest[1] if is_round and widest is not None else h
+    sk.grasp_plan = {"obj": obj, "round": is_round, "close_m": close, "outline_m": outline}
+    sk.ev("grasp_plan", obj=obj, round=is_round, aspect=None if m is None else m["aspect"],
+          close_m=round(close, 4), outline_m=round(outline, 4), height_m=round(h, 4))
+    return Result(True, data=dict(sk.grasp_plan))
+
+
+def _plan(sk: Skills, obj: str | None) -> dict | None:
+    p = sk.grasp_plan
+    return p if p is not None and p.get("obj") == obj else None
+
+
+def outline_height(sk: Skills, obj: str) -> float:
+    """The height of the outline the wrist camera sees from above (the servo's and the width's
+    plane): the plan's, else the object's measured height."""
+    p = _plan(sk, obj)
+    return p["outline_m"] if p is not None else sk.object_height(obj)
+
+
 def land(sk: Skills, obj: str | None = None) -> Result:
     """Down to GRASP_LIFT_M above the predicted floor without pressing into it (v1's touch
     pushed into the floor and slid 8-10 mm, Oct 27); the contact stop stays as the safety. A
@@ -58,6 +108,16 @@ def land(sk: Skills, obj: str | None = None) -> Result:
         r = sk.move("arm", height=look)
         if not r.ok:
             return r
+    p = _plan(sk, obj)
+    if p is not None and p["close_m"] - prm.GRASP_LIFT_M.value > prm.LAND_SEARCH_M.value:
+        # Closing high on the object (a ball's middle): the floor is out of reach of the search,
+        # so any contact on the way down is the object itself, under the jaws: refused.
+        r = sk.move("arm", height=p["close_m"], until_contact=True)
+        if r.ok and r.data.get("contact"):
+            above = r.data["contact_z"] - r.data["floor"]
+            sk.ev("land_contact", above_floor_m=round(above, 4), detector=r.data.get("detector"))
+            return Result(False, f"met something {above:.3f} m above the floor, over the planned close", r.data)
+        return r
     r = sk.move("arm", height=prm.GRASP_LIFT_M.value, until_contact=True)
     if not r.ok or not r.data.get("contact"):
         return r
@@ -80,7 +140,7 @@ def measure_width(sk: Skills, obj: str) -> dict | None:
     m = None if det is None else brick_angle(det.jpeg, det.box, look=sk.looks.get(f"wrist:{obj}"))
     if m is None:
         return None
-    h, top = sk.height(), sk.object_height(obj)
+    h, top = sk.height(), outline_height(sk, obj)
     return {
         "extent_m": sk.geom.wrist_distance(*m["extent_u"], h, top, sk.roll),
         "short_m": sk.geom.wrist_distance(*m["across"], h, top, sk.roll),
@@ -207,6 +267,11 @@ def approach(sk: Skills, obj: str, tol=None) -> Result:
         sk.widths[obj] = front_object_width(sk.geom, box)
         sk.ev("object_height", obj=obj, height_m=round(sk.heights[obj], 4), width_m=round(sk.widths[obj], 4),
               top=how, unsnapped_m=round(front_object_height(sk.geom, det.box), 4))
+        widest = widest_band(front_profile(sk.geom, det.box, side_profile(det.jpeg, det.box, sk.looks.get(f"front:{obj}"))),
+                             sk.heights[obj])
+        if widest is not None:
+            sk.widest[obj] = widest
+            sk.ev("object_profile", obj=obj, widest_from_m=round(widest[0], 4), widest_to_m=round(widest[1], 4))
     return r
 
 
@@ -222,7 +287,10 @@ def line_up(sk: Skills, obj: str) -> Result:
 
 
 def align(sk: Skills, obj: str) -> Result:
-    """Wrist roll: the object's long side across the jaws."""
+    """Wrist roll: the object's long side across the jaws; a round one (plan_grasp) needs none."""
+    p = _plan(sk, obj)
+    if p is not None and p["round"]:
+        return Result(True, "round: any roll")
     return sk.servo(obj, AngleGoal())
 
 

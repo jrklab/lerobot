@@ -85,6 +85,10 @@ class Skills:
         # The object's width across the jaws, as measured before the grasp (actions.open_to_fit);
         # None when it wasn't.
         self.grasp_width: float | None = None
+        # Each object's side profile, measured at the end of its approach (front camera): the
+        # heights where it is widest (actions.approach); and the grasp plan (actions.plan_grasp).
+        self.widest: dict[str, tuple[float, float]] = {}
+        self.grasp_plan: dict | None = None
         self._height_fallbacks: set[str] = set()  # objects whose height wasn't measured (logged once)
         # Each object's colour per camera, sampled from the main model's boxes (vision.Look):
         # the fast model's boxes must match it.

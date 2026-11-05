@@ -52,3 +52,38 @@ def test_the_colour_finder_takes_the_brick_not_the_jaws_or_the_floor():
     img[200:260, 300:420] = (40, 40, 200)  # the red brick
     found = vision.coloured_blobs(cv2.imencode(".jpg", img)[1].tobytes())
     assert len(found) == 1 and abs(found[0][0] - 300 / 640) < 0.01 and abs(found[0][3] - 260 / 480) < 0.01
+
+
+def test_the_wide_end_is_measured_until_the_jaw_leaves_the_view(monkeypatch, tmp_path):
+    import json
+
+    from calibration import calibrate_gripper as cg
+
+    calib = tmp_path / "calib.json"
+    calib.write_text(json.dumps({"wrist_jaws": {"value": {"fixed_tip_v": 0.75, "fixed_inner_u": 0.56}}}))
+    monkeypatch.setattr(cg, "CALIB", calib)
+    monkeypatch.setattr(cg, "JAW_SETTLE_S", 0.0)
+
+    class R:
+        deg = 0.0
+
+        def gripper(self, deg):
+            self.deg = deg
+
+        def status(self):
+            return {"joints": {"arm_gripper": self.deg}}
+
+        def frame(self, cam, after=None):
+            return (b"x", {})
+
+    robot = R()
+    # The jaw seen up to 70 deg, at 1.3 mm per degree; past it out of the view.
+    monkeypatch.setattr(cg.vision, "jaw_geometry", lambda jpeg, fixed: {"moving_inner_u": 0.2} if robot.deg <= 70 else None)
+    monkeypatch.setattr(cg, "jaw_opening", lambda geom, jaws, h: None if jaws is None else 0.0013 * robot.deg)
+    sk = type("S", (), {"geom": None, "height": lambda self: 0.095})()
+    pts = cg.wide_end(sk, robot, wide=130.0, start_deg=43.0)
+    assert [p["deg"] for p in pts] == [43.0, 55.0, 67.0] and pts[-1]["mm"] == pytest.approx(87.1)
+    assert all(p["what"] == "camera" for p in pts)
+    # Kept separately from the brick points: re-measured each run, not carried over.
+    old = [{"mm": 47.8, "deg": 34.67}, {"mm": 60.0, "deg": 45.0, "what": "camera"}]
+    assert [p["mm"] for p in cg.merged(pts, old)] == [55.9, 71.5, 87.1, 47.8]

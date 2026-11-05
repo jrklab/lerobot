@@ -253,6 +253,7 @@ def test_pick_chain_runs_its_steps_in_order_and_stops_at_the_first_failure(monke
     sk = Skills.__new__(Skills)
     sk.log, sk.heights, sk._height_fallbacks = None, {}, set()
     sk.seen, sk.looks, sk.grasp_width = {}, {}, None
+    sk.widest, sk.grasp_plan = {}, None
     sk.height = lambda: 0.004
     sk.servo = lambda obj, goal, part=None: (calls.append(type(goal).__name__), Result(True))[1]
     sk.move = lambda part, **k: (calls.append("down"), Result(True))[1]
@@ -344,6 +345,7 @@ def _height_sk(heights):
     sk.log, sk.heights, sk._height_fallbacks = None, dict(heights), set()
     sk.widths, sk.held_below, sk.geom = {}, None, None
     sk.seen, sk.looks, sk.grasp_width = {}, {}, None
+    sk.widest, sk.grasp_plan = {}, None
     sk.height = lambda: 0.004
     sk.events = []
     sk.ev = lambda name, **k: sk.events.append((name, k))
@@ -529,3 +531,58 @@ def test_a_box_on_the_containers_face_is_not_the_object_on_the_floor():
     assert actions.check_in(S([0.354, 0.583, 0.742, 0.812]), "light green block", "paper cup").ok  # on its face
     r = actions.check_in(S([0.45, 0.80, 0.52, 0.90]), "light green block", "paper cup")  # below its bottom: fallen
     assert not r.ok and "on the floor" in r.reason
+
+
+def test_the_widest_band_is_low_on_a_brick_and_at_a_balls_middle():
+    # A brick's side rows (Nov 4, run 20261104T102537): narrow at the floor's shadow and the top.
+    brick = [(-0.0018, 0.009), (0.0012, 0.022), (0.0042, 0.0313), (0.0057, 0.0312), (0.0086, 0.0311),
+             (0.0100, 0.0307), (0.0114, 0.0282), (0.0141, 0.012)]
+    lo, hi = actions.widest_band(brick, 0.0152)
+    assert lo == pytest.approx(0.0042) and hi == pytest.approx(0.0100)
+    r = 0.0335  # a tennis ball
+    ball = [(h, 2 * np.sqrt(max(r * r - (h - r) ** 2, 0.0))) for h in np.linspace(0.0, 2 * r, 68)]
+    lo, hi = actions.widest_band(ball, 2 * r)
+    assert 0.020 < lo < r < hi < 0.047
+    assert actions.widest_band([], 0.01) is None
+
+
+def _plan_sk(aspect, widest, height):
+    from brain.goals import Detection
+
+    sk = _height_sk({"thing": height})
+    sk.seen = {"wrist:thing": Detection(box=[0.4, 0.4, 0.6, 0.6], jpeg=b"x")}
+    sk.widest = {} if widest is None else {"thing": widest}
+    return sk
+
+
+def test_the_grasp_plan_follows_the_measured_shape(monkeypatch):
+    monkeypatch.setattr(actions, "brick_angle", lambda jpeg, box, look=None: {"aspect": 2.0})
+    sk = _plan_sk(2.0, (0.0042, 0.0100), 0.0152)  # a brick: as before
+    p = actions.plan_grasp(sk, "thing").data
+    assert not p["round"] and p["close_m"] == pytest.approx(0.0042) and p["outline_m"] == pytest.approx(0.0152)
+    monkeypatch.setattr(actions, "brick_angle", lambda jpeg, box, look=None: {"aspect": 1.05})
+    sk = _plan_sk(1.05, (0.024, 0.043), 0.067)  # a tennis ball: no roll, close below its middle
+    p = actions.plan_grasp(sk, "thing").data
+    assert p["round"] and p["outline_m"] == pytest.approx(0.043)
+    assert p["close_m"] == pytest.approx(max(0.024, 0.067 - prm.JAW_DEPTH_M.value))
+    assert actions.align(sk, "thing").reason == "round: any roll"
+    assert actions.outline_height(sk, "thing") == pytest.approx(0.043)
+    sk = _plan_sk(2.0, None, 0.0152)  # no profile: the old grasp height
+    monkeypatch.setattr(actions, "brick_angle", lambda jpeg, box, look=None: None)
+    p = actions.plan_grasp(sk, "thing").data
+    assert p["close_m"] == prm.GRASP_LIFT_M.value and not p["round"]
+
+
+def test_a_high_close_lands_there_and_refuses_any_contact_on_the_way(monkeypatch):
+    moves = []
+    sk = _height_sk({"thing": 0.067})
+    sk.grasp_plan = {"obj": "thing", "round": True, "close_m": 0.027, "outline_m": 0.043}
+    sk.height = lambda: 0.2
+    sk.final_look_height = lambda obj: 0.087
+    contact = {"v": False}
+    sk.move = lambda part, **k: (moves.append(k.get("height")),
+                                 Result(True, data={"contact": contact["v"], "contact_z": -0.06, "floor": -0.10}))[1]
+    assert actions.land(sk, "thing").ok and moves == [0.087, 0.027]
+    contact["v"] = True
+    r = actions.land(sk, "thing")
+    assert not r.ok and "over the planned close" in r.reason
