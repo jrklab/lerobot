@@ -43,10 +43,12 @@ IK_ARM_JOINTS = [f"arm_{name}" for name in kin.JOINT_NAMES]
 GRIPPER = "arm_gripper"
 
 # Named poses, degrees. "rest" is the folded stow pose (RobotBridge's ARM_NEUTRAL_POS, what the
-# gamepad's reset button uses); "ready" reaches forward and slightly up, clear of every joint
-# limit. Until Oct 29 they were in normalized units (rest: 0, -98, 99, 75, 52; ready: all 0);
-# these are the same physical poses, converted with the Oct 28 calibration, so they stay put
-# when a joint's range is recalibrated.
+# gamepad's reset button uses); "ready" is the URDF's zero pose (every joint 0: the arm straight
+# out forward, the TCP 39 cm out and 23 cm above the arm base), as the Pi's cartesian jog's
+# CARTESIAN_READY_POSE. Until Nov 4 "ready" was LeRobot's old normalized 0 (the middle of an Oct 28
+# calibration's ranges) in degrees, 10 cm higher and tilted up; from either seed the planner
+# reaches the same hover and scene poses (within 0.09 deg, Nov 4 check). Until Oct 29 both were
+# in normalized units; rest is that physical pose, converted with the Oct 28 calibration.
 NAMED_POSES: dict[str, dict[str, float]] = {
     "rest": {
         "arm_shoulder_pan": -1.23,
@@ -55,13 +57,7 @@ NAMED_POSES: dict[str, dict[str, float]] = {
         "arm_wrist_flex": 52.65,
         "arm_wrist_roll": 88.25,
     },
-    "ready": {
-        "arm_shoulder_pan": -1.23,
-        "arm_shoulder_lift": 2.81,
-        "arm_elbow_flex": -15.69,
-        "arm_wrist_flex": -13.27,
-        "arm_wrist_roll": 9.14,
-    },
+    "ready": dict.fromkeys(IK_ARM_JOINTS, 0.0),
 }
 
 # Waypoint spacing along a straight-line move. Joint-space interpolation between waypoints
