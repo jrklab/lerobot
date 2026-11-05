@@ -68,6 +68,13 @@ h2 { font-size: 0.8rem; font-weight: 600; letter-spacing: 0.06em; text-transform
   letter-spacing: 0.08em;
 }
 .stop-btn:active { background: #b91c1c; }
+/* A narrow phone: the badges get a line of their own under the title, so STOP never covers
+   them (it did "servos ok" on a phone, Nov 4). */
+@media (max-width: 520px) {
+  .topbar { flex-wrap: wrap; row-gap: 0.35rem; }
+  .stop-btn { margin-left: auto; }
+  .badges { order: 3; flex: 1 0 100%; flex-wrap: wrap; overflow: visible; }
+}
 
 /* --- control bar: who controls, and the speed --- */
 .controlbar {

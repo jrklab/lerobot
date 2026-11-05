@@ -121,7 +121,7 @@ function fmtAge(s) {
   return s < 120 ? `${Math.round(s)} s` : s < 7200 ? `${Math.round(s / 60)} min` : `${Math.round(s / 3600)} h`;
 }
 
-const MODE_NAMES = { gamepad: "Gamepad", web: "This page", leader_keyboard: "Leader arm", vr: "VR (Quest)", auto: "Auto (brain)" };
+const MODE_NAMES = { gamepad: "Gamepad", web: "Webpage", leader_keyboard: "Leader arm", vr: "VR (Quest)", auto: "Auto (brain)" };
 
 function modeName(mode) {
   return MODE_NAMES[mode] || mode || "--";
