@@ -931,6 +931,10 @@ class RobotBridge:
         try:
             ph = bus.port_handler
             ph.closePort()
+            # The SDK marks the port in use for each transfer and clears it only when the transfer
+            # ends: a USB stall mid-transfer left it set, and every transfer after, the stop
+            # included, was refused "Port is in use!" (Nov 4); closePort doesn't clear it.
+            ph.is_using = False
             if not ph.openPort():
                 raise OSError(f"couldn't open {bus.port}")
             logger.warning("motor port %s reopened (%s)", bus.port, why)

@@ -361,7 +361,7 @@ class _Wheels(FakeLeKiwi):
 
         bus.sync_read = sync_read
         bus.port = "/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0"
-        bus.port_handler = type("PH", (), {"opened": 0, "closePort": lambda s: None,
+        bus.port_handler = type("PH", (), {"opened": 0, "is_using": False, "closePort": lambda s: None,
                                            "openPort": lambda s: setattr(s, "opened", s.opened + 1) or True})()
 
     def _wheel_raw_to_body(self, left, back, right):
@@ -393,8 +393,10 @@ def test_a_failed_wheel_stop_reopens_the_motor_port_and_stops_again():
     bridge._stop_wheels("test")
     assert robot.stops == 1 and robot.bus.port_handler.opened == 0
     robot.fail_stops = 1
+    robot.bus.port_handler.is_using = True  # a transfer cut off mid-way (Nov 4: "Port is in use!")
     bridge._stop_wheels("test")
     assert robot.bus.port_handler.opened == 1 and robot.stops == 2
+    assert robot.bus.port_handler.is_using is False
     robot.fail_stops = 2
     bridge._stop_wheels("test")  # within the cooldown: not reopened again
     assert robot.bus.port_handler.opened == 1
