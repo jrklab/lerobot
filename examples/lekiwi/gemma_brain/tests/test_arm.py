@@ -175,3 +175,13 @@ def test_contact_stop_when_starting_on_the_floor():
 
 if __name__ == "__main__":
     sys.exit(run_tests(globals()))
+
+
+def test_a_turn_in_place_is_planned_in_steps_of_rotation():
+    # Nov 5: a 126 deg wrist roll in one IK step stopped 8 deg short and was refused.
+    from common import arm as arm_mod
+
+    at = [0.25, 0.0, -0.002]
+    hover = {**NAMED_POSES["ready"], **plan_ee_line(CAL, dict(NAMED_POSES["ready"]), at, 90.0, 0.0, 0.04, -1.0)[0][-1]}
+    wps, durs = plan_ee_line(CAL, hover, at, 90.0, -126.0, 0.04, -1.0)
+    assert len(wps) >= math.ceil(126.0 / arm_mod.EE_ROT_STEP_DEG) and sum(durs) > 0.5

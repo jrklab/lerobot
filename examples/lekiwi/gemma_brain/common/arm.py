@@ -66,6 +66,7 @@ NAMED_POSES: dict[str, dict[str, float]] = {
 # IK_ITERS warm-started from the previous waypoint, IK_RETRY_ITERS only when that wasn't
 # enough. ~55 ms for a 27-waypoint path on an M1 Pro.
 EE_STEP_M = 0.01
+EE_ROT_STEP_DEG = 10.0  # convention: a straight-line move's steps also no larger than this in pitch or roll
 IK_ITERS = 10
 IK_RETRY_ITERS = 60
 IK_POS_TOL_M = 0.005
@@ -217,6 +218,11 @@ def plan_ee_line(
     else:
         weight = 0.05
     n = max(1, math.ceil(float(np.linalg.norm(goal - p0)) / EE_STEP_M))
+    if pitch_deg is not None:
+        # A turn in place has no length: in one IK step a 126 deg wrist roll stopped 8 deg short
+        # ("goal orientation unreachable", Nov 5: a brick at +54 deg); in EE_ROT_STEP_DEG steps
+        # each solve starts near its answer.
+        n = max(n, math.ceil(float(np.max(np.abs(pr1 - pr0))) / EE_ROT_STEP_DEG))
     prev = {j: start[j] for j in IK_ARM_JOINTS}
     waypoints, spans = [], []
     for i in range(1, n + 1):
@@ -340,11 +346,13 @@ class Arm:
         z_min: float | None = None,
     ) -> dict:
         z_min = self.z_min if z_min is None else z_min
-        wps, durs = plan_ee_line(self.calib, self.targets(), xyz, pitch_deg, roll_deg, speed, z_min)
-        if len(wps) == 1:
-            # A turn in place (e.g. a wrist roll): one smoothstepped joint move rather than a
-            # single linear segment that starts and stops at full speed.
-            return self.robot.joints(wps[0], speed=FREE_JOINT_SPEED, z_min=z_min)
+        start = self.targets()
+        wps, durs = plan_ee_line(self.calib, start, xyz, pitch_deg, roll_deg, speed, z_min)
+        in_place = float(np.linalg.norm(np.asarray(xyz, float) - self.calib.fk(start)[:3, 3])) < EE_STEP_M / 10
+        if len(wps) == 1 or in_place:
+            # A turn in place (e.g. a wrist roll): one smoothstepped joint move to where the
+            # stepped plan ends, rather than linear segments that start and stop at full speed.
+            return self.robot.joints(wps[-1], speed=FREE_JOINT_SPEED, z_min=z_min)
         return self.robot.trajectory(wps, durs, z_min=z_min)
 
     def move_direct(self, xyz, pitch_deg: float, roll_deg: float = 0.0, speed: float = FREE_JOINT_SPEED) -> dict:
