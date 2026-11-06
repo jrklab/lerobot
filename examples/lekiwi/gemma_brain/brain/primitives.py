@@ -85,6 +85,7 @@ class Skills:
         # The object's width across the jaws, as measured before the grasp (actions.open_to_fit);
         # None when it wasn't.
         self.grasp_width: float | None = None
+        self.grasp_open_mm: float | None = None  # how wide the jaws opened for the grasp (open_to_fit)
         # Each object's side profile, measured at the end of its approach (front camera): the
         # heights where it is widest (actions.approach); and the grasp plan (actions.plan_grasp).
         self.widest: dict[str, tuple[float, float]] = {}

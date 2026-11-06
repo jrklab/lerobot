@@ -255,6 +255,7 @@ def test_pick_chain_runs_its_steps_in_order_and_stops_at_the_first_failure(monke
     sk.seen, sk.looks, sk.grasp_width = {}, {}, None
     sk.widest, sk.grasp_plan = {}, None
     sk.frame = lambda *a, **k: None
+    sk.grasp_open_mm = None
     sk.height = lambda: 0.004
     sk.servo = lambda obj, goal, part=None: (calls.append(type(goal).__name__), Result(True))[1]
     sk.move = lambda part, **k: (calls.append("down"), Result(True))[1]
@@ -348,6 +349,7 @@ def _height_sk(heights):
     sk.seen, sk.looks, sk.grasp_width = {}, {}, None
     sk.widest, sk.grasp_plan = {}, None
     sk.frame = lambda *a, **k: None
+    sk.grasp_open_mm = None
     sk.height = lambda: 0.004
     sk.events = []
     sk.ev = lambda name, **k: sk.events.append((name, k))
@@ -600,3 +602,17 @@ def test_a_soft_round_object_squashed_in_the_jaws_is_not_a_miss(monkeypatch):
     assert actions.close(sk).ok
     sk.closed_mm = 40.0  # far inside even the side camera's allowance: something else
     assert not actions.close(sk).ok
+
+
+def test_the_release_opens_at_least_as_wide_as_the_grasp(monkeypatch):
+    from brain.primitives import Result
+
+    opened = []
+    sk = _height_sk({})
+    sk.grip = lambda how, width=None, **k: (opened.append(width), Result(True, data={}))[1]
+    sk.held = lambda: False
+    sk.grasp_open_mm = 70.4  # the tennis ball's grasp (Nov 5)
+    assert actions.release(sk).ok and opened[-1] == 70.4
+    sk.grasp_open_mm = 23.4  # a brick's: the demo's wider opening stands
+    actions.release(sk)
+    assert opened[-1] == prm.OPEN_WIDTH.value

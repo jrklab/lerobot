@@ -186,6 +186,7 @@ def open_to_fit(sk: Skills, obj: str) -> Result:
           short_mm=round(MM_PER_M * w["short_m"], 1), open_mm=round(mm, 1))
     if mm > sk.geom.gripper_max_mm():
         return Result(False, f"the {obj} needs the jaws {mm:.0f} mm open: wider than they open")
+    sk.grasp_open_mm = mm
     return sk.grip("open", width=mm)
 
 
@@ -445,8 +446,10 @@ def lower_to_release(sk: Skills, target: str | None = None) -> Result:
 
 
 def release(sk: Skills) -> Result:
-    """Open the jaws and check they hold nothing any more."""
-    r = sk.grip("open")
+    """Open the jaws, at least as wide as for the grasp, and check they hold nothing any more:
+    the demo's 44.4 mm left the 63 mm tennis ball held over the cup (Nov 5)."""
+    wider = getattr(sk, "grasp_open_mm", None)
+    r = sk.grip("open", width=max(prm.OPEN_WIDTH.value, wider) if wider else None)
     if not r.ok:
         return r
     held = sk.held()
