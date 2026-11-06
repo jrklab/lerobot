@@ -589,3 +589,14 @@ def test_a_high_close_lands_there_and_refuses_any_contact_on_the_way(monkeypatch
     contact["v"] = True
     r = actions.land(sk, "thing")
     assert not r.ok and "over the planned close" in r.reason
+
+
+def test_a_soft_round_object_squashed_in_the_jaws_is_not_a_miss(monkeypatch):
+    # Nov 5: the 62.4 mm tennis ball (width from the side) closed at 56.5 mm, held.
+    sk, _ = _width_sk(monkeypatch, 0.0624, 0.0624)
+    sk.grasp_width = 0.0624
+    sk.grasp_plan = {"obj": "red block", "round": True, "close_m": 0.034, "outline_m": 0.04, "width_m": 0.0624}
+    sk.closed_mm = 56.5
+    assert actions.close(sk).ok
+    sk.closed_mm = 40.0  # far inside even the side camera's allowance: something else
+    assert not actions.close(sk).ok

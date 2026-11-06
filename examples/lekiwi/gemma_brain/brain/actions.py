@@ -199,7 +199,12 @@ def close(sk: Skills) -> Result:
     r = sk.grip("close")
     if not r.ok or sk.grasp_width is None or r.data.get("mm") is None:
         return r
-    least = MM_PER_M * (sk.grasp_width - 2 * prm.WIDTH_ERROR_M.value)
+    # The allowance is the measuring camera's: the wrist camera's +/-1 mm (a brick), or for a round
+    # object, measured side on, the front camera's (Nov 5: the soft 62.4 mm ball squashed to 56.5,
+    # held, and the 2 mm line called it a miss, so the lift never ran).
+    p = getattr(sk, "grasp_plan", None)  # the plan made for this grasp (plan_grasp)
+    error = prm.FRONT_HEIGHT_ERROR_M.value if p is not None and p.get("width_m") else prm.WIDTH_ERROR_M.value
+    least = MM_PER_M * (sk.grasp_width - 2 * error)
     if r.data["mm"] < least:
         return Result(False, f"closed to {r.data['mm']} mm, past the measured width "
                              f"({MM_PER_M * sk.grasp_width:.1f} mm): missed it", r.data)
