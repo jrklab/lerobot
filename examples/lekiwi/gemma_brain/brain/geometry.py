@@ -189,6 +189,15 @@ class Geometry:
         appears with them h_to up (a vertical descent or rise)."""
         return self.wrist_image(self.wrist_point(point, h_from, plane_h, roll_deg), h_to, roll_deg)
 
+    def carry_to_plane(self, point, plane_from: float, h_from: float, h_to: float, plane_to: float) -> np.ndarray:
+        """Where the spot seen at image `point` on a plane plane_from up (the tips h_from up)
+        appears with the tips h_to up, moved to a plane plane_to up straight above or below it:
+        the taught grasp spot (on the brick's top) for an object whose outline from above is at
+        another height (a ball's, its middle)."""
+        p = np.array(self.wrist_point(point, h_from, plane_from), float)
+        p[2] = self.floor_seen_z + plane_to
+        return self.wrist_image(p, h_to)
+
     def descend(self, point, h_from: float, h_to: float) -> np.ndarray:
         """Where a floor point seen at image `point` with the tips h_from up appears at h_to."""
         return self.carry(point, 0.0, h_from, h_to)

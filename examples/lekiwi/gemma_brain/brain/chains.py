@@ -27,7 +27,7 @@ which, so the executor can retry or replan.
 from __future__ import annotations
 
 from brain import actions, params as prm
-from brain.goals import BesideGoal, JawGoal
+from brain.goals import BesideGoal
 from brain.primitives import Result, Skills
 
 
@@ -54,9 +54,9 @@ def pick(sk: Skills, obj: str, drive: bool = True, start: str | None = None) -> 
         ("align", lambda: actions.align(sk, obj)),
         # coarse at 10 cm (the line-up's tolerance), precise at 3 cm: the 10 cm stage spent 4-5
         # looks on precision the 3 cm stage redoes in 1-2 (Oct 28 speed check)
-        ("centre_high", lambda: sk.servo(obj, JawGoal(tol_m=prm.REACH_TOL_M, plane_h=actions.outline_height(sk, obj)))),
+        ("centre_high", lambda: sk.servo(obj, actions.jaw_goal(sk, obj, tol_m=prm.REACH_TOL_M))),
         ("down", lambda: sk.move("arm", height=sk.final_look_height(obj))),
-        ("centre_low", lambda: sk.servo(obj, JawGoal(plane_h=actions.outline_height(sk, obj)))),
+        ("centre_low", lambda: sk.servo(obj, actions.jaw_goal(sk, obj))),
         ("open", lambda: actions.open_to_fit(sk, obj)),
         ("land", lambda: actions.land(sk, obj)),
         ("close", lambda: actions.close(sk)),

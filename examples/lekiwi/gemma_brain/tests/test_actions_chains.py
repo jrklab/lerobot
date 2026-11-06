@@ -254,6 +254,7 @@ def test_pick_chain_runs_its_steps_in_order_and_stops_at_the_first_failure(monke
     sk.log, sk.heights, sk._height_fallbacks = None, {}, set()
     sk.seen, sk.looks, sk.grasp_width = {}, {}, None
     sk.widest, sk.grasp_plan = {}, None
+    sk.frame = lambda *a, **k: None
     sk.height = lambda: 0.004
     sk.servo = lambda obj, goal, part=None: (calls.append(type(goal).__name__), Result(True))[1]
     sk.move = lambda part, **k: (calls.append("down"), Result(True))[1]
@@ -346,6 +347,7 @@ def _height_sk(heights):
     sk.widths, sk.held_below, sk.geom = {}, None, None
     sk.seen, sk.looks, sk.grasp_width = {}, {}, None
     sk.widest, sk.grasp_plan = {}, None
+    sk.frame = lambda *a, **k: None
     sk.height = lambda: 0.004
     sk.events = []
     sk.ev = lambda name, **k: sk.events.append((name, k))
@@ -564,7 +566,8 @@ def test_the_grasp_plan_follows_the_measured_shape(monkeypatch):
     sk = _plan_sk(1.05, (0.024, 0.043), 0.067)  # a tennis ball: no roll, close below its middle
     p = actions.plan_grasp(sk, "thing").data
     assert p["round"] and p["outline_m"] == pytest.approx(0.043)
-    assert p["close_m"] == pytest.approx(max(0.024, 0.067 - prm.JAW_DEPTH_M.value))
+    assert p["close_m"] == pytest.approx(max((0.024 + 0.043) / 2, 0.067 - prm.JAW_DEPTH_M.value))  # its middle
+    assert p["width_m"] is None  # no side width measured in this stub
     assert actions.align(sk, "thing").reason == "round: any roll"
     assert actions.outline_height(sk, "thing") == pytest.approx(0.043)
     sk = _plan_sk(2.0, None, 0.0152)  # no profile: the old grasp height

@@ -66,10 +66,14 @@ class _WristPointGoal:
     tol_m = prm.SERVO_TOL_M
     part = "arm"
 
-    def __init__(self, tol_m=None, plane_h: float | None = None):
+    def __init__(self, tol_m=None, plane_h: float | None = None, outline_h: float | None = None):
         if tol_m is not None:  # a looser tolerance, e.g. REACH_TOL_M for the base's line-up
             self.tol_m = tol_m
         self.plane_h = plane_h
+        # The height of the outline the camera sees, when it isn't the taught brick's top (a ball's
+        # middle): the taught spot is moved to it (Nov 5: aimed at the brick's 11.4 mm, the ball sat
+        # centimetres short of the jaws and they closed on air three times).
+        self.outline_h = outline_h
 
     def target(self, sk, height: float) -> np.ndarray:
         return self._carry(sk, require_grasp_target(sk.geom), height)  # the taught (right edge, middle)
@@ -78,6 +82,8 @@ class _WristPointGoal:
         """A top-face image point seen at the taught height, as it appears at `height`."""
         g = sk.geom
         h_taught = g.grasp_target_height if g.grasp_target_height is not None else prm.GRASP_LIFT_M.value
+        if self.outline_h is not None:
+            return g.carry_to_plane(point, prm.TAUGHT_OBJECT_HEIGHT_M.value, h_taught, height, self.outline_h)
         return g.carry(point, prm.TAUGHT_OBJECT_HEIGHT_M.value, h_taught, height)
 
     def _jac(self, sk, height: float) -> np.ndarray:

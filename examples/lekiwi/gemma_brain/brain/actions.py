@@ -38,6 +38,7 @@ from brain.goals import (
     AngleGoal,
     BesideGoal,
     FrontApproachGoal,
+    JawGoal,
     ReachGoal,
     placed_beside,
     round_centre,
@@ -74,18 +75,34 @@ def plan_grasp(sk: Skills, obj: str) -> Result:
     m = None if det is None else brick_angle(det.jpeg, det.box, look=sk.looks.get(f"wrist:{obj}"))
     is_round = m is not None and m["aspect"] < ELONGATED_ASPECT
     widest = sk.widest.get(obj)
-    close = prm.GRASP_LIFT_M.value if widest is None else max(prm.GRASP_LIFT_M.value, widest[0])
+    # A round object closes at the middle of its widest part (its middle: lower, the jaws squeeze
+    # it out upwards), an elongated one at the lowest of it (a brick: ~4 mm, as before).
+    lowest = None if widest is None else (sum(widest) / 2 if is_round else widest[0])
+    close = prm.GRASP_LIFT_M.value if lowest is None else max(prm.GRASP_LIFT_M.value, lowest)
     close = max(close, h - prm.JAW_DEPTH_M.value)
     outline = widest[1] if is_round and widest is not None else h
-    sk.grasp_plan = {"obj": obj, "round": is_round, "close_m": close, "outline_m": outline}
+    # A round object's width from the front camera's side view: the wrist camera looks down at an
+    # angle and a sphere off its axis comes out an ellipse (Nov 5: the 67 mm ball read 72-79 mm
+    # one way, 46-51 the other; the front camera 64-67).
+    width = sk.widths.get(obj) if is_round else None
+    sk.grasp_plan = {"obj": obj, "round": is_round, "close_m": close, "outline_m": outline, "width_m": width}
     sk.ev("grasp_plan", obj=obj, round=is_round, aspect=None if m is None else m["aspect"],
-          close_m=round(close, 4), outline_m=round(outline, 4), height_m=round(h, 4))
+          close_m=round(close, 4), outline_m=round(outline, 4), height_m=round(h, 4),
+          width_m=None if width is None else round(width, 4))
     return Result(True, data=dict(sk.grasp_plan))
 
 
 def _plan(sk: Skills, obj: str | None) -> dict | None:
     p = sk.grasp_plan
     return p if p is not None and p.get("obj") == obj else None
+
+
+def jaw_goal(sk: Skills, obj: str, tol_m=None) -> JawGoal:
+    """The jaws' centring on the object: its outline's height for the image's scale, and for a
+    round object the taught spot moved to that height (goals._WristPointGoal.outline_h)."""
+    p = _plan(sk, obj)
+    outline = outline_height(sk, obj)
+    return JawGoal(tol_m=tol_m, plane_h=outline, outline_h=outline if p is not None and p["round"] else None)
 
 
 def outline_height(sk: Skills, obj: str) -> float:
@@ -155,6 +172,9 @@ def open_to_fit(sk: Skills, obj: str) -> Result:
     to spare, Nov 4). Refused when that is wider than the gripper opens; unmeasured, the jaws
     stay as they are, noted."""
     w = measure_width(sk, obj)
+    p = _plan(sk, obj)
+    if p is not None and p.get("width_m"):  # a round object: the side view's width (plan_grasp)
+        w = {"extent_m": p["width_m"], "short_m": p["width_m"]}
     sk.grasp_width = None if w is None else w["short_m"]
     if w is None:
         sk.ev("grasp_width", obj=obj, measured=False)
@@ -175,6 +195,7 @@ def close(sk: Skills) -> Result:
     close well past its measured width (open_to_fit), more than WIDTH_ERROR_M twice over:
     on an edge, or on something else."""
     sk.held_below = max(sk.height(), 0.0)
+    sk.frame("wrist", "pre_close")  # where the object is as the jaws close (Nov 5: a ball missed three times)
     r = sk.grip("close")
     if not r.ok or sk.grasp_width is None or r.data.get("mm") is None:
         return r
