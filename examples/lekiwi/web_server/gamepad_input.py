@@ -31,7 +31,7 @@ one button/axis at a time) reports different codes than that reference script as
     less isolated test had briefly suggested these were a "digital echo" of LT/RT -- they
     are not, a clean re-test showed LT/RT only ever produce ABS_Z/ABS_RZ, nothing else)
   LT -> ABS_Z (proportional)      RT -> ABS_RZ (proportional)
-  A separate "-"/"+" button pair (not currently used) sends BTN_TL/BTN_TR.
+  A separate "-"/"+" button pair sends BTN_TL/BTN_TR (the arm sub-mode toggle, below).
   Select/Start -> confirmed dead buttons on this unit, no evdev event at all -- do not use.
   Home -> KEY_MENU (not currently used)
 
@@ -44,10 +44,10 @@ Mode toggle ("A" button / BTN_B): switches which mode the two analog sticks driv
 Arm sub-mode toggle (the "-"/"+" button pair, BTN_TL/BTN_TR -- previously unused):
   - Joint mode (default): left stick = shoulder_pan/lift, right stick = elbow_flex/wrist_flex
     (unchanged from the original script) -- each stick axis jogs one joint directly.
-  - Cartesian/IK mode: left stick = end-effector x/y, right stick Y = end-effector z, D-pad =
-    end-effector roll/pitch, right stick X = end-effector yaw (rotation is about the
-    end-effector's own axes, not the arm's base frame) -- all solved via so101_kinematics'
-    IK (see robot_bridge.RobotBridge._apply_cartesian_jog). This is the first step toward VR
+  - Cartesian/IK mode: entering it moves the arm to the URDF zero (all joints 0 deg). Left
+    stick = end-effector x/y, right stick Y = z, D-pad up/down = tilt, left/right = spin about
+    the gripper's pointing axis; right stick X unused (no yaw, Nov 5) -- all solved via
+    so101_kinematics' IK (see robot_bridge.RobotBridge._apply_cartesian_jog). This is the first step toward VR
     teleop (mapping a controller's pose to the end-effector), tried here with a gamepad first
     since it's much faster to iterate on than a full WebXR setup.
 
@@ -312,9 +312,8 @@ class GamepadInput:
             for joint in ARM_JOINTS:
                 self._bridge.update_jog(joint, 0.0, SPEED_NAMES[self._speed_index], source="gamepad")
             self._bridge.update_cartesian_jog(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, SPEED_NAMES[self._speed_index], source="gamepad")
-            # Entering cartesian mode ramps the arm to a more open, mid-range pose first
-            # instead of jogging immediately from wherever it was -- see
-            # robot_bridge.CARTESIAN_READY_POSE's comment for why.
+            # Entering cartesian mode ramps the arm to CARTESIAN_READY_POSE (the URDF zero)
+            # first instead of jogging immediately from wherever it was.
             self._bridge.set_arm_submode(self._arm_submode, source="gamepad")
             self._active_jogs = dict.fromkeys(ARM_JOINTS, False)
             self._active_cartesian = False
@@ -389,9 +388,10 @@ class GamepadInput:
     def _dispatch_arm_cartesian(self, lx: float, ly: float, rx: float, ry: float, speed: str) -> None:
         """IK-driven end-effector jog (see so101_kinematics.py / RobotBridge._apply_cartesian_jog).
 
-        Left stick + right-stick-Y = translation (x/y/z); D-pad + right-stick-X = rotation
-        (roll/pitch/yaw, about the end-effector's own axes, not the arm's base frame) -- the
-        only sticks/buttons not already spent on translation, gripper, or mode toggles. Y/X
+        Left stick + right-stick-Y = translation (x/y/z); D-pad = the gripper's orientation:
+        up/down tilts it (its tip up/down), left/right spins it about its pointing axis. No yaw
+        (right stick X, dropped Nov 5): a 5-joint arm's heading follows where it reaches
+        (kin.tool_orientation), and asking for one swung the arm. Y/X
         (wrist_roll's joint-mode buttons) are deliberately left unused here since wrist_roll
         is part of the IK chain in this sub-mode -- directly jogging it too would fight the
         IK solve over the same joint every tick. Only the gripper (not part of the chain)
@@ -403,11 +403,12 @@ class GamepadInput:
 
         dpad_x = self._deadzone(self._axes.get("ABS_HAT0X", 0.0))
         dpad_y = self._deadzone(self._axes.get("ABS_HAT0Y", 0.0))
-        droll, dpitch, dyaw = dpad_x, -dpad_y, rx
+        # D-pad up reads -1: the pitch (down from horizontal) falls, the tip comes up.
+        droll, dpitch = dpad_x, dpad_y
 
-        is_active = bool(dx or dy or dz or droll or dpitch or dyaw)
+        is_active = bool(dx or dy or dz or droll or dpitch)
         if is_active or self._active_cartesian:
-            self._bridge.update_cartesian_jog(dx, dy, dz, droll, dpitch, dyaw, speed, source="gamepad")
+            self._bridge.update_cartesian_jog(dx, dy, dz, droll, dpitch, 0.0, speed, source="gamepad")
         self._active_cartesian = is_active
 
         gripper_dir = lt - rt

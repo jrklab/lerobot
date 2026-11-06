@@ -161,32 +161,9 @@ def lowest_on_segment(calib: Calibration, a: dict[str, float], b: dict[str, floa
     return lo
 
 
-def _rot_z(a: float) -> np.ndarray:
-    c, s = math.cos(a), math.sin(a)
-    return np.array([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]])
-
-
-def _rot_y(a: float) -> np.ndarray:
-    c, s = math.cos(a), math.sin(a)
-    return np.array([[c, 0.0, s], [0.0, 1.0, 0.0], [-s, 0.0, c]])
-
-
-def tool_orientation(x: float, y: float, pitch_deg: float, roll_deg: float) -> np.ndarray:
-    """TCP orientation for a target at (x, y): the tool faces the target's azimuth (the only
-    yaw a 5-joint arm can reach for a given (x, y)), tilted pitch_deg down from horizontal
-    (90 = pointing straight down), spun roll_deg about its approach axis."""
-    # At pitch 0 the approach (local Z) points along +X, local Y along +Y, local X along -Z:
-    # the all-zeros pose's orientation, up to the URDF's 0.05 rad wrist offset.
-    horizontal = np.array([[0.0, 0.0, 1.0], [0.0, 1.0, 0.0], [-1.0, 0.0, 0.0]])
-    yaw = math.atan2(y, x)
-    return _rot_z(yaw) @ _rot_y(math.radians(pitch_deg)) @ horizontal @ _rot_z(math.radians(roll_deg))
-
-
-def tool_pitch_roll(r: np.ndarray, x: float, y: float) -> tuple[float, float]:
-    """Inverse of tool_orientation() for a TCP rotation r at (x, y)."""
-    pitch = math.degrees(math.asin(max(-1.0, min(1.0, -r[2, 2]))))
-    rel = tool_orientation(x, y, pitch, 0.0).T @ r
-    return pitch, math.degrees(math.atan2(rel[1, 0], rel[0, 0]))
+# The tool's reachable orientations, shared with the gamepad's IK jog (so101_kinematics).
+tool_orientation = kin.tool_orientation
+tool_pitch_roll = kin.tool_pitch_roll
 
 
 def plan_ee_line(

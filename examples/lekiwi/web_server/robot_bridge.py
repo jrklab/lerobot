@@ -34,7 +34,7 @@ import cv2
 import numpy as np
 
 import so101_kinematics as kin
-from auto_control import AutoController
+from auto_control import DEFAULT_Z_MIN_M, AutoController
 from joint_angles import JointAngles
 from episode_recorder import EpisodeRecorder
 
@@ -65,10 +65,16 @@ JOG_SPEEDS = {"slow": 15.0, "medium": 30.0, "fast": 50.0}
 # that first try felt too slow even at "fast".
 CARTESIAN_JOG_SPEEDS = {"slow": 0.05, "medium": 0.12, "fast": 0.22}
 
-# Jog speed for IK-driven end-effector rotation, in radians/second. Raised (like
-# CARTESIAN_JOG_SPEEDS before it) after the initial conservative values felt too slow once
-# verified working.
-CARTESIAN_ROT_JOG_SPEEDS = {"slow": 1.5, "medium": 3.0, "fast": 5.0}
+# Jog speed for the IK-driven tilt and spin of the gripper, deg/s: the joint jog's speeds
+# (owner, Nov 5: 1.5/3/5 rad/s, 86-286 deg/s, was too quick by hand).
+CARTESIAN_ROT_JOG_SPEEDS = {"slow": 15.0, "medium": 30.0, "fast": 50.0}
+# A jog step is taken only if the IK lands within these of its target (as the planner's
+# plan_ee_line: IK_POS_TOL_M, IK_ROT_TOL_DEG), keeps every joint this far inside its limits, and
+# keeps the gripper above auto_control's floor guard; else the arm holds and the target stays
+# where it was (Nov 5, simulated: without them a "roll" swung the jaws 41 cm).
+CARTESIAN_POS_TOL_M = 0.002
+CARTESIAN_ROT_TOL_DEG = 6.0
+CARTESIAN_LIMIT_MARGIN_DEG = 1.5
 
 # Orientation task weight for cartesian jogging's IK solve, passed to
 # so101_kinematics.inverse_kinematics(). Higher than that function's own default (0.05,
@@ -77,6 +83,10 @@ CARTESIAN_ROT_JOG_SPEEDS = {"slow": 1.5, "medium": 3.0, "fast": 5.0}
 # still below position_weight's default of 1.0 since 5 joints can't hit an arbitrary 6D
 # target exactly (rank-deficient by one DOF): position keeps priority when the two conflict.
 CARTESIAN_JOG_ORIENTATION_WEIGHT = 0.3
+# A solve that misses the position is tried again with position first (the orientation at a
+# third of its weight, more iterations), as the planner does (plan_ee_line, IK_RETRY_ITERS): near
+# the stretched-out ready pose the first solve stalled a sideways jog at 47 mm (Nov 5, simulated).
+CARTESIAN_JOG_RETRY_ITERS = 60
 
 # Motion scale for VR absolute-pose tracking: how much of the controller's actual hand
 # motion (position delta and rotation angle, both scaled by the same factor) gets applied to
@@ -122,14 +132,13 @@ REGISTER_DEFAULTS = {"Torque_Limit": "Max_Torque_Limit"}
 # affect end-effector pose and is still jogged directly.
 IK_ARM_JOINTS = [f"arm_{name}" for name in kin.JOINT_NAMES]
 
-# All 5 IK-chain joints at normalized 0 -- verified (see so101_kinematics.py's MuJoCo
-# cross-check) to correspond to the arm reaching forward and slightly up, well clear of any
-# joint limit. Cartesian jogging starts by ramping here rather than jogging immediately from
-# wherever the arm was: the first real test of this feature started from ARM_NEUTRAL_POS (a
-# deeply-folded stowed pose, near several joint limits), where even a correct IK solve needs
-# disproportionately large joint swings for a small end-effector motion -- it looked like a
-# bug but was really just a bad starting configuration.
-CARTESIAN_READY_POSE = dict.fromkeys(IK_ARM_JOINTS, 0.0)
+# All 5 IK-chain joints at 0 deg: the URDF's zero pose (the arm straight out forward, the TCP
+# ~39 cm out and ~23 cm above the arm base), the planner's "ready" too (gemma_brain/common/arm.py
+# NAMED_POSES). Until Nov 5 it was normalized 0, the middle of each joint's calibrated range,
+# ~10 cm higher and tilted up. Cartesian jogging starts by ramping here rather than jogging
+# immediately from wherever the arm was: from ARM_NEUTRAL_POS (deeply folded, near several
+# joint limits) even a correct IK solve needs large joint swings for a small end-effector move.
+CARTESIAN_READY_POSE = dict.fromkeys(IK_ARM_JOINTS, 0.0)  # degrees
 CARTESIAN_READY_RAMP_S = 1.5
 
 # Per-joint valid range for clamping jog targets.
@@ -346,6 +355,9 @@ class RobotBridge:
         # exclusive with self._desired_jogs in practice (only one gamepad/web arm sub-mode is
         # ever live at a time), sharing the same jog watchdog (_last_jog_msg_time).
         self._desired_cartesian_jog: dict | None = None
+        # The IK jog's held target, (x, y, z, pitch deg, roll deg): set from the arm's pose when a
+        # jog starts, moved by the sticks, cleared when they're let go (_apply_cartesian_jog).
+        self._cart_target: np.ndarray | None = None
         # Separate watchdog timestamps: arm jog traffic must never mask a stale base
         # command (or vice versa) — each input source goes stale independently.
         self._last_base_msg_time = 0.0
@@ -521,9 +533,9 @@ class RobotBridge:
         source: str,
     ) -> None:
         """IK-driven end-effector jog: dx/dy/dz are -1..1 translation in the arm's base
-        frame; droll/dpitch/dyaw are -1..1 rotation about the end-effector's own (body-frame)
-        axes -- analogous to update_jog()'s per-joint direction but applied via
-        so101_kinematics instead."""
+        frame; dpitch tilts the gripper (+1 its tip down), droll spins it about its pointing
+        axis, both -1..1 (_apply_cartesian_jog). dyaw is ignored: the 5-joint arm's heading
+        follows where it reaches (kin.tool_orientation)."""
         self._gamepad_takeover(source, any((dx, dy, dz, droll, dpitch, dyaw)))
         with self._lock:
             if source != self._control_mode:
@@ -1111,35 +1123,57 @@ class RobotBridge:
     # --- background thread ---
 
     def _apply_cartesian_jog(self, cart_jog: dict, period: float) -> None:
-        """Moves the end-effector by a small cartesian delta via IK, mutating
-        self._joint_targets for IK_ARM_JOINTS in place. Called from _control_loop only
-        (not thread-safe on its own -- relies on the caller already being on that thread,
-        same as the rest of the per-tick target math it sits alongside)."""
-        speed = CARTESIAN_JOG_SPEEDS[cart_jog["speed"]]
-        rot_speed = CARTESIAN_ROT_JOG_SPEEDS[cart_jog["speed"]]
-        delta = np.array([cart_jog["dx"], cart_jog["dy"], cart_jog["dz"]]) * speed * period
-        delta_rotvec = (
-            np.array([cart_jog["droll"], cart_jog["dpitch"], cart_jog["dyaw"]]) * rot_speed * period
+        """One tick of the IK jog, mutating self._joint_targets for IK_ARM_JOINTS in place
+        (control-loop thread only). The planner's model (plan_ee_line): a held target (x, y, z,
+        pitch, roll), the orientation always one the 5-joint arm can reach
+        (kin.tool_orientation: facing its azimuth, tilted `pitch` down, spun `roll`), moved by
+        the sticks; the IK's answer taken only if it lands on the target, inside the joints'
+        limits and above the floor guard, else the arm holds and the target steps back. Until
+        Nov 5 each tick moved the last solved pose (its errors piled up: "forward" came out at
+        68%, sinking 15 mm) by free rotations about the gripper's axes (a "roll" swung the jaws
+        41 cm), unchecked."""
+        angles = self._auto._angles()
+        current_deg = {j: angles.to_deg(j, self._joint_targets[j]) for j in IK_ARM_JOINTS}
+        current_rad = np.radians([current_deg[j] for j in IK_ARM_JOINTS])
+        if self._cart_target is None:
+            pose = kin.forward_kinematics(current_rad)
+            x, y, z = pose[:3, 3]
+            self._cart_target = np.array([x, y, z, *kin.tool_pitch_roll(pose[:3, :3], x, y)])
+        step = CARTESIAN_JOG_SPEEDS[cart_jog["speed"]] * period
+        turn = CARTESIAN_ROT_JOG_SPEEDS[cart_jog["speed"]] * period
+        target = self._cart_target + np.array(
+            [cart_jog["dx"] * step, cart_jog["dy"] * step, cart_jog["dz"] * step,
+             cart_jog["dpitch"] * turn, cart_jog["droll"] * turn]
         )
-
-        current_rad = np.array(
-            [self._joint_norm_to_rad(j, self._joint_targets[j]) for j in IK_ARM_JOINTS]
-        )
-        current_pose = kin.forward_kinematics(current_rad)
-        target_pose = current_pose.copy()
-        target_pose[:3, 3] += delta
-        # Body-frame (right-multiplied) rotation: roll/pitch/yaw are about the end-effector's
-        # own axes, not the arm's base frame -- e.g. "roll" always spins the gripper about
-        # its own pointing axis, whatever direction that currently is.
-        target_pose[:3, :3] = current_pose[:3, :3] @ kin.rotvec_to_matrix(delta_rotvec)
-
-        solved_rad = kin.inverse_kinematics(
-            current_rad, target_pose, orientation_weight=CARTESIAN_JOG_ORIENTATION_WEIGHT
-        )
-        for joint, rad in zip(IK_ARM_JOINTS, solved_rad):
-            norm = self._joint_rad_to_norm(joint, rad)
-            lo, hi = JOINT_RANGE[joint]
-            self._joint_targets[joint] = max(lo, min(hi, norm))
+        x, y, z, pitch, roll = target
+        goal = np.eye(4)
+        goal[:3, 3] = (x, y, z)
+        goal[:3, :3] = kin.tool_orientation(x, y, pitch, roll)
+        solved = kin.inverse_kinematics(current_rad, goal, orientation_weight=CARTESIAN_JOG_ORIENTATION_WEIGHT)
+        pose = kin.forward_kinematics(solved)
+        if np.linalg.norm(pose[:3, 3] - goal[:3, 3]) > CARTESIAN_POS_TOL_M:
+            solved = kin.inverse_kinematics(
+                current_rad,
+                goal,
+                orientation_weight=CARTESIAN_JOG_ORIENTATION_WEIGHT / 3,
+                max_iters=CARTESIAN_JOG_RETRY_ITERS,
+            )
+            pose = kin.forward_kinematics(solved)
+        solved_deg = {j: math.degrees(float(r)) for j, r in zip(IK_ARM_JOINTS, solved, strict=True)}
+        rot_err = math.degrees(float(np.linalg.norm(kin.matrix_to_rotvec(pose[:3, :3] @ goal[:3, :3].T))))
+        if (
+            np.linalg.norm(pose[:3, 3] - goal[:3, 3]) > CARTESIAN_POS_TOL_M
+            or rot_err > CARTESIAN_ROT_TOL_DEG
+            or any(
+                not angles.limits(j)[0] + CARTESIAN_LIMIT_MARGIN_DEG <= d <= angles.limits(j)[1] - CARTESIAN_LIMIT_MARGIN_DEG
+                for j, d in solved_deg.items()
+            )
+            or self._auto._lowest_z(solved_deg) < DEFAULT_Z_MIN_M
+        ):
+            return  # out of reach, at a limit or at the floor: hold, the target as it was
+        self._cart_target = target
+        for joint, d in solved_deg.items():
+            self._joint_targets[joint] = angles.to_units(joint, d)
 
     def _maybe_recover_cameras(self, now: float) -> None:
         """Called from _control_loop after a get_observation() failure. Tracks how long
@@ -1277,19 +1311,22 @@ class RobotBridge:
                     # instead of landing exactly on CARTESIAN_READY_POSE.
                     remaining = ramp_until - loop_start
                     alpha = 1.0 if remaining <= 0 else 1.0 - (remaining / CARTESIAN_READY_RAMP_S)
+                    angles = self._auto._angles()
                     for joint in IK_ARM_JOINTS:
                         start = ramp_start.get(joint, self._joint_targets[joint])
-                        end = CARTESIAN_READY_POSE[joint]
+                        end = angles.to_units(joint, CARTESIAN_READY_POSE[joint])
                         self._joint_targets[joint] = start + (end - start) * alpha
                     if alpha >= 1.0:
                         with self._lock:
                             self._cartesian_ready_ramp_start = {}
-                elif cart_jog is not None and any(
-                    cart_jog[k] for k in ("dx", "dy", "dz", "droll", "dpitch", "dyaw")
-                ):
-                    self._apply_cartesian_jog(cart_jog, period)
-                elif vr_target is not None:
-                    self._apply_vr_target(vr_target)
+                jogging = cart_jog is not None and any(cart_jog[k] for k in ("dx", "dy", "dz", "droll", "dpitch"))
+                if not jogging or ramp_start is not None:
+                    self._cart_target = None  # sticks let go: the next jog starts from the arm's pose
+                if ramp_start is None:  # the ramp into cartesian mode, above, comes first
+                    if jogging:
+                        self._apply_cartesian_jog(cart_jog, period)
+                    elif vr_target is not None:
+                        self._apply_vr_target(vr_target)
 
                 for joint, target in self._joint_targets.items():
                     action[f"{joint}.pos"] = target

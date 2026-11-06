@@ -35,6 +35,8 @@ from it at import time.
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
 
 JOINT_NAMES = ["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll"]
@@ -91,6 +93,25 @@ def _transform(xyz: tuple[float, float, float], rpy: tuple[float, float, float])
 
 _ORIGIN_TRANSFORMS = [_transform(xyz, rpy) for xyz, rpy in _JOINT_ORIGINS]
 _TCP_TRANSFORM = _transform(*_TCP_ORIGIN)
+
+
+def tool_orientation(x: float, y: float, pitch_deg: float, roll_deg: float) -> np.ndarray:
+    """TCP orientation for a target at (x, y): the tool faces the target's azimuth (the only
+    yaw a 5-joint arm can reach for a given (x, y)), tilted pitch_deg down from horizontal
+    (90 = pointing straight down), spun roll_deg about its approach axis. Shared by the
+    planner (gemma_brain/common/arm.py) and the gamepad's IK jog (robot_bridge)."""
+    # At pitch 0 the approach (local Z) points along +X, local Y along +Y, local X along -Z:
+    # the all-zeros pose's orientation, up to the URDF's 0.05 rad wrist offset.
+    horizontal = np.array([[0.0, 0.0, 1.0], [0.0, 1.0, 0.0], [-1.0, 0.0, 0.0]])
+    yaw = math.atan2(y, x)
+    return _rotz(yaw) @ _roty(math.radians(pitch_deg)) @ horizontal @ _rotz(math.radians(roll_deg))
+
+
+def tool_pitch_roll(r: np.ndarray, x: float, y: float) -> tuple[float, float]:
+    """Inverse of tool_orientation() for a TCP rotation r at (x, y)."""
+    pitch = math.degrees(math.asin(max(-1.0, min(1.0, -r[2, 2]))))
+    rel = tool_orientation(x, y, pitch, 0.0).T @ r
+    return pitch, math.degrees(math.atan2(rel[1, 0], rel[0, 0]))
 
 
 def forward_kinematics(joint_rad: np.ndarray) -> np.ndarray:

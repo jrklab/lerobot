@@ -445,3 +445,115 @@ def test_motor_reads_failing_for_a_second_reopen_the_port(monkeypatch):
     robot.wheels_fail = False  # a good read clears it
     bridge._read_wheels_only(robot.bus)
     assert bridge._reads_failing_since is None
+
+
+# --- The gamepad's IK jog (_apply_cartesian_jog) --------------------------------------------
+
+TICK_S = 0.02
+
+
+def _jogging_arm():
+    """A calibrated arm at the IK jog's ready pose (the URDF zero), not started: the tests tick
+    the jog by hand."""
+    from robot_bridge import CARTESIAN_READY_POSE, IK_ARM_JOINTS
+
+    bus = FakeBus(ACTUAL, dict.fromkeys(ACTUAL, 0))
+    bridge = RobotBridge(FakeLeKiwi(bus, bus.read_calibration()))
+    angles = bridge._auto._angles()
+    for j in IK_ARM_JOINTS:
+        bridge._joint_targets[j] = angles.to_units(j, CARTESIAN_READY_POSE[j])
+    return bridge
+
+
+def _jog(bridge, seconds, speed="slow", **sticks):
+    jog = {"dx": 0.0, "dy": 0.0, "dz": 0.0, "droll": 0.0, "dpitch": 0.0, "dyaw": 0.0, "speed": speed}
+    jog.update(sticks)
+    for _ in range(round(seconds / TICK_S)):
+        bridge._apply_cartesian_jog(jog, TICK_S)
+
+
+def _arm_deg(bridge):
+    from robot_bridge import IK_ARM_JOINTS
+
+    angles = bridge._auto._angles()
+    return {j: angles.to_deg(j, bridge._joint_targets[j]) for j in IK_ARM_JOINTS}
+
+
+def _pose(bridge):
+    import numpy as np
+    import so101_kinematics as kin
+
+    return kin.forward_kinematics(np.radians(list(_arm_deg(bridge).values())))
+
+
+def _turned_deg(a, b):
+    import math
+
+    import numpy as np
+    import so101_kinematics as kin
+
+    return math.degrees(float(np.linalg.norm(kin.matrix_to_rotvec(a[:3, :3] @ b[:3, :3].T))))
+
+
+@pytest.mark.parametrize(
+    ("stick", "axis", "sign"),
+    [("dx", 0, -1), ("dy", 1, 1), ("dy", 1, -1), ("dz", 2, -1)],
+)
+def test_a_jog_moves_the_gripper_straight_at_the_set_speed(stick, axis, sign):
+    # Until Nov 5 each tick moved the last solve, its error included: "forward" covered 68 mm of
+    # its 100 and sank 15 mm on the way.
+    import numpy as np
+    from robot_bridge import CARTESIAN_JOG_SPEEDS
+
+    bridge = _jogging_arm()
+    p0 = _pose(bridge)
+    _jog(bridge, 2.0, **{stick: float(sign)})
+    moved = _pose(bridge)[:3, 3] - p0[:3, 3]
+    assert moved[axis] == pytest.approx(sign * 2.0 * CARTESIAN_JOG_SPEEDS["slow"], abs=0.002)
+    assert np.linalg.norm(np.delete(moved, axis)) < 0.001
+    if stick != "dy":  # sideways the gripper turns to keep facing out from the base
+        assert _turned_deg(_pose(bridge), p0) < 1.0
+
+
+@pytest.mark.parametrize("stick", ["dpitch", "droll"])
+def test_tilting_and_spinning_turn_the_gripper_where_it_is(stick):
+    # Until Nov 5 a "roll" turned about an axis the 5-joint arm can't turn about: the IK swung the
+    # jaws 41 cm finding something close.
+    import numpy as np
+    from robot_bridge import CARTESIAN_ROT_JOG_SPEEDS
+
+    bridge = _jogging_arm()
+    p0 = _pose(bridge)
+    _jog(bridge, 1.0, **{stick: -1.0})
+    assert _turned_deg(_pose(bridge), p0) == pytest.approx(CARTESIAN_ROT_JOG_SPEEDS["slow"], abs=1.0)
+    assert np.linalg.norm(_pose(bridge)[:3, 3] - p0[:3, 3]) < 0.003
+
+
+def test_a_descent_stops_at_the_floor_guard_and_comes_straight_back_up():
+    from auto_control import DEFAULT_Z_MIN_M
+
+    bridge = _jogging_arm()
+    # Tipped down and nearer the base first: a level gripper reaching out from the ready pose
+    # meets the shoulder's limit before the floor.
+    _jog(bridge, 1.0, dx=-1.0)
+    _jog(bridge, 3.0, speed="fast", dpitch=1.0)
+    _jog(bridge, 10.0, speed="fast", dz=-1.0)
+    lowest = bridge._auto._lowest_z(_arm_deg(bridge))
+    assert DEFAULT_Z_MIN_M <= lowest < DEFAULT_Z_MIN_M + 0.01
+    z = _pose(bridge)[2, 3]
+    _jog(bridge, 0.2, dz=1.0)  # held where it stopped, not wound on below the floor
+    assert _pose(bridge)[2, 3] > z + 0.005
+
+
+def test_a_reach_holds_inside_the_joint_limits():
+    from robot_bridge import CARTESIAN_LIMIT_MARGIN_DEG
+
+    bridge = _jogging_arm()
+    _jog(bridge, 6.0, speed="fast", dx=-1.0)  # pulled in to the base until a joint can't fold further
+    angles = bridge._auto._angles()
+    for j, d in _arm_deg(bridge).items():
+        lo, hi = angles.limits(j)
+        assert lo + CARTESIAN_LIMIT_MARGIN_DEG <= d <= hi - CARTESIAN_LIMIT_MARGIN_DEG, j
+    before = _arm_deg(bridge)
+    _jog(bridge, 1.0, speed="fast", dx=-1.0)
+    assert _arm_deg(bridge) == before
