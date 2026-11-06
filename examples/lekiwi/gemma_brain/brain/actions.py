@@ -276,7 +276,7 @@ def look_around(sk: Skills, obj: str) -> Result:
     return Result(False, f"no {obj} in a full look around, nor after backing up")
 
 
-def approach(sk: Skills, obj: str, tol=None) -> Result:
+def approach(sk: Skills, obj: str, tol=None, stop_short: float = 0.0) -> Result:
     """Base: find the object (looking around if it isn't in the forward view), then turn and
     drive until the front camera sees it at the reach point. The first drive is measured on the
     main model's box, the look that found it, not a second look a second later: from 0.5 m away
@@ -286,7 +286,7 @@ def approach(sk: Skills, obj: str, tol=None) -> Result:
     r = look_around(sk, obj)
     if r.ok:
         first = r.data["det"] if r.data["det"].by == "main" else sk.find(obj, "front", fast_ok=False)
-        r = sk.servo(obj, FrontApproachGoal(tol), first=first)
+        r = sk.servo(obj, FrontApproachGoal(tol, stop_short), first=first)
     det = sk.seen.get(f"front:{obj}")
     if r.ok and det is not None:  # side-on, for placing into it later (front_object_height)
         box, how = snap_top(det.jpeg, det.box)  # the box's top up to a rim it left out (Nov 4)
@@ -332,9 +332,52 @@ def carry(sk: Skills) -> Result:
 
 
 def hover_at(sk: Skills, height: Param | float) -> Result:
-    """The vertical gripper over the reach point at `height`, roll 0 (jaws as they are)."""
+    """The vertical gripper over the reach point at `height`, roll 0 (jaws as they are); where
+    the arm settles more than HEIGHT_TOL_M below it (sagging under a held load: measured), raised
+    by the difference once."""
     h = height.value if isinstance(height, Param) else float(height)
-    return sk.move("arm", xy=(prm.REACH_POINT_X_M.value, 0.0), height=h, roll=0.0)
+    r = sk.move("arm", xy=(prm.REACH_POINT_X_M.value, 0.0), height=h, roll=0.0)
+    measure = getattr(sk, "height", None)
+    if not r.ok or measure is None:
+        return r
+    sag = h - measure()
+    if sag <= prm.HEIGHT_TOL_M.value:
+        return r
+    sk.ev("sag", planned_m=round(h, 4), sag_m=round(sag, 4))
+    return sk.move("arm", xy=(prm.REACH_POINT_X_M.value, 0.0), height=h + sag, roll=0.0)
+
+
+def held_blocks_view(sk: Skills) -> bool:
+    """Whether the held object hides what is under it from the wrist camera: wider than half its
+    view at the jaws (54.6 mm: the 63 mm tennis ball did, Nov 5; a 16 mm brick doesn't)."""
+    w = getattr(sk, "grasp_width", None)
+    h = prm.HOVER_HEIGHT_M.value
+    return w is not None and w > view_half_width(sk.geom, h, h)
+
+
+def place_standoff(sk: Skills) -> float:
+    """How far short of the container the approach stops while a large object is held: its half
+    width and the place clearance, so it hangs clear of the rim until the arm rises."""
+    return (getattr(sk, "grasp_width", None) or 0.0) / 2 + prm.PLACE_CLEARANCE_M.value
+
+
+def over_by_front(sk: Skills, container: str) -> Result:
+    """The base driven so the container's middle is under the gripper, from the front camera's
+    last look at it (the approach's): its near edge on the floor plus half its measured width,
+    away from the camera. For a held object that hides the container from the wrist camera
+    (held_blocks_view): the cup's 95 mm leaves ~16 mm around the 63 mm ball."""
+    det = sk.seen.get(f"front:{container}")
+    width = sk.widths.get(container, 0.0)
+    if det is None or width <= 0.0:
+        return Result(False, f"no front-camera measure of the {container} to place by")
+    near = sk.geom.front_point(((det.box[0] + det.box[2]) / 2, det.box[3]))
+    if near is None:
+        return Result(False, f"the {container}'s near edge isn't on the floor in the front camera")
+    away = near[:2] - sk.geom.cams.T_base_cam[:2, 3]
+    middle = near[:2] + away / np.linalg.norm(away) * width / 2
+    delta = middle - np.asarray(sk.cmd_tcp()[:2], float)
+    sk.ev("over_by_front", obj=container, delta=[round(float(v), 4) for v in delta], width_m=round(width, 4))
+    return sk.move("base", delta=(float(delta[0]), float(delta[1])))
 
 
 def place_height(sk: Skills, target: str, which: str) -> float:

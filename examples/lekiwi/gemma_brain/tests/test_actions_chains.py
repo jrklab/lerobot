@@ -616,3 +616,78 @@ def test_the_release_opens_at_least_as_wide_as_the_grasp(monkeypatch):
     sk.grasp_open_mm = 23.4  # a brick's: the demo's wider opening stands
     actions.release(sk)
     assert opened[-1] == prm.OPEN_WIDTH.value
+
+
+def test_a_hover_that_sags_is_raised_by_the_difference():
+    # Nov 5: holding the tennis ball the arm settled ~2 cm low and the ball pushed the cup.
+    heights = []
+    sk = _height_sk({})
+    sk.move = lambda part, **k: (heights.append(k["height"]), Result(True))[1]
+    sk.height = lambda: heights[-1] - 0.015 if len(heights) == 1 else heights[-1] - 0.015 + 0.015
+    assert actions.hover_at(sk, 0.12).ok
+    assert heights == [0.12, pytest.approx(0.135)]
+    heights.clear()
+    sk.height = lambda: heights[-1] - 0.002  # within HEIGHT_TOL_M: left alone
+    actions.hover_at(sk, 0.12)
+    assert heights == [0.12]
+
+
+def test_a_held_object_wider_than_half_the_wrist_view_hides_the_container(monkeypatch):
+    monkeypatch.setattr(actions, "view_half_width", lambda geom, h, plane_h: 0.0546)  # Nov 5, at the jaws
+    sk = _height_sk({})
+    sk.grasp_width = 0.063  # the tennis ball
+    assert actions.held_blocks_view(sk)
+    sk.grasp_width = 0.0158  # a brick
+    assert not actions.held_blocks_view(sk)
+    assert actions.place_standoff(sk) == pytest.approx(0.0079 + prm.PLACE_CLEARANCE_M.value)
+
+
+def test_the_front_camera_aims_the_containers_middle_under_the_gripper():
+    from brain.goals import Detection
+
+    moves = []
+
+    class G:
+        cams = type("C", (), {"T_base_cam": np.eye(4)})()  # the camera at the arm's origin
+
+        def front_point(self, uv):
+            return np.array([0.30, 0.0, -0.1])  # the cup's near edge 30 cm straight ahead
+
+    sk = _height_sk({"paper cup": 0.065})
+    sk.geom, sk.widths = G(), {"paper cup": 0.094}
+    sk.seen = {"front:paper cup": Detection(box=[0.4, 0.3, 0.6, 0.6])}
+    sk.cmd_tcp = lambda: np.array([0.25, 0.0, 0.0])
+    sk.move = lambda part, **k: (moves.append((part, k["delta"])), Result(True))[1]
+    assert actions.over_by_front(sk, "paper cup").ok
+    (part, (dx, dy)), = moves
+    assert part == "base" and dx == pytest.approx(0.30 + 0.047 - 0.25) and dy == pytest.approx(0.0)
+
+
+def test_the_approach_can_stop_short_of_its_target():
+    from types import SimpleNamespace
+
+    from brain import goals
+    from brain.goals import Detection
+
+    geom = SimpleNamespace(front_point=lambda uv: np.array([0.4, 0.0, -0.1]), front_turn_and_distance=lambda p: (0.0, 0.10))
+    sk = SimpleNamespace(geom=geom)
+    det = Detection(box=[0.4, 0.3, 0.6, 0.6])
+    assert goals.FrontApproachGoal().error(det, sk)[1] == pytest.approx(0.10)
+    assert goals.FrontApproachGoal(stop_short_m=0.04).error(det, sk)[1] == pytest.approx(0.06)
+
+
+def test_a_large_held_object_is_placed_by_the_front_camera(monkeypatch):
+    from brain import chains
+
+    calls = []
+    monkeypatch.setattr(chains.actions, "held_blocks_view", lambda sk: True)
+    monkeypatch.setattr(chains.actions, "approach",
+                        lambda sk, o, tol=None, stop_short=0.0: (calls.append(f"approach short {stop_short > 0}"), chains.Result(True))[1])
+    monkeypatch.setattr(chains.actions, "carry", lambda sk: (calls.append("carry"), chains.Result(True))[1])
+    monkeypatch.setattr(chains.actions, "over_by_front", lambda sk, c: (calls.append("over by front"), chains.Result(True))[1])
+    sk = _chain_sk(calls)
+    sk.grasp_width = 0.063
+    seq = iter([True, True, False])
+    sk.held = lambda: next(seq)
+    assert chains.place_in(sk, "tennis ball", "paper cup").ok
+    assert calls == ["carry", "approach short True", "move", "over by front", "move", "open", "move"]

@@ -157,16 +157,20 @@ class FrontApproachGoal:
     part = "base"
     tol_m = prm.REACH_TOL_M
 
-    def __init__(self, tol_m=None):
+    def __init__(self, tol_m=None, stop_short_m: float = 0.0):
         if tol_m is not None:  # looser for a container: PLACE_APPROACH_TOL_M
             self.tol_m = tol_m
         self._turned_from = None  # the turn error before the last move, if it was a turn
+        # The near edge this much beyond the reach point: a large held object hanging there stays
+        # clear of the container's rim until the arm has risen over it (Nov 5: the ball pushed the cup).
+        self.stop_short_m = stop_short_m
 
     def error(self, det: Detection, sk) -> np.ndarray:
         p = sk.geom.front_point(((det.box[0] + det.box[2]) / 2, det.box[3]))
         if p is None:  # find() refuses boxes ending above the horizon; keep the loop finite
             raise MissingCalibrationError("a front box ending above the floor's horizon")
-        return np.array(sk.geom.front_turn_and_distance(p))
+        turn, dist = sk.geom.front_turn_and_distance(p)
+        return np.array([turn, dist - self.stop_short_m])
 
     def remaining(self, err: np.ndarray, sk) -> float:
         """Metres still to drive."""

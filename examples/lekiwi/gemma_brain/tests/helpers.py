@@ -148,7 +148,16 @@ def _chain_sk(calls, held=True):
 
     sk = Skills.__new__(Skills)
     sk.servo = lambda obj, goal, part=None: (calls.append(f"{type(goal).__name__}:{part or goal.part}"), Result(True))[1]
-    sk.move = lambda part, **k: (calls.append("move"), Result(True))[1]
+    at = {"h": 0.10}  # the arm goes where it's told: no sag
+
+    def move(part, **k):
+        calls.append("move")
+        if k.get("height") is not None:
+            at["h"] = k["height"]
+        return Result(True)
+
+    sk.move = move
+    sk.height = lambda: at["h"]
     sk.grip = lambda how, **k: (calls.append(how), Result(True))[1]
     sk.held = lambda: held
     sk.log, sk.find, sk.seen = None, lambda *a, **k: None, {}  # the place check sees nothing: passes, unchecked

@@ -69,13 +69,36 @@ def pick(sk: Skills, obj: str, drive: bool = True, start: str | None = None) -> 
 
 def place_in(sk: Skills, obj: str, container: str, drive: bool = True) -> Result:
     """Put the held `obj` into `container` the way the owner's demo did: from above it, lowered
-    to the demo's release height, then opened."""
+    to the demo's release height, then opened. A held object that hides the container from the
+    wrist camera (actions.held_blocks_view: a tennis ball) is placed by the front camera instead:
+    the approach stops short of the container, the arm rises over it, the base drives in."""
+    if actions.held_blocks_view(sk):
+        return place_in_large(sk, obj, container, drive)
     steps = [("holding", lambda: Result(sk.held(), "" if sk.held() else f"not holding the {obj}"))]
     steps += [("carry", lambda: actions.carry(sk)),
               ("approach", lambda: actions.approach(sk, container, prm.PLACE_APPROACH_TOL_M))] if drive else []
     steps += [
         ("hover", lambda: actions.hover_at(sk, actions.place_height(sk, container, "hover"))),
         ("over", lambda: actions.over_container(sk, container)),
+        ("lower", lambda: actions.lower_to_release(sk, container)),
+        ("release", lambda: actions.release(sk)),
+        ("up", lambda: actions.hover_at(sk, actions.place_height(sk, container, "hover"))),
+        ("check", lambda: actions.check_in(sk, obj, container)),
+    ]
+    return run(steps)
+
+
+def place_in_large(sk: Skills, obj: str, container: str, drive: bool = True) -> Result:
+    """place_in for a held object the wrist camera can't see past (Nov 5: the tennis ball hid the
+    cup, and hanging low it pushed the cup's rim): stop short of the container by the object's
+    half width and the clearance, measure the container there, rise over it, drive in by the
+    front camera's measure of its middle, lower, open wide, check."""
+    steps = [("holding", lambda: Result(sk.held(), "" if sk.held() else f"not holding the {obj}"))]
+    steps += [("carry", lambda: actions.carry(sk)),
+              ("approach", lambda: actions.approach(sk, container, prm.REACH_TOL_M, actions.place_standoff(sk)))] if drive else []
+    steps += [
+        ("hover", lambda: actions.hover_at(sk, actions.place_height(sk, container, "hover"))),
+        ("over", lambda: actions.over_by_front(sk, container)),
         ("lower", lambda: actions.lower_to_release(sk, container)),
         ("release", lambda: actions.release(sk)),
         ("up", lambda: actions.hover_at(sk, actions.place_height(sk, container, "hover"))),
