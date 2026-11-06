@@ -195,51 +195,71 @@
     "value": {
       "curve": [
         [
-          1.62,
+          2.11,
           0.0
         ],
         [
-          10.68,
+          10.63,
           15.8
         ],
         [
-          22.59,
+          22.86,
           31.8
         ],
         [
           34.67,
           47.8
+        ],
+        [
+          42.36,
+          61.9
+        ],
+        [
+          54.32,
+          81.1
         ]
       ]
     },
     "meaning": "jaw opening (mm, at the tips) against the gripper angle (deg open from its recorded closed end): straight between these [deg, mm] points; beyond the last, its last segment's slope",
     "method": "calibrate_all.py gripper step: closed at the pick's speed until the stall on nothing and a 2x4 brick (its short and long side, as a pick grasps it); other widths kept from before",
-    "date": "2026-11-04",
+    "date": "2026-11-05",
     "points": [
       {
         "mm": 0.0,
         "what": "nothing",
-        "deg": 1.58,
+        "deg": 2.46,
         "stalled": false
       },
       {
         "mm": 0.0,
         "what": "nothing",
-        "deg": 1.67,
+        "deg": 1.76,
         "stalled": false
+      },
+      {
+        "mm": 61.9,
+        "deg": 42.36,
+        "stalled": false,
+        "what": "camera"
+      },
+      {
+        "mm": 81.1,
+        "deg": 54.32,
+        "stalled": false,
+        "what": "camera"
       },
       {
         "mm": 15.8,
         "what": "2x4 brick, short side",
-        "measured_mm": 16.2,
-        "angle_left_deg": 4.5,
-        "deg": 10.72,
+        "measured_mm": 16.4,
+        "angle_left_deg": 0.0,
+        "deg": 10.63,
         "stalled": true
       },
       {
         "mm": 15.8,
         "what": "2x4 brick, short side",
-        "measured_mm": 16.1,
+        "measured_mm": 16.4,
         "angle_left_deg": 0.0,
         "deg": 10.63,
         "stalled": true
@@ -247,15 +267,15 @@
       {
         "mm": 31.8,
         "what": "2x4 brick, long side",
-        "measured_mm": 31.1,
+        "measured_mm": 31.8,
         "angle_left_deg": 0.0,
-        "deg": 22.59,
+        "deg": 23.12,
         "stalled": true
       },
       {
         "mm": 31.8,
         "what": "2x4 brick, long side",
-        "measured_mm": 31.6,
+        "measured_mm": 31.3,
         "angle_left_deg": 0.0,
         "deg": 22.59,
         "stalled": true
