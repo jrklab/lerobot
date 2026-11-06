@@ -421,3 +421,27 @@ def test_the_web_pages_bus_health_shows_a_recent_motor_error():
     bridge._last_bus_error = time.monotonic()
     h = bridge.health()
     assert h["bus_ok"] is False and h["bus_error_age_s"] < 1.0
+
+
+def test_motor_reads_failing_for_a_second_reopen_the_port(monkeypatch):
+    # Nov 4, 22:25: every read "There is no status packet", while commands (sent without a reply)
+    # never failed, so the reopen on a failed command never ran.
+    import robot_bridge
+
+    robot = _Wheels()
+    bridge = RobotBridge(robot, allow_uncalibrated=True)
+    clock = {"t": 100.0}
+    monkeypatch.setattr(robot_bridge.time, "monotonic", lambda: clock["t"])
+    robot.wheels_fail = True
+    bridge._read_wheels_only(robot.bus)  # the first failure starts the clock
+    clock["t"] += 0.5
+    bridge._read_wheels_only(robot.bus)
+    assert robot.bus.port_handler.opened == 0
+    clock["t"] += 0.6  # past READS_FAILING_S of nothing but failures
+    bridge._read_wheels_only(robot.bus)
+    assert robot.bus.port_handler.opened == 1 and robot.stops == 1
+    clock["t"] += 0.1
+    bridge._read_wheels_only(robot.bus)  # failing again: a new clock
+    robot.wheels_fail = False  # a good read clears it
+    bridge._read_wheels_only(robot.bus)
+    assert bridge._reads_failing_since is None

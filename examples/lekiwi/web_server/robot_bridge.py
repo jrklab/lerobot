@@ -108,7 +108,11 @@ CALIBRATION_WRITE_RETRIES = 2  # convention
 LOOP_STALL_S = 1.0  # convention: 30 ticks
 WATCHDOG_PERIOD_S = 0.2  # convention
 BUS_REOPEN_COOLDOWN_S = 2.0  # convention
-BUS_ERROR_RECENT_S = 2.0  # convention: the web page shows the bus as failing this long after an error
+BUS_ERROR_RECENT_S = 2.0  # convention
+# Motor reads failing this long on end reopen the port too: commands to the motors go without
+# a reply, so a dead link (Nov 4, 22:25: "There is no status packet" on every read) never failed
+# one, and the reopen on a failed command never ran.
+READS_FAILING_S = 1.0  # convention: 30 ticks: the web page shows the bus as failing this long after an error
 # Where a register auto mode lowered (AutoController.take_bus_writes) is put back from: the
 # motor's power-on value.
 REGISTER_DEFAULTS = {"Torque_Limit": "Max_Torque_Limit"}
@@ -326,6 +330,7 @@ class RobotBridge:
         self._last_tick = time.monotonic()
         self._last_bus_reopen = 0.0
         self._last_bus_error: float | None = None  # monotonic time of the last failed motor transfer
+        self._reads_failing_since: float | None = None  # motor reads failing since then, on end
 
         # Playback: None means not replaying. While active, the control loop steps through
         # these recorded actions instead of computing one from the current control mode.
@@ -896,8 +901,9 @@ class RobotBridge:
             load = bus.sync_read("Present_Load", ARM_JOINTS)
         except Exception:
             logger.exception("reading the arm's motors failed too")
-            self._last_bus_error = time.monotonic()
+            self._reads_failed()
             return
+        self._reads_failing_since = None
         with self._lock:
             for joint, v in pos.items():
                 st = self._latest_joint_state[joint]
@@ -918,13 +924,24 @@ class RobotBridge:
             vel = self._robot._wheel_raw_to_body(raw["base_left_wheel"], raw["base_back_wheel"], raw["base_right_wheel"])
         except Exception as e:
             logger.exception("reading the wheels failed too")
-            self._last_bus_error = time.monotonic()
+            self._reads_failed()
             self._auto.abort_base(f"the base's odometry was lost (reading the wheels failed: {e})")
             with self._lock:
                 self._latest_base_vel = {"x.vel": 0.0, "y.vel": 0.0, "theta.vel": 0.0}
             return
+        self._reads_failing_since = None
         with self._lock:
             self._latest_base_vel = {k: float(vel.get(k, 0.0)) for k in ("x.vel", "y.vel", "theta.vel")}
+
+    def _reads_failed(self) -> None:
+        """Control-loop thread: a motor read failed. Past READS_FAILING_S of nothing but failures,
+        the port is reopened and the wheels stopped."""
+        now = time.monotonic()
+        self._last_bus_error = now
+        if self._reads_failing_since is None:
+            self._reads_failing_since = now
+        elif now - self._reads_failing_since > READS_FAILING_S and self._reopen_port("motor reads failing"):
+            self._reads_failing_since = None
 
     def _stop_wheels(self, why: str) -> None:
         """Stop the wheels now (any thread): the stop, and where it fails, the motor port reopened
@@ -934,10 +951,15 @@ class RobotBridge:
             return
         except Exception:
             logger.exception("stopping the wheels failed (%s)", why)
+        self._reopen_port(why)
+
+    def _reopen_port(self, why: str) -> bool:
+        """The motor port closed and opened again (at most once per BUS_REOPEN_COOLDOWN_S), then
+        the wheels stopped. Whether it reopened."""
         bus = getattr(self._robot, "bus", None)
         now = time.monotonic()
         if bus is None or now - self._last_bus_reopen < BUS_REOPEN_COOLDOWN_S:
-            return
+            return False
         self._last_bus_reopen = now
         try:
             ph = bus.port_handler
@@ -950,8 +972,10 @@ class RobotBridge:
                 raise OSError(f"couldn't open {bus.port}")
             logger.warning("motor port %s reopened (%s)", bus.port, why)
             self._robot.stop_base()
+            return True
         except Exception:
             logger.exception("reopening the motor port failed (%s)", why)
+            return False
 
     def _wheel_watchdog(self) -> None:
         """Its own thread: when the control loop stalls (no tick finished in LOOP_STALL_S), stop
@@ -1284,6 +1308,7 @@ class RobotBridge:
             try:
                 obs = self._robot.get_observation()
                 self._obs_failure_since = None
+                self._reads_failing_since = None
                 new_joint_state = {}
                 new_jpeg = {}
                 for joint in ARM_JOINTS:
