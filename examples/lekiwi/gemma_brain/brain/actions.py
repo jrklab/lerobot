@@ -225,9 +225,16 @@ def hang(sk: Skills) -> float:
 def carry_height(sk: Skills) -> float:
     """The jaw tips' height for carrying: the held object's bottom PLACE_CLEARANCE_M over the
     tallest object measured so far (the place's target among them), at least the hover height
-    (the arm out of the front camera's floor view, carry())."""
+    (the arm out of the front camera's floor view, carry()). A held object that hides the wrist
+    view (held_blocks_view) goes its own height higher: carried at the hover the tennis ball hung
+    in the front camera's line of sight to the shoe box's marker, 4-9 cm up, and hid it (Nov 6,
+    run 20261106T214853)."""
     tallest = max(sk.heights.values(), default=0.0)
-    return max(prm.HOVER_HEIGHT_M.value, tallest + hang(sk) + prm.PLACE_CLEARANCE_M.value)
+    h = max(prm.HOVER_HEIGHT_M.value, tallest + hang(sk) + prm.PLACE_CLEARANCE_M.value)
+    held = getattr(sk, "holding", None)
+    if held and held_blocks_view(sk):
+        h += sk.heights.get(held, 0.0)
+    return h
 
 
 def lift(sk: Skills) -> Result:

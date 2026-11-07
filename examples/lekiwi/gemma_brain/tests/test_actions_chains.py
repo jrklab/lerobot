@@ -97,6 +97,15 @@ def test_the_carry_clears_the_tallest_measured_object():
     assert actions.carry_height(sk) == prm.HOVER_HEIGHT_M.value
 
 
+def test_a_held_object_hiding_the_view_is_carried_its_own_height_higher(monkeypatch):
+    # Nov 6: carried at the hover the ball hid the shoe box's marker from the front camera.
+    sk = _height_sk({"tennis ball": 0.062})
+    sk.held_below, sk.holding = 0.032, "tennis ball"
+    low = actions.carry_height(sk)
+    monkeypatch.setattr(actions, "held_blocks_view", lambda sk: True)
+    assert actions.carry_height(sk) == pytest.approx(low + 0.062)
+
+
 def test_the_close_notes_how_far_the_object_reaches_below_the_jaws():
     from brain.primitives import Result
 
