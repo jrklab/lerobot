@@ -79,9 +79,10 @@ def plan_grasp(sk: Skills, obj: str) -> Result:
     m = None if det is None else brick_angle(det.jpeg, det.box, look=sk.looks.get(f"wrist:{obj}"))
     is_round = m is not None and m["aspect"] < ELONGATED_ASPECT
     widest = sk.widest.get(obj)
-    # A round object closes at the middle of its widest part (its middle: lower, the jaws squeeze
-    # it out upwards), an elongated one at the lowest of it (a brick: ~4 mm, as before).
-    lowest = None if widest is None else (sum(widest) / 2 if is_round else widest[0])
+    # A round object closes ROUND_CLOSE_BELOW_M under the middle of its widest part (the jaws
+    # hold above their tips; much lower, they squeeze it out upwards), an elongated one at the
+    # lowest of it (a brick: ~4 mm, as before).
+    lowest = None if widest is None else (sum(widest) / 2 - prm.ROUND_CLOSE_BELOW_M.value if is_round else widest[0])
     close = prm.GRASP_LIFT_M.value if lowest is None else max(prm.GRASP_LIFT_M.value, lowest)
     close = max(close, h - prm.JAW_DEPTH_M.value)
     outline = widest[1] if is_round and widest is not None else h
@@ -132,8 +133,11 @@ def land(sk: Skills, obj: str | None = None) -> Result:
     p = _plan(sk, obj)
     if p is not None and p["close_m"] - prm.GRASP_LIFT_M.value > prm.LAND_SEARCH_M.value:
         # Closing high on the object (a ball's middle): the floor is out of reach of the search,
-        # so any contact on the way down is the object itself, under the jaws: refused.
-        r = sk.move("arm", height=p["close_m"], until_contact=True)
+        # so any contact on the way down is the object itself, under the jaws: refused. At the
+        # free speed: a close under the free-move clearance made it a slow move, and over its 6 s
+        # the Pi's contact watch read the arm's drifting droop as "held up" 1.6-1.8 mm, 3 of 4
+        # times, 2.6-6.1 cm up (Nov 6, run 20261106T215537; 2 s at the free speed before).
+        r = sk.move("arm", height=p["close_m"], until_contact=True, speed=prm.FREE_SPEED_MPS.value)
         if r.ok and r.data.get("contact"):
             above = r.data["contact_z"] - r.data["floor"]
             sk.ev("land_contact", above_floor_m=round(above, 4), detector=r.data.get("detector"))
@@ -184,8 +188,15 @@ def open_to_fit(sk: Skills, obj: str) -> Result:
         sk.ev("grasp_width", obj=obj, measured=False)
         return Result(True, "width not measured: the jaws stay as they are")
     top = sk.object_height(obj)
-    room = 2 * (prm.SERVO_TOL_M.value + prm.WIDTH_ERROR_M.value)
+    # The width's error is the measuring camera's, as the close's miss check has it: the front
+    # camera's for a round object, measured side on (Nov 6: 74 mm for the 62 mm ball left ~3.5 mm a
+    # side, owner: wider), so up to as wide as the jaws open; the wrist camera's for the rest.
+    round_ = p is not None and bool(p.get("width_m"))
+    error = prm.FRONT_HEIGHT_ERROR_M.value if round_ else prm.WIDTH_ERROR_M.value
+    room = 2 * (prm.SERVO_TOL_M.value + error)
     mm = MM_PER_M * (w["extent_m"] + sk.geom.fixed_jaw_gap(top) + room)
+    if round_:
+        mm = min(mm, max(sk.geom.gripper_max_mm(), MM_PER_M * w["extent_m"]))
     sk.ev("grasp_width", obj=obj, measured=True, extent_mm=round(MM_PER_M * w["extent_m"], 1),
           short_mm=round(MM_PER_M * w["short_m"], 1), open_mm=round(mm, 1))
     if mm > sk.geom.gripper_max_mm():
@@ -349,9 +360,11 @@ def approach_marker(sk: Skills, container: str, stop_short: float, look: bool = 
     """Base: the release point (release_inside past the marked face, along its facing) straight
     ahead of the arm and stop_short beyond the reach point: turn, then drive, re-measuring the
     marker after each move. look: search for it first (look_around), else it must be in view. On
-    arrival the face's top sets the container's height (markers.face_top_z), no box model asked
-    (Nov 6: the main model boxed the white box beside the shoe box as it, and the ball went there).
-    data["no_marker"]: never seen, for the caller's fallback."""
+    first look that sees the face's top (markers.face_top_z) sets the container's height, no box
+    model asked (Nov 6: the main model boxed the white box beside the shoe box as it, and the ball
+    went there): the farthest, the whole face in view. Close up the top leaves the frame and the
+    carried object shows above the marker (Nov 6, run 20261106T222135: 9.55 cm for the 11.5 cm
+    box, from 20 cm; and on arrival "not in view"). data["no_marker"]: never seen."""
     inside = release_inside(sk)
     if look:
         r = look_around(sk, container, look=lambda: find_marker(sk, container))
@@ -360,9 +373,12 @@ def approach_marker(sk: Skills, container: str, stop_short: float, look: bool = 
         m = r.data["det"]
     else:
         m = find_marker(sk, container)
+    top = None
     for _ in range(int(prm.SERVO_MAX_LOOKS.value)):
         if m is None:
             return Result(False, f"lost the {container}'s marker in the front camera")
+        if top is None and container not in getattr(sk, "marked", {}):  # the drive in, close up: kept
+            top = face_top_z(sk.marker_img, m, sk.geom.cams.front, sk.geom.cams.T_base_cam)
         p = m.centre - m.normal * inside
         turn, _ = sk.geom.front_turn_and_distance(p)
         drive = near_distance(sk.geom.cams, p) - (prm.REACH_POINT_X_M.value + stop_short)
@@ -372,7 +388,6 @@ def approach_marker(sk: Skills, container: str, stop_short: float, look: bool = 
         elif abs(drive) > prm.REACH_TOL_M.value:
             r = sk.move("base", delta=(drive, 0.0))
         else:
-            top = face_top_z(sk.marker_img, m, sk.geom.cams.front, sk.geom.cams.T_base_cam)
             if top is not None:
                 sk.heights[container] = top - sk.geom.floor_seen_z
             elif container not in getattr(sk, "marked", {}):  # close up the top may be out of view: the far look's stands

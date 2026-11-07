@@ -138,7 +138,7 @@ def face_top_z(img: np.ndarray, m: MarkerPose, lens: Lens, T_base_cam: np.ndarra
     if y < 3:
         return None
     y = walk(y)  # the face
-    if y < 0:
+    if y < 2 * EDGE_BLUR_PX:  # at the frame's top: the face may go on past it (Nov 6, close up at 20 cm)
         return None
     rot, o = T_base_cam[:3, :3], T_base_cam[:3, 3]
     d = rot @ lens.ray(((x0 + x1) / 2 / IMAGE_PX[0], (y + 1) / IMAGE_PX[1]))

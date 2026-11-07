@@ -481,6 +481,18 @@ def test_the_jaws_open_to_the_measured_width_before_landing(monkeypatch):
     assert not r.ok and "wider than they open" in r.reason and opened == []
 
 
+def test_a_round_object_opens_by_the_side_cameras_error_up_to_the_widest(monkeypatch):
+    # Nov 6: 74 mm for the 62 mm ball left ~3.5 mm a side (owner: wider).
+    sk, opened = _width_sk(monkeypatch, 0.030, 0.030)
+    sk.grasp_plan = {"obj": "red block", "round": True, "close_m": 0.01, "outline_m": 0.012, "width_m": 0.030}
+    assert actions.open_to_fit(sk, "red block").ok
+    want = 1000 * (0.030 + 0.0023 + 2 * (prm.SERVO_TOL_M.value + prm.FRONT_HEIGHT_ERROR_M.value))
+    assert opened == [("open", pytest.approx(min(want, 47.8)))]
+    sk, opened = _width_sk(monkeypatch, 0.045, 0.045)
+    sk.grasp_plan = {"obj": "red block", "round": True, "close_m": 0.01, "outline_m": 0.012, "width_m": 0.045}
+    assert actions.open_to_fit(sk, "red block").ok and opened == [("open", 47.8)]  # the widest
+
+
 def test_unmeasured_the_jaws_stay_open_as_they_are(monkeypatch):
     sk, opened = _width_sk(monkeypatch, 0.02, 0.018)
     monkeypatch.setattr(actions, "brick_angle", lambda *a, **k: None)
@@ -581,7 +593,8 @@ def test_the_grasp_plan_follows_the_measured_shape(monkeypatch):
     sk = _plan_sk(1.05, (0.024, 0.043), 0.067)  # a tennis ball: no roll, close below its middle
     p = actions.plan_grasp(sk, "thing").data
     assert p["round"] and p["outline_m"] == pytest.approx(0.043)
-    assert p["close_m"] == pytest.approx(max((0.024 + 0.043) / 2, 0.067 - prm.JAW_DEPTH_M.value))  # its middle
+    # Under its middle by ROUND_CLOSE_BELOW_M (owner, Nov 6: held above its middle)
+    assert p["close_m"] == pytest.approx(max((0.024 + 0.043) / 2 - prm.ROUND_CLOSE_BELOW_M.value, 0.067 - prm.JAW_DEPTH_M.value))
     assert p["width_m"] is None  # no side width measured in this stub
     assert actions.align(sk, "thing").reason == "round: any roll"
     assert actions.outline_height(sk, "thing") == pytest.approx(0.043)
@@ -598,9 +611,12 @@ def test_a_high_close_lands_there_and_refuses_any_contact_on_the_way(monkeypatch
     sk.height = lambda: 0.2
     sk.final_look_height = lambda obj: 0.087
     contact = {"v": False}
-    sk.move = lambda part, **k: (moves.append(k.get("height")),
-                                 Result(True, data={"contact": contact["v"], "contact_z": -0.06, "floor": -0.10}))[1]
+    speeds = []
+    sk.move = lambda part, **k: (moves.append(k.get("height")), speeds.append(k.get("speed")),
+                                 Result(True, data={"contact": contact["v"], "contact_z": -0.06, "floor": -0.10}))[2]
     assert actions.land(sk, "thing").ok and moves == [0.087, 0.027]
+    # At the free speed (Nov 6: slow, the Pi's contact watch read its drifting droop as a touch)
+    assert speeds[-1] == prm.FREE_SPEED_MPS.value
     contact["v"] = True
     r = actions.land(sk, "thing")
     assert not r.ok and "over the planned close" in r.reason
@@ -820,6 +836,19 @@ def test_a_marked_box_is_approached_by_its_marker_and_measured_by_its_face(monke
     assert np.hypot(p[0], p[1]) == pytest.approx(prm.REACH_POINT_X_M.value + stop, abs=prm.REACH_TOL_M.value)
     assert w.moves[0][0] == "turn" and w.heights["shoe box"] == pytest.approx(0.117)
     assert w.marked == {"shoe box": actions.release_inside(w)}
+
+
+def test_a_marked_box_is_measured_at_the_farthest_look_that_sees_its_top(monkeypatch):
+    # Nov 6: close up the top left the frame and the carried ball showed above the marker: 9.55 cm.
+    w = _MarkedBoxWorld([0.50, 0.0, -0.05], 0.0)
+    monkeypatch.setattr(actions, "find_marker", lambda sk, c: w.marker())
+    tops = iter([None, 0.015, -0.005, None, None, None, None, None])
+    monkeypatch.setattr(actions, "face_top_z", lambda img, m, lens, t: next(tops))
+    assert actions.approach_marker(w, "shoe box", 0.0).ok
+    assert w.heights["shoe box"] == pytest.approx(0.115)
+    tops = iter([-0.01] * 8)  # the drive in, close up, would read it lower: the far height stands
+    assert actions.approach_marker(w, "shoe box", 0.0, look=False).ok
+    assert w.heights["shoe box"] == pytest.approx(0.115)
 
 
 def test_a_marked_box_without_its_marker_in_view_says_so(monkeypatch):
