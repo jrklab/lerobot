@@ -347,6 +347,22 @@ def test_starts_holding(world):
     assert ok and world.calls == ["place green block next_to red block"], world.calls
 
 
+def test_jaws_closed_at_the_start_are_holding_what_the_plan_places(world):
+    # Nov 6: the ball was still held from the run before; the plan picked it again.
+    sk = FakeSkills()
+    sk.gripped = True
+    b = brain(FakePlanner('place "tennis ball" in "shoe box"\ndone'), sk)
+    ok, _ = b.run("put the tennis ball in the shoe box")
+    assert ok and world.calls == ["place tennis ball in shoe box"], world.calls
+
+
+def test_jaws_closed_at_the_start_refuse_a_plan_that_picks(world):
+    sk = FakeSkills()
+    sk.gripped = True
+    ok, why = brain(FakePlanner('pick "tennis ball"\nplace "tennis ball" in "shoe box"\ndone'), sk).run("x")
+    assert not ok and "already holding" in why and world.calls == []
+
+
 def test_a_run_starts_from_rest_folding_a_raised_arm_first(world):
     # Nov 4: raised by hand, the first move down to the hover passed the lift's limit.
     sk = FakeSkills(arm=FakeArm(at_rest=False))

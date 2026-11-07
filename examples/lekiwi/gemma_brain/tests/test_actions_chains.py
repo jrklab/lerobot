@@ -153,7 +153,11 @@ def test_look_around_turns_left_and_right_until_it_finds_the_object():
     w = World(bearing=0.0, near=True)
     assert actions.look_around(w, "red block").ok and w.backs == 1
     steps = look_offsets((1 - prm_.LOOK_OVERLAP.value) / 0.0184)
-    assert steps[:2] == [steps[0], -steps[0]] and steps[-1] == 180.0
+    n = steps.index(0.0)
+    assert steps[:2] == [steps[0], 2 * steps[0]] and steps[n + 1 :] == [-a for a in steps[:n]] + [180.0]
+    # One way, then the other: every turn one step but the turn back (Nov 6: 175 deg back and forth).
+    turns = [actions.wrap_deg(b - a) for a, b in zip([0.0] + steps, steps, strict=False)]
+    assert max(abs(t) for i, t in enumerate(turns) if i != n) <= 2 * steps[0] + 1e-6
     # Nothing there (Oct 28: no brick placed): all the way round, each turn the short way, and
     # back to the start; the last one asked 343 deg and was refused.
     w = World(bearing=0.0, near=True)
@@ -630,6 +634,64 @@ def test_a_hover_that_sags_is_raised_by_the_difference():
     sk.height = lambda: heights[-1] - 0.002  # within HEIGHT_TOL_M: left alone
     actions.hover_at(sk, 0.12)
     assert heights == [0.12]
+
+
+def test_a_hover_out_of_reach_straight_down_tilts_the_gripper_and_the_descent_keeps_it():
+    # Nov 6: over the 11.5 cm shoe box the hover was 17.6 cm; straight down reaches 16 cm.
+    tried = []
+
+    def move(part, **k):
+        tried.append(k.get("pitch"))
+        ok = k["pitch"] <= 80.0
+        return Result(ok, "" if ok else "can't move there", {} if ok else {"refused": True})
+
+    sk = _height_sk({})
+    sk.move = move
+    sk.height = lambda: 0.176
+    assert actions.hover_at(sk, 0.176).ok
+    assert tried == [90.0, 80.0] and sk.hover_pitch == 80.0
+    sk.heights, sk.held_below = {"box": 0.115}, 0.031
+    actions.lower_to_release(sk, "box")
+    assert tried[-1] == 80.0
+    tried.clear()
+    sk.move = lambda part, **k: (tried.append(k["pitch"]), Result(False, "can't move there", {"refused": True}))[1]
+    assert not actions.hover_at(sk, 0.5).ok  # never past the shallowest tilt
+    assert tried[-1] >= prm.MIN_HOVER_PITCH_DEG.value > tried[-1] - 10.0  # EE_ROT_STEP_DEG
+
+
+def test_a_sag_raise_out_of_reach_tilts_too():
+    # Nov 6: straight down reached 16.9 cm, the ball sagged it 1.75 cm, the raise was refused.
+    tried = []
+
+    def move(part, **k):
+        tried.append((round(k["height"], 4), k["pitch"]))
+        ok = k["height"] < 0.18 or k["pitch"] <= 80.0
+        return Result(ok, "" if ok else "can't move there", {} if ok else {"refused": True})
+
+    sk = _height_sk({})
+    sk.move = move
+    sk.height = lambda: tried[-1][0] - 0.0175 if len(tried) == 1 else tried[-1][0]
+    assert actions.hover_at(sk, 0.1687).ok
+    assert tried == [(0.1687, 90.0), (0.1862, 90.0), (0.1862, 80.0)] and sk.hover_pitch == 80.0
+
+
+def test_a_hover_refused_by_the_robot_does_not_tilt():
+    tried = []
+    sk = _height_sk({})
+    sk.move = lambda part, **k: (tried.append(k["pitch"]), Result(False, "the robot refused", {"refused": False}))[1]
+    assert not actions.hover_at(sk, 0.12).ok and tried == [90.0]
+
+
+def test_the_hover_over_a_wide_container_skips_the_view_while_the_held_object_hides_it(monkeypatch):
+    sk = _height_sk({"shoe box": 0.115})
+    sk.widths = {"shoe box": 0.27}
+    sk.held_below = 0.031
+    monkeypatch.setattr(actions, "held_blocks_view", lambda sk: True)
+    clear = 0.115 + 0.031 + prm.PLACE_CLEARANCE_M.value + prm.LOOK_CLEARANCE_M.value
+    assert actions.place_height(sk, "shoe box", "hover") == pytest.approx(clear)
+    monkeypatch.setattr(actions, "held_blocks_view", lambda sk: False)
+    monkeypatch.setattr(actions, "lowest_view_height", lambda geom, width, h, start: 0.26)
+    assert actions.place_height(sk, "shoe box", "hover") > clear + 0.05
 
 
 def test_a_held_object_wider_than_half_the_wrist_view_hides_the_container(monkeypatch):

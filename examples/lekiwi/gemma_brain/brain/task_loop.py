@@ -54,6 +54,9 @@ class PlanBrain:
         if sk is not None:
             sk.holding = holding
         self.near_target = False  # the gripper is low beside a place target (see fold())
+        # Jaws found closed on something at the start, nothing named (--holding): the plan's
+        # first place names it (make_plan).
+        self.held_unnamed = False
 
     def frames(self) -> tuple[bytes, bytes]:
         now = time.time()
@@ -65,12 +68,18 @@ class PlanBrain:
 
     def make_plan(self, goal: str, front: bytes, wrist: bytes) -> tuple[list[Step] | None, str]:
         try:
-            steps, a = self.planner.plan(goal, front, wrist, self.holding)
+            held = self.holding or ("something: name it from the wrist image" if self.held_unnamed else None)
+            steps, a = self.planner.plan(goal, front, wrist, held)
         except ValueError as e:
             self.log.ev("plan", ok=False, error=str(e))
             return None, f"the planner's answer was not a plan: {e}"
         self.log.ev("plan", steps=[str(s) for s in steps], ms=round(a.ms))
         print(f"plan ({a.ms / 1000:.1f} s):\n  " + "\n  ".join(map(str, steps)))
+        if self.held_unnamed:
+            self.held_unnamed = False
+            self.holding = steps[0].obj if steps and steps[0].verb == "place" else "object in the gripper"
+            self.sk.holding = self.holding
+            self.log.ev("held_at_start", named=self.holding)
         problems = check_plan(steps, SUPPORTED, self.holding)
         if problems:
             self.log.ev("plan_rejected", problems=problems)
@@ -187,7 +196,11 @@ class PlanBrain:
     # --- the task ---
 
     def run(self, goal: str) -> tuple[bool, str]:
-        self.log.ev("goal", goal=goal, planner=self.planner.model.model, holding=self.holding)
+        # Holding something nobody named: Nov 6 the ball was still in the jaws from the run
+        # before, the plan picked it, and the look for it on the floor swung the base round.
+        self.held_unnamed = self.holding is None and self.sk.held()
+        self.log.ev("goal", goal=goal, planner=self.planner.model.model, holding=self.holding,
+                    held_unnamed=self.held_unnamed)
         self.sk.holding = self.holding
         # From rest, where every chain's first move was planned from: raised by hand, the move
         # down to the hover passed the shoulder lift's limit and the first pick was refused

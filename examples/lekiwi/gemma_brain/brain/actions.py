@@ -19,6 +19,7 @@ params.py or geometry.py one, so a new action adds a name, not a parameter to ca
 from __future__ import annotations
 
 import numpy as np
+from common.arm import EE_ROT_STEP_DEG
 from common.vision import ELONGATED_ASPECT, brick_angle, side_profile, snap_top
 
 from brain import params as prm
@@ -44,7 +45,7 @@ from brain.goals import (
     round_centre,
 )
 from brain.params import Param
-from brain.primitives import Result, Skills
+from brain.primitives import VERTICAL, Result, Skills
 
 
 def widest_band(profile: list[tuple[float, float]], height: float) -> tuple[float, float] | None:
@@ -243,7 +244,7 @@ def lift(sk: Skills) -> Result:
 
 
 def look_around(sk: Skills, obj: str) -> Result:
-    """Turn the base until the front camera finds `obj`: alternately left and right in widening
+    """Turn the base until the front camera finds `obj`: left, then right (look_offsets), in
     steps of (1 - LOOK_OVERLAP) of the view's width, all the way round; then back up
     LOOK_BACK_M once (it may be too close to see) and turn round again. The base ends facing
     the view it was found in. Oct 27 trial: the brick wasn't in the single forward view."""
@@ -267,6 +268,8 @@ def look_around(sk: Skills, obj: str) -> Result:
             if not r.ok:
                 return r
             at = off
+            if off == 0.0:  # back at the start between the sides: already looked here
+                continue
             det = sk.find(obj, "front")
             if det is not None:
                 return Result(True, data={"turned": at, "backed": backed, "det": det})
@@ -332,11 +335,14 @@ def carry(sk: Skills) -> Result:
 
 
 def hover_at(sk: Skills, height: Param | float) -> Result:
-    """The vertical gripper over the reach point at `height`, roll 0 (jaws as they are); where
-    the arm settles more than HEIGHT_TOL_M below it (sagging under a held load: measured), raised
-    by the difference once."""
+    """The gripper over the reach point at `height`, roll 0 (jaws as they are): pointing straight
+    down, or, where the arm can't reach that high so (the planner refuses: nothing sent), tilted
+    by EE_ROT_STEP_DEG more each try down to MIN_HOVER_PITCH_DEG (Nov 6: the shoe box's 17.6 cm
+    hover, straight down 16 cm at most); the tilt used is kept in sk.hover_pitch for the
+    descent after it. Where the arm settles more than HEIGHT_TOL_M below it (sagging under a held
+    load: measured), raised by the difference once."""
     h = height.value if isinstance(height, Param) else float(height)
-    r = sk.move("arm", xy=(prm.REACH_POINT_X_M.value, 0.0), height=h, roll=0.0)
+    r = _hover_tilted(sk, h, VERTICAL)
     measure = getattr(sk, "height", None)
     if not r.ok or measure is None:
         return r
@@ -344,7 +350,24 @@ def hover_at(sk: Skills, height: Param | float) -> Result:
     if sag <= prm.HEIGHT_TOL_M.value:
         return r
     sk.ev("sag", planned_m=round(h, 4), sag_m=round(sag, 4))
-    return sk.move("arm", xy=(prm.REACH_POINT_X_M.value, 0.0), height=h + sag, roll=0.0)
+    # The raise may need more tilt again (Nov 6: 16.9 cm straight down, then 1.75 cm of sag
+    # under the ball asked 18.6 cm, refused).
+    return _hover_tilted(sk, h + sag, sk.hover_pitch)
+
+
+def _hover_tilted(sk: Skills, h: float, pitch: float) -> Result:
+    """hover_at's move: at `pitch`, else tilted EE_ROT_STEP_DEG more each refused plan."""
+    while True:
+        r = sk.move("arm", xy=(prm.REACH_POINT_X_M.value, 0.0), height=h, roll=0.0, pitch=pitch)
+        tilted = pitch - EE_ROT_STEP_DEG
+        if r.ok or not r.data.get("refused") or tilted < prm.MIN_HOVER_PITCH_DEG.value:
+            break
+        pitch = tilted
+    if r.ok:
+        sk.hover_pitch = pitch
+        if pitch != VERTICAL:
+            sk.ev("hover_tilt", height_m=round(h, 4), pitch_deg=pitch)
+    return r
 
 
 def held_blocks_view(sk: Skills) -> bool:
@@ -386,7 +409,10 @@ def place_height(sk: Skills, target: str, which: str) -> float:
       release  the target's top (the approach's front camera) + how far the held object reaches
                below the jaws (the close) + PLACE_CLEARANCE_M: its bottom just over the top
       hover    the lowest height the target's whole width fits in the wrist view (the approach's
-               front camera), at least LOOK_CLEARANCE_M over the release
+               front camera), at least LOOK_CLEARANCE_M over the release; just that clearance
+               while the held object hides the target from the wrist camera (held_blocks_view:
+               placed by the front camera, the view is of no use; Nov 6: the 27 cm shoe box's
+               view asked a 26 cm hover the arm can't reach)
     The demo's heights for the same target are logged beside them, to compare. Without a
     measured height, the demo's absolute heights (made for its one container), noted."""
     h = sk.heights.get(target)
@@ -399,7 +425,7 @@ def place_height(sk: Skills, target: str, which: str) -> float:
     if which == "hover":
         out += prm.LOOK_CLEARANCE_M.value
         width = sk.widths.get(target, 0.0)
-        if width > 0.0:
+        if width > 0.0 and not held_blocks_view(sk):
             out = lowest_view_height(sk.geom, width, h, out)
     offsets = prm.demo_place_offsets()
     sk.ev("place_height", target=target, which=which, height_m=round(out, 4),
@@ -485,7 +511,9 @@ def lower_to_release(sk: Skills, target: str | None = None) -> Result:
     """Straight down to the release height over `target` (place_height); stops early if the held
     object meets something (the container's bottom)."""
     h = place_height(sk, target, "release") if target else prm.RELEASE_ABOVE_FLOOR_M.value
-    return sk.move("arm", height=h, until_contact=True)
+    # At the hover's tilt: the held object's lowest point is where the straight-down close
+    # measured it (hang) for a ball, which is round; a long object tilted hangs lower.
+    return sk.move("arm", height=h, until_contact=True, pitch=getattr(sk, "hover_pitch", VERTICAL))
 
 
 def release(sk: Skills) -> Result:

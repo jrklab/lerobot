@@ -76,6 +76,7 @@ class Skills:
         self.robot, self.arm, self.geom, self.log = robot, arm, geom, log
         self.main, self.fast = main, fast  # box models: the main one (26B) and the fast one (E2B)
         self.roll = 0.0
+        self.hover_pitch = VERTICAL  # the gripper's tilt at the last hover_at (actions.hover_at)
         self.seen: dict[str, Detection] = {}  # the last detection of each object, per camera
         self.heights: dict[str, float] = {}  # object heights measured side-on by the front camera
         self.widths: dict[str, float] = {}  # and their widths across its view (geometry.front_object_width)
@@ -140,11 +141,13 @@ class Skills:
     # --- move ---
 
     def move(self, part: str = "arm", *, xy=None, height: float | None = None, delta=None,
-             roll: float | None = None, until_contact: bool = False, speed: float | None = None) -> Result:
+             roll: float | None = None, until_contact: bool = False, speed: float | None = None,
+             pitch: float = VERTICAL) -> Result:
         """One plain move.
 
         arm: to `height` (jaw tips above the floor) over TCP `xy` (default: where it is), or by
-        `delta` (dx, dy, dz in metres); `roll` turns the wrist; until_contact: the Pi stops the
+        `delta` (dx, dy, dz in metres); `roll` turns the wrist; `pitch` tilts the gripper (the arm
+        model's, down from horizontal: VERTICAL points it straight down); until_contact: the Pi stops the
         move where the TCP meets something (data["contact_z"]), searching at most
         LAND_SEARCH_M past the goal. Refused, with nothing sent, out of reach or too low.
         base: `delta` = (dx, dy) in metres or `roll` = a turn in degrees, never both: a
@@ -173,11 +176,11 @@ class Skills:
             # took 13 s, a 10 -> 3 cm descent 7 s, all at 1 cm/s (Oct 28 trials).
             mid = p + (goal - p) * (clear - h_from) / (h_to - h_from)
             down = h_to < h_from
-            r = self.move("arm", delta=tuple(mid - p), roll=roll,
+            r = self.move("arm", delta=tuple(mid - p), roll=roll, pitch=pitch,
                           speed=prm.FREE_SPEED_MPS.value if down else prm.NEAR_SPEED_MPS.value)
             if not r.ok:
                 return r
-            return self.move("arm", delta=tuple(goal - self.cmd_tcp()), roll=roll,
+            return self.move("arm", delta=tuple(goal - self.cmd_tcp()), roll=roll, pitch=pitch,
                              speed=prm.NEAR_SPEED_MPS.value if down else prm.FREE_SPEED_MPS.value)
         speed = speed or (prm.NEAR_SPEED_MPS.value if low else prm.FREE_SPEED_MPS.value)
         search = prm.LAND_SEARCH_M.value if until_contact else 0.0
@@ -193,11 +196,11 @@ class Skills:
             z_min = min(self.arm.z_min, z_min)
         try:
             if until_contact:
-                wps, durs = plan_ee_line(self.arm.calib, self.arm.targets(), goal.tolist(), VERTICAL, roll, speed,
+                wps, durs = plan_ee_line(self.arm.calib, self.arm.targets(), goal.tolist(), pitch, roll, speed,
                                          z_min=goal[2] - search)
                 res = self.robot.trajectory(wps, durs, z_min=z_min, contact_stop=True).get("result", {})
             else:
-                self.arm.move_to(goal.tolist(), pitch_deg=VERTICAL, roll_deg=roll, speed=speed, z_min=z_min)
+                self.arm.move_to(goal.tolist(), pitch_deg=pitch, roll_deg=roll, speed=speed, z_min=z_min)
                 res = {}
         except PlanError as e:
             return Result(False, f"can't move there: {e}", {"goal": goal.round(4).tolist(), "refused": True})

@@ -353,13 +353,15 @@ def grasp_spot(geom: Geometry) -> np.ndarray:
 
 
 def look_offsets(step_deg: float) -> list[float]:
-    """Headings (deg from the start, left positive) for a look around: alternately left and
-    right in widening steps, ending turned right round."""
-    offsets, k = [], 1
+    """Headings (deg from the start, left positive) for a look around: left in steps, back to
+    the start (0.0: turned through, not looked at again), right in steps, ending turned right
+    round. Until Nov 6 it went alternately left and right in widening steps: turns of 35, 70,
+    105, 140, 175 deg, back and forth, 525 deg in five with the Ethernet cable to the Mac on."""
+    side, k = [], 1
     while k * step_deg < 180:  # convention: half a turn either way covers the circle
-        offsets += [k * step_deg, -k * step_deg]
+        side.append(k * step_deg)
         k += 1
-    return offsets + [180.0]  # convention: facing backwards
+    return side + [0.0] + [-a for a in side] + [180.0]  # convention: facing backwards
 
 
 def wrap_deg(a: float) -> float:
