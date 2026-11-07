@@ -28,6 +28,7 @@ from __future__ import annotations
 
 from brain import actions, params as prm
 from brain.goals import BesideGoal
+from brain.markers import marker_ids
 from brain.primitives import Result, Skills
 
 
@@ -72,11 +73,16 @@ def place_in(sk: Skills, obj: str, container: str, drive: bool = True) -> Result
     to the demo's release height, then opened. A held object that hides the container from the
     wrist camera (actions.held_blocks_view: a tennis ball) is placed by the front camera instead:
     the approach stops short of the container, the arm rises over it, the base drives in."""
+    if drive and marker_ids(container):
+        r = place_in_marked(sk, obj, container)
+        if not r.data.get("no_marker"):
+            return r
+        sk.ev("marker_fallback", obj=container, why=r.reason)
     if actions.held_blocks_view(sk):
         return place_in_large(sk, obj, container, drive)
     steps = [("holding", lambda: Result(sk.held(), "" if sk.held() else f"not holding the {obj}"))]
     steps += [("carry", lambda: actions.carry(sk)),
-              ("approach", lambda: actions.approach(sk, container, prm.PLACE_APPROACH_TOL_M))] if drive else []
+              ("approach", lambda: actions.approach(sk, container, prm.PLACE_APPROACH_TOL_M, fast_ok=False))] if drive else []
     steps += [
         ("hover", lambda: actions.hover_at(sk, actions.place_height(sk, container, "hover"))),
         ("over", lambda: actions.over_container(sk, container)),
@@ -88,6 +94,26 @@ def place_in(sk: Skills, obj: str, container: str, drive: bool = True) -> Result
     return run(steps)
 
 
+def place_in_marked(sk: Skills, obj: str, container: str) -> Result:
+    """place_in by the container's marker (brain/markers.py), no box model: approach with the
+    held object short of the near wall (it may hang below the rim until the arm rises), rise
+    over the face's measured top, drive in by the marker again from close, lower, open, check.
+    Nov 6: with two boxes in view the main model boxed the wrong one."""
+    steps = [("holding", lambda: Result(sk.held(), "" if sk.held() else f"not holding the {obj}")),
+             ("carry", lambda: actions.carry(sk)),
+             ("approach", lambda: actions.approach_marker(sk, container, 2 * actions.release_inside(sk))),
+             ("hover", lambda: actions.hover_at(sk, actions.place_height(sk, container, "hover"))),
+             ("in", lambda: actions.approach_marker(sk, container, 0.0, look=False)),
+             ("lower", lambda: actions.lower_to_release(sk, container)),
+             ("release", lambda: actions.release(sk)),
+             ("up", lambda: actions.hover_at(sk, actions.place_height(sk, container, "hover"))),
+             ("check", lambda: actions.check_in(sk, obj, container))]
+    r = run(steps)
+    if not r.ok and r.data.get("failed") == "approach" and r.data.get("no_marker"):
+        return Result(False, r.reason, {"no_marker": True})
+    return r
+
+
 def place_in_large(sk: Skills, obj: str, container: str, drive: bool = True) -> Result:
     """place_in for a held object the wrist camera can't see past (Nov 5: the tennis ball hid the
     cup, and hanging low it pushed the cup's rim): stop short of the container by the object's
@@ -95,7 +121,7 @@ def place_in_large(sk: Skills, obj: str, container: str, drive: bool = True) -> 
     front camera's measure of its middle, lower, open wide, check."""
     steps = [("holding", lambda: Result(sk.held(), "" if sk.held() else f"not holding the {obj}"))]
     steps += [("carry", lambda: actions.carry(sk)),
-              ("approach", lambda: actions.approach(sk, container, prm.REACH_TOL_M, actions.place_standoff(sk)))] if drive else []
+              ("approach", lambda: actions.approach(sk, container, prm.REACH_TOL_M, actions.place_standoff(sk), fast_ok=False))] if drive else []
     steps += [
         ("hover", lambda: actions.hover_at(sk, actions.place_height(sk, container, "hover"))),
         ("over", lambda: actions.over_by_front(sk, container)),

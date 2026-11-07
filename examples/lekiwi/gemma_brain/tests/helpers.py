@@ -121,7 +121,7 @@ class SimServo:
     def move_measured(self, delta):
         return self.move("arm", delta=delta)
 
-    def find(self, obj, cam, angle=False):
+    def find(self, obj, cam, angle=False, fast_ok=True):
         u, v = self.point
         return Detection(box=[u - 0.08, v - 0.1, u, v + 0.1])
 

@@ -133,7 +133,7 @@ def test_look_around_turns_left_and_right_until_it_finds_the_object():
             self.geom.front = {"u_per_deg": 0.0184}
             self.heading, self.bearing, self.near, self.turns, self.backs = 0.0, bearing, near, [], 0
 
-        def find(self, obj, cam):
+        def find(self, obj, cam, fast_ok=True):
             half_view = 0.5 / self.geom.front["u_per_deg"]
             visible = abs((self.bearing - self.heading + 180) % 360 - 180) <= half_view and not self.near
             return Detection(box=[0.4, 0.4, 0.5, 0.5]) if visible else None
@@ -161,7 +161,7 @@ def test_look_around_turns_left_and_right_until_it_finds_the_object():
     # Nothing there (Oct 28: no brick placed): all the way round, each turn the short way, and
     # back to the start; the last one asked 343 deg and was refused.
     w = World(bearing=0.0, near=True)
-    w.find = lambda obj, cam: None
+    w.find = lambda obj, cam, fast_ok=True: None
     assert not actions.look_around(w, "red block").ok
     assert max(abs(t) for t in w.turns) <= 180.0 and abs((w.heading + 180) % 360 - 180) < 1e-6, w.turns
 
@@ -285,7 +285,7 @@ def test_place_in_runs_over_lower_release(monkeypatch):
 
     calls = []
     monkeypatch.setattr(prm, "demo_place_view", lambda: ([0.15, 0.05, 0.75, 0.80], 0.106))
-    monkeypatch.setattr(chains.actions, "approach", lambda sk, o, tol=None: (calls.append("approach"), chains.Result(True))[1])
+    monkeypatch.setattr(chains.actions, "approach", lambda sk, o, tol=None, fast_ok=True: (calls.append("approach" if not fast_ok else "approach fast"), chains.Result(True))[1])
     monkeypatch.setattr(chains.actions, "carry", lambda sk: (calls.append("carry"), chains.Result(True))[1])
     monkeypatch.setattr(chains.actions, "over_container", lambda sk, c: (calls.append("over"), chains.Result(True))[1])
     sk = _chain_sk(calls)
@@ -334,7 +334,7 @@ def test_the_approachs_first_drive_uses_the_main_models_look():
             looks.append(fast_ok)
             return make(self.first_by if len(looks) == 1 else "main")
 
-        def servo(self, obj, goal, part=None, first=None):
+        def servo(self, obj, goal, part=None, first=None, fast_ok=True):
             used.append(first.by)
             return Result(True)
 
@@ -744,7 +744,7 @@ def test_a_large_held_object_is_placed_by_the_front_camera(monkeypatch):
     calls = []
     monkeypatch.setattr(chains.actions, "held_blocks_view", lambda sk: True)
     monkeypatch.setattr(chains.actions, "approach",
-                        lambda sk, o, tol=None, stop_short=0.0: (calls.append(f"approach short {stop_short > 0}"), chains.Result(True))[1])
+                        lambda sk, o, tol=None, stop_short=0.0, fast_ok=True: (calls.append(f"approach short {stop_short > 0}" + (" fast" if fast_ok else "")), chains.Result(True))[1])
     monkeypatch.setattr(chains.actions, "carry", lambda sk: (calls.append("carry"), chains.Result(True))[1])
     monkeypatch.setattr(chains.actions, "over_by_front", lambda sk, c: (calls.append("over by front"), chains.Result(True))[1])
     sk = _chain_sk(calls)
@@ -753,3 +753,83 @@ def test_a_large_held_object_is_placed_by_the_front_camera(monkeypatch):
     sk.held = lambda: next(seq)
     assert chains.place_in(sk, "tennis ball", "paper cup").ok
     assert calls == ["carry", "approach short True", "move", "over by front", "move", "open", "move"]
+
+
+class _MarkedBoxWorld:
+    """A box face with a marker, seen by the front camera: base turns and drives move it in the
+    arm frame (the base turning about the arm's origin, for simplicity)."""
+
+    def __init__(self, centre, heading_deg):
+        a = np.radians(heading_deg)
+        self.centre, self.normal = np.array(centre, float), np.array([-np.cos(a), -np.sin(a), 0.0])
+        self.moves, self.heights, self.events, self.grasp_width = [], {}, [], 0.065
+        self.marker_img = None
+
+        class Cams:
+            turn_centre = np.zeros(2)
+            front = T_base_cam = None
+
+        class G:
+            floor_seen_z = -0.1
+            cams = Cams
+
+            @staticmethod
+            def front_turn_and_distance(p):
+                return float(np.degrees(np.arctan2(p[1], p[0]))), 0.0
+
+        self.geom = G()
+
+    def ev(self, name, **k):
+        self.events.append((name, k))
+
+    def move(self, part, delta=None, roll=None, **k):
+        from brain.primitives import Result
+
+        self.moves.append(("turn", round(roll, 1)) if roll is not None else ("drive", round(delta[0], 3)))
+        if roll is not None:
+            c, s = np.cos(np.radians(-roll)), np.sin(np.radians(-roll))
+            rot = np.array([[c, -s, 0], [s, c, 0], [0, 0, 1]])
+            self.centre, self.normal = rot @ self.centre, rot @ self.normal
+        else:
+            self.centre = self.centre - [delta[0], delta[1], 0.0]
+        return Result(True)
+
+    def marker(self):
+        from brain.markers import MarkerPose
+
+        return MarkerPose(91, self.centre.copy(), self.normal.copy(), np.zeros((4, 2)), float(np.linalg.norm(self.centre)))
+
+
+def test_a_marked_box_is_approached_by_its_marker_and_measured_by_its_face(monkeypatch):
+    w = _MarkedBoxWorld([0.50, 0.25, -0.05], 20.0)
+    monkeypatch.setattr(actions, "find_marker", lambda sk, c: w.marker())
+    monkeypatch.setattr(actions, "face_top_z", lambda img, m, lens, t: 0.017)
+    stop = 2 * actions.release_inside(w)
+    assert actions.approach_marker(w, "shoe box", stop).ok
+    p = w.centre - w.normal * actions.release_inside(w)
+    assert abs(np.degrees(np.arctan2(p[1], p[0]))) <= prm.MIN_BASE_TURN_DEG.value
+    assert np.hypot(p[0], p[1]) == pytest.approx(prm.REACH_POINT_X_M.value + stop, abs=prm.REACH_TOL_M.value)
+    assert w.moves[0][0] == "turn" and w.heights["shoe box"] == pytest.approx(0.117)
+    assert w.marked == {"shoe box": actions.release_inside(w)}
+
+
+def test_a_marked_box_without_its_marker_in_view_says_so(monkeypatch):
+    w = _MarkedBoxWorld([0.50, 0.0, -0.05], 0.0)
+    monkeypatch.setattr(actions, "find_marker", lambda sk, c: None)
+    monkeypatch.setattr(actions, "look_around", lambda sk, obj, fast_ok=True, look=None: chains.Result(False, "none"))
+    r = actions.approach_marker(w, "shoe box", 0.0)
+    assert not r.ok and r.data["no_marker"]
+
+
+def test_a_place_in_a_marked_box_falls_back_to_the_box_models_only_without_its_marker(monkeypatch):
+    calls = []
+    monkeypatch.setattr(chains.actions, "held_blocks_view", lambda sk: True)
+    monkeypatch.setattr(chains, "place_in_large", lambda sk, o, c, d: (calls.append("models"), chains.Result(True))[1])
+    sk = _height_sk({})
+    monkeypatch.setattr(chains, "place_in_marked", lambda sk, o, c: (calls.append("marker"), chains.Result(False, "x", {"no_marker": True}))[1])
+    assert chains.place_in(sk, "tennis ball", "shoe box").ok and calls == ["marker", "models"]
+    calls.clear()
+    monkeypatch.setattr(chains, "place_in_marked", lambda sk, o, c: (calls.append("marker"), chains.Result(False, "lower: x"))[1])
+    assert not chains.place_in(sk, "tennis ball", "shoe box").ok and calls == ["marker"]
+    calls.clear()
+    assert chains.place_in(sk, "tennis ball", "paper cup").ok and calls == ["models"]

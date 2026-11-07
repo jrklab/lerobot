@@ -18,6 +18,7 @@ params.py or geometry.py one, so a new action adds a name, not a parameter to ca
 
 from __future__ import annotations
 
+import cv2
 import numpy as np
 from common.arm import EE_ROT_STEP_DEG
 from common.vision import ELONGATED_ASPECT, brick_angle, side_profile, snap_top
@@ -32,6 +33,7 @@ from brain.geometry import (
     locate_from_one_view,
     look_offsets,
     lowest_view_height,
+    near_distance,
     view_half_width,
     wrap_deg,
 )
@@ -44,6 +46,7 @@ from brain.goals import (
     placed_beside,
     round_centre,
 )
+from brain.markers import face_top_z, find_markers, marker_ids
 from brain.params import Param
 from brain.primitives import VERTICAL, Result, Skills
 
@@ -243,12 +246,15 @@ def lift(sk: Skills) -> Result:
     return Result(held, "" if held else "nothing held after the lift", {**r.data, "held": held})
 
 
-def look_around(sk: Skills, obj: str) -> Result:
+def look_around(sk: Skills, obj: str, fast_ok: bool = True, look=None) -> Result:
     """Turn the base until the front camera finds `obj`: left, then right (look_offsets), in
     steps of (1 - LOOK_OVERLAP) of the view's width, all the way round; then back up
     LOOK_BACK_M once (it may be too close to see) and turn round again. The base ends facing
-    the view it was found in. Oct 27 trial: the brick wasn't in the single forward view."""
-    det = sk.find(obj, "front")
+    the view it was found in. Oct 27 trial: the brick wasn't in the single forward view.
+    fast_ok: as Skills.find. look: what one look is (default the front camera's find), returning
+    what it found or None (find_marker)."""
+    look = look or (lambda: sk.find(obj, "front", fast_ok=fast_ok))
+    det = look()
     if det is not None:
         return Result(True, data={"turned": 0.0, "det": det})
     step = (1 - prm.LOOK_OVERLAP.value) * sk.geom.front_view_deg()  # share of the view's width, in deg
@@ -257,7 +263,7 @@ def look_around(sk: Skills, obj: str) -> Result:
             r = sk.move("base", delta=(-prm.LOOK_BACK_M.value, 0.0))
             if not r.ok:
                 return r
-            det = sk.find(obj, "front")
+            det = look()
             if det is not None:
                 return Result(True, data={"turned": 0.0, "backed": True, "det": det})
         at = 0.0
@@ -270,7 +276,7 @@ def look_around(sk: Skills, obj: str) -> Result:
             at = off
             if off == 0.0:  # back at the start between the sides: already looked here
                 continue
-            det = sk.find(obj, "front")
+            det = look()
             if det is not None:
                 return Result(True, data={"turned": at, "backed": backed, "det": det})
         r = sk.move("base", roll=-at)  # face the start again before backing up or giving up
@@ -279,17 +285,19 @@ def look_around(sk: Skills, obj: str) -> Result:
     return Result(False, f"no {obj} in a full look around, nor after backing up")
 
 
-def approach(sk: Skills, obj: str, tol=None, stop_short: float = 0.0) -> Result:
+def approach(sk: Skills, obj: str, tol=None, stop_short: float = 0.0, fast_ok: bool = True) -> Result:
     """Base: find the object (looking around if it isn't in the forward view), then turn and
     drive until the front camera sees it at the reach point. The first drive is measured on the
     main model's box, the look that found it, not a second look a second later: from 0.5 m away
     one pixel of the box's bottom is ~1.5 cm, and the fast model's box sat 7 px higher than the
     main model's of the same view, the drive went 9 cm too far and lost the brick (Oct 29,
-    run 20261029T071804)."""
-    r = look_around(sk, obj)
+    run 20261029T071804). fast_ok=False: the main model only, for a container (place_in): the
+    fast model's boxes of the black shoe box passed its colour check on other dark things, and
+    the place drove to them (Nov 6, run 20261106T205655: the "box" measured 4.7 and 1.5 cm tall)."""
+    r = look_around(sk, obj, fast_ok)
     if r.ok:
         first = r.data["det"] if r.data["det"].by == "main" else sk.find(obj, "front", fast_ok=False)
-        r = sk.servo(obj, FrontApproachGoal(tol, stop_short), first=first)
+        r = sk.servo(obj, FrontApproachGoal(tol, stop_short), first=first, fast_ok=fast_ok)
     det = sk.seen.get(f"front:{obj}")
     if r.ok and det is not None:  # side-on, for placing into it later (front_object_height)
         box, how = snap_top(det.jpeg, det.box)  # the box's top up to a rim it left out (Nov 4)
@@ -303,6 +311,72 @@ def approach(sk: Skills, obj: str, tol=None, stop_short: float = 0.0) -> Result:
             sk.widest[obj] = widest
             sk.ev("object_profile", obj=obj, widest_from_m=round(widest[0], 4), widest_to_m=round(widest[1], 4))
     return r
+
+
+def find_marker(sk: Skills, container: str):
+    """The container's marker (brain/markers.py) in a fresh front frame, the nearest if both of
+    its sides show; None if neither does. The frame is kept with it (sk.marker_img) for the face's
+    top."""
+    jpeg = sk.frame("front")
+    if jpeg is None:
+        return None
+    img = cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_COLOR)
+    found = find_markers(img, sk.geom.cams.front, sk.geom.cams.T_base_cam, marker_ids(container))
+    if not found:
+        sk.ev("marker", obj=container, found=False)
+        return None
+    m = min(found, key=lambda f: f.distance_m)
+    sk.marker_img = img
+    sk.ev("marker", obj=container, found=True, id=m.id, centre=[round(float(v), 4) for v in m.centre],
+          heading_deg=round(m.heading_deg(), 1), distance_m=round(m.distance_m, 3))
+    return m
+
+
+def release_inside(sk: Skills) -> float:
+    """How far past a marked container's near wall the held object is let go: its half width and
+    the place clearance, so it clears the wall."""
+    return (getattr(sk, "grasp_width", None) or 0.0) / 2 + prm.PLACE_CLEARANCE_M.value
+
+
+def approach_marker(sk: Skills, container: str, stop_short: float, look: bool = True) -> Result:
+    """Base: the release point (release_inside past the marked face, along its facing) straight
+    ahead of the arm and stop_short beyond the reach point: turn, then drive, re-measuring the
+    marker after each move. look: search for it first (look_around), else it must be in view. On
+    arrival the face's top sets the container's height (markers.face_top_z), no box model asked
+    (Nov 6: the main model boxed the white box beside the shoe box as it, and the ball went there).
+    data["no_marker"]: never seen, for the caller's fallback."""
+    inside = release_inside(sk)
+    if look:
+        r = look_around(sk, container, look=lambda: find_marker(sk, container))
+        if not r.ok:
+            return Result(False, f"no marker of the {container} in view", {"no_marker": True})
+        m = r.data["det"]
+    else:
+        m = find_marker(sk, container)
+    for _ in range(int(prm.SERVO_MAX_LOOKS.value)):
+        if m is None:
+            return Result(False, f"lost the {container}'s marker in the front camera")
+        p = m.centre - m.normal * inside
+        turn, _ = sk.geom.front_turn_and_distance(p)
+        drive = near_distance(sk.geom.cams, p) - (prm.REACH_POINT_X_M.value + stop_short)
+        sk.ev("marker_approach", obj=container, turn_deg=round(turn, 2), drive_m=round(drive, 4))
+        if abs(turn) > prm.MIN_BASE_TURN_DEG.value:
+            r = sk.move("base", roll=turn)
+        elif abs(drive) > prm.REACH_TOL_M.value:
+            r = sk.move("base", delta=(drive, 0.0))
+        else:
+            top = face_top_z(sk.marker_img, m, sk.geom.cams.front, sk.geom.cams.T_base_cam)
+            if top is not None:
+                sk.heights[container] = top - sk.geom.floor_seen_z
+            elif container not in getattr(sk, "marked", {}):  # close up the top may be out of view: the far look's stands
+                return Result(False, f"the top of the {container}'s marked face isn't in view")
+            sk.marked = {**getattr(sk, "marked", {}), container: inside}
+            sk.ev("object_height", obj=container, height_m=round(sk.heights[container], 4), by="marker")
+            return Result(True)
+        if not r.ok:
+            return r
+        m = find_marker(sk, container)
+    return Result(False, f"the {container}'s marker not reached in {int(prm.SERVO_MAX_LOOKS.value)} looks")
 
 
 def hover(sk: Skills) -> Result:
@@ -425,7 +499,7 @@ def place_height(sk: Skills, target: str, which: str) -> float:
     if which == "hover":
         out += prm.LOOK_CLEARANCE_M.value
         width = sk.widths.get(target, 0.0)
-        if width > 0.0 and not held_blocks_view(sk):
+        if width > 0.0 and not held_blocks_view(sk) and target not in getattr(sk, "marked", {}):
             out = lowest_view_height(sk.geom, width, h, out)
     offsets = prm.demo_place_offsets()
     sk.ev("place_height", target=target, which=which, height_m=round(out, 4),
@@ -535,7 +609,17 @@ def check_in(sk: Skills, obj: str, container: str) -> Result:
     A miss hidden behind the container passes. The same find() as the approach, nothing else
     (owner, Oct 29: the wrist pixel counts had grown too hand-crafted)."""
     det = sk.find(obj, "front", fast_ok=False)
-    if det is not None and sk.widths.get(container, 0.0) > 0.0:
+    marked = getattr(sk, "marked", {}).get(container)
+    if det is not None and marked is not None:
+        # Placed by its marker: a miss off the near rim lands in front of the face, the release
+        # point `inside` behind it; a ball further off is another one (Nov 6: three on the floor).
+        p = sk.geom.front_point(((det.box[0] + det.box[2]) / 2, det.box[3]))
+        off = np.inf if p is None else float(np.hypot(p[0] - prm.REACH_POINT_X_M.value, p[1]))
+        if off > prm.MARKED_MISS_SPAN.value * marked:
+            sk.ev("place_check", obj=obj, target=container, on_floor=False, box=det.box,
+                  far_m=None if p is None else round(off, 3), why="seen too far from the release to be it")
+            return Result(True)
+    if det is not None and marked is None and sk.widths.get(container, 0.0) > 0.0:
         # A miss lands by the container: one let go just over its rim falls within its width of
         # where it was let go (the reach point). Further off it's something else (Nov 4: a
         # basketball 2 m away boxed as the red block, and the retry drove for it).

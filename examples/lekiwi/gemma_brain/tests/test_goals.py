@@ -155,7 +155,7 @@ def test_above_goal_converges_on_a_container(monkeypatch):
         def move_measured(self, delta):
             return self.move("arm", delta=delta)
 
-        def find(self, obj, cam, angle=False):
+        def find(self, obj, cam, angle=False, fast_ok=True):
             u, v = self.centre
             return Detection(box=[u - 0.3, v - 0.35, u + 0.3, v + 0.35])
 

@@ -432,15 +432,17 @@ class Skills:
     # --- servo ---
 
 
-    def servo(self, obj: str, goal, part: str | None = None, first: Detection | None = None) -> Result:
+    def servo(self, obj: str, goal, part: str | None = None, first: Detection | None = None,
+              fast_ok: bool = True) -> Result:
         """Move `part` (default the goal's) until `goal` is met for `obj` in the goal's camera:
         find, measure the goal's error, stop when it's within tolerance, else one capped move.
-        first: a detection just made, for the first step instead of looking again."""
+        first: a detection just made, for the first step instead of looking again. fast_ok:
+        False, the main model only (find)."""
         part = part or goal.part
         angle = goal.__class__.__name__ == "AngleGoal"
         err = None
         for k in range(int(prm.SERVO_MAX_LOOKS.value)):
-            det = first if (k == 0 and first is not None) else self.find(obj, goal.cam, angle=angle)
+            det = first if (k == 0 and first is not None) else self.find(obj, goal.cam, angle=angle, fast_ok=fast_ok)
             if det is None:
                 return Result(False, f"lost the {obj} in the {goal.cam} camera", {"looks": k})
             if angle and det.angle_deg is None:
