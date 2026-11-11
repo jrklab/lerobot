@@ -188,6 +188,17 @@ body.locked .joystick, body.locked .jog-btn, body.locked .hold-btn { opacity: 0.
 .status-list .good { color: var(--ok); }
 .status-list .warn { color: var(--warn); }
 .status-list .bad { color: var(--danger); }
+.cams-title { margin-top: 1.2rem; }
+.cam-ctl { margin-top: 0.5rem; }
+.cam-ctl-state { font-size: 0.8rem; color: var(--muted); }
+.cam-ctl-preview { display: block; width: 100%; max-width: 480px; aspect-ratio: 4 / 3; background: #000; border-radius: 6px; margin: 0.4rem 0; }
+.cam-ctl-body { display: grid; grid-template-columns: auto 1fr auto; gap: 0.5rem 0.8rem; align-items: center; font-size: 0.9rem; }
+.cam-ctl-body label { color: var(--muted); }
+.cam-ctl-body .off { opacity: 0.4; }
+.cam-ctl-body input[type="range"] { width: 100%; min-height: var(--tap); }
+.cam-ctl-body select { min-height: var(--tap); background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 6px; }
+.cam-ctl-body output { min-width: 3.5em; text-align: right; font-variant-numeric: tabular-nums; }
+.cam-ctl-reset { margin-top: 0.6rem; min-height: var(--tap); padding: 0 1rem; background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 6px; }
 
 /* --- the phone's tab bar, within thumb reach --- */
 body { padding-bottom: calc(52px + env(safe-area-inset-bottom)); } /* room for the tab bar */

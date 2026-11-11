@@ -413,6 +413,8 @@ class RobotBridge:
         self._obs_failure_since: float | None = None
         self._last_camera_reconnect_attempt = 0.0
         self._camera_reconnect_in_progress = False
+        # Called after the cameras reconnect (server.py: their kept image controls again).
+        self.after_camera_reconnect = None
 
     def start(self) -> None:
         bus = getattr(self._robot, "bus", None)
@@ -1222,6 +1224,11 @@ class RobotBridge:
                     logger.info("Camera %r reconnected", cam_key)
                 except Exception:
                     logger.exception("Failed to reconnect camera %r", cam_key)
+            if self.after_camera_reconnect is not None:
+                try:
+                    self.after_camera_reconnect()
+                except Exception:
+                    logger.exception("Error re-applying the cameras' controls after the reconnect")
         finally:
             self._camera_reconnect_in_progress = False
 

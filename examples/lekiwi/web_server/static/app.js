@@ -627,6 +627,89 @@ function renderEpisodeList(recording, container) {
     .join("");
 }
 
+// --- The cameras' image controls (Status tab; server camera_controls.py) ---
+
+const CAM_CTL_LABELS = {
+  auto_exposure: "Exposure mode",
+  exposure_time_absolute: "Exposure time (x0.1 ms)",
+  exposure_dynamic_framerate: "Slower frames in the dark",
+  brightness: "Brightness",
+  gain: "Gain",
+  backlight_compensation: "Backlight compensation",
+  white_balance_automatic: "Auto white balance",
+  power_line_frequency: "Mains flicker",
+};
+const CAM_CTL_SEND_MS = 150; // a slider's value goes out at most this often while it moves
+
+function camCtlRender(block, controls) {
+  const body = block.querySelector(".cam-ctl-body");
+  body.innerHTML = "";
+  for (const [name, c] of Object.entries(controls)) {
+    const label = document.createElement("label");
+    label.textContent = CAM_CTL_LABELS[name] || name;
+    let input;
+    const out = document.createElement("output");
+    if (c.menu) {
+      input = document.createElement("select");
+      for (const [v, text] of Object.entries(c.menu)) input.add(new Option(text, v, false, Number(v) === c.value));
+    } else if (c.type === "bool") {
+      input = document.createElement("input");
+      input.type = "checkbox";
+      input.checked = c.value === 1;
+    } else {
+      input = document.createElement("input");
+      input.type = "range";
+      Object.assign(input, { min: c.min, max: c.max, step: c.step, value: c.value });
+      out.textContent = c.value;
+      input.addEventListener("input", () => (out.textContent = input.value));
+    }
+    // Inactive: set by the camera itself (the exposure time under auto exposure).
+    input.disabled = c.inactive;
+    [label, input, out].forEach((el) => el.classList.toggle("off", c.inactive));
+    const value = () => (input.type === "checkbox" ? (input.checked ? 1 : 0) : Number(input.value));
+    let timer = null;
+    const sendNow = () => {
+      timer = null;
+      camCtlSend(block, { [name]: value() });
+    };
+    input.addEventListener(input.type === "range" ? "input" : "change", () => {
+      if (!timer) timer = setTimeout(sendNow, CAM_CTL_SEND_MS);
+    });
+    body.append(label, input, out);
+  }
+}
+
+async function camCtlRequest(block, url, body) {
+  const state = block.querySelector(".cam-ctl-state");
+  try {
+    const r = await fetch(url, body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const j = await r.json();
+    if (!j.ok) throw new Error(j.reason || r.statusText);
+    state.textContent = "";
+    camCtlRender(block, j.controls);
+  } catch (e) {
+    state.textContent = "not available";
+    showToast(`${block.dataset.cam} camera: ${e.message}`, true);
+  }
+}
+
+function camCtlSend(block, values) {
+  return camCtlRequest(block, `/camera/${block.dataset.cam}/controls`, values);
+}
+
+function setupCameraControls() {
+  document.querySelectorAll(".cam-ctl").forEach((block) => {
+    const cam = block.dataset.cam;
+    const preview = block.querySelector(".cam-ctl-preview");
+    block.addEventListener("toggle", () => {
+      setSrc(preview, block.open ? `/video/${cam}` : "");
+      if (block.open) camCtlRequest(block, `/camera/${cam}/controls`);
+    });
+    block.querySelector(".cam-ctl-reset").addEventListener("click", () =>
+      camCtlRequest(block, `/camera/${cam}/controls/reset`, {}));
+  });
+}
+
 function escapeHtml(str) {
   const div = document.createElement("div");
   div.textContent = str;
@@ -641,6 +724,7 @@ window.addEventListener("DOMContentLoaded", () => {
   setupJogButtons();
   setupResetButton();
   setupRecordingUI();
+  setupCameraControls();
   updateVideoStreams();
   connectWs();
 });

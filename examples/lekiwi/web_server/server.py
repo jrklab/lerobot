@@ -49,6 +49,7 @@ from fastapi.staticfiles import StaticFiles
 sys.path.insert(0, str(Path(__file__).parent))
 
 from auto_control import CommandRefused  # noqa: E402
+from camera_controls import CameraControls  # noqa: E402
 from episode_recorder import EpisodeRecorder  # noqa: E402
 from gamepad_input import GamepadInput  # noqa: E402
 from robot_bridge import (  # noqa: E402
@@ -86,6 +87,7 @@ app.mount("/static", NoCacheStaticFiles(directory=STATIC_DIR), name="static")
 
 bridge: RobotBridge | None = None
 gamepad: GamepadInput | None = None
+camera_controls: CameraControls | None = None  # None with --mock (no cameras)
 
 # Uploading to the Hub only works when the Pi has a route to the internet (only true when
 # Ethernet is plugged into the host -- the Pi's own hotspot mode, used for cordless ground
@@ -243,6 +245,37 @@ def auto_write_calibration(body: dict = Body(...)):
         logger.warning("auto: calibration write refused: %s", e)
         return JSONResponse({"ok": False, "reason": str(e)}, status_code=409)
     return {"ok": True, **result}
+
+
+# --- the cameras' image controls (camera_controls.py): exposure and the like, from the page ---
+
+
+def _camera_controls_call(cam_name: str, fn):
+    if camera_controls is None or cam_name not in camera_controls.devices:
+        return JSONResponse({"ok": False, "reason": f"no {cam_name} camera here"}, status_code=404)
+    try:
+        return {"ok": True, "controls": fn()}
+    except ValueError as e:
+        return JSONResponse({"ok": False, "reason": str(e)}, status_code=400)
+    except Exception as e:  # v4l2-ctl missing, failed or timed out: the page shows it
+        logger.warning("camera %s controls: %s", cam_name, e)
+        return JSONResponse({"ok": False, "reason": str(e)}, status_code=502)
+
+
+@app.get("/camera/{cam_name}/controls")
+def camera_controls_get(cam_name: str):
+    return _camera_controls_call(cam_name, lambda: camera_controls.read(cam_name))
+
+
+@app.post("/camera/{cam_name}/controls")
+def camera_controls_set(cam_name: str, values: dict = Body(...)):
+    """{control: value}: clamped to the camera's range, set, and kept for the next start."""
+    return _camera_controls_call(cam_name, lambda: camera_controls.set(cam_name, values))
+
+
+@app.post("/camera/{cam_name}/controls/reset")
+def camera_controls_reset(cam_name: str):
+    return _camera_controls_call(cam_name, lambda: camera_controls.reset(cam_name))
 
 
 @app.get("/auto/frame/{cam_name}")
@@ -526,7 +559,7 @@ def main():
     )
     args = parser.parse_args()
 
-    global bridge, gamepad
+    global bridge, gamepad, camera_controls
     if args.mock:
         logger.info("Starting with MockLeKiwi (no hardware).")
         robot = MockLeKiwi()
@@ -548,6 +581,12 @@ def main():
         logger.info("no terminal: a calibration mismatch starts on a provisional calibration, no prompt")
     bridge = RobotBridge(robot, recorder=recorder, allow_uncalibrated=allow_uncalibrated)
     bridge.start()
+    # The cameras' kept image controls, now and after the camera watchdog reconnects them (a
+    # reconnect can reset a UVC camera to its defaults).
+    cams = getattr(getattr(robot, "config", None), "cameras", None) or {}
+    camera_controls = CameraControls({name: str(c.index_or_path) for name, c in cams.items()})
+    camera_controls.apply_saved()
+    bridge.after_camera_reconnect = camera_controls.apply_saved
 
     if not args.no_gamepad:
         gamepad = GamepadInput(bridge)

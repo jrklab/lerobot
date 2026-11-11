@@ -72,6 +72,21 @@
         <dt>Gamepad</dt><dd id="st-gamepad">--</dd>
         <dt>Internet</dt><dd id="st-internet">--</dd>
       </dl>
+      <!-- The cameras' image controls (camera_controls.py), kept on the Pi. Each block streams
+           its camera only while open, to see a change as it's made. -->
+      <h2 class="cams-title">Cameras</h2>
+      <details class="rec-section cam-ctl" data-cam="front">
+        <summary><span>Front camera</span><span class="cam-ctl-state"></span></summary>
+        <img class="cam-ctl-preview" alt="front camera" />
+        <div class="cam-ctl-body"></div>
+        <button class="cam-ctl-reset">Reset to defaults</button>
+      </details>
+      <details class="rec-section cam-ctl" data-cam="wrist">
+        <summary><span>Wrist camera</span><span class="cam-ctl-state"></span></summary>
+        <img class="cam-ctl-preview" alt="wrist camera" />
+        <div class="cam-ctl-body"></div>
+        <button class="cam-ctl-reset">Reset to defaults</button>
+      </details>
     </section>
     <section class="pane rec" data-tab="rec">
       <h2>Record</h2>
