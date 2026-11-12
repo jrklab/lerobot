@@ -228,7 +228,9 @@ class PlanBrain:
         now = self.sk.odom()
         if start is None or now is None:
             return "no odometry"
-        why = self.fold()
+        # Folded already, as a run's end does before the park: not again (Nov 11: the second fold
+        # went out to the hover over the bowl and back, ~4-8 s, for nothing).
+        why = "" if self.sk.arm.at_pose("rest") else self.fold()
         if why:
             return why
         d = start[:2] - now[:2]

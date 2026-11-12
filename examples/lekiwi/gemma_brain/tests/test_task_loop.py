@@ -422,12 +422,25 @@ def test_park_folds_then_drives_and_turns_back_where_the_task_began(world):
     b = brain(FakePlanner('pick "red block"\ndone'), sk)
     b.run("x")  # the task began at the odometry's origin, facing 0
     sk.pose = [0.3, 0.4, math.radians(90.0)]  # ended 0.3 forward, 0.4 left, turned 90 left
+    sk.arm.at_rest = False  # the arm out: folded first
     world.calls.clear()
     assert b.park() == ""
     assert world.calls[0] == "hover"  # folded first (fold goes via the hover)
     (_, drive, _), (_, _, turn) = moves
     assert drive == (pytest.approx(-0.4), pytest.approx(0.3))  # in the base's frame, facing +y
     assert turn == pytest.approx(-90.0)
+
+
+def test_park_doesnt_fold_an_arm_already_at_rest(world):
+    # Nov 11: the run's end folded, then the park folded again: out to the hover over the bowl
+    # and back.
+    sk = FakeSkills()
+    sk.move = lambda part, **k: Result(True)
+    b = brain(FakePlanner('pick "red block"\ndone'), sk)
+    b.run("x")
+    sk.arm.at_rest = True
+    world.calls.clear()
+    assert b.park() == "" and "hover" not in world.calls
 
 
 def test_park_without_odometry_stays(world):
