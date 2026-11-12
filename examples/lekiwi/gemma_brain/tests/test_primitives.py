@@ -320,21 +320,25 @@ def test_base_moves_ask_for_the_pis_stopping_tolerance_more():
     sent = []
 
     class R:
-        def base(self, dx=0.0, dy=0.0, dtheta_deg=0.0):
+        def base(self, dx=0.0, dy=0.0, dtheta_deg=0.0, speed=None, theta_speed=None):
             sent.append((round(dx, 4), round(dy, 4), round(dtheta_deg, 2)))
+            speeds.append((speed, theta_speed))
             return {"result": {"moved": [dx, dy, dtheta_deg]}}
 
+    speeds = []
     sk = Skills.__new__(Skills)
     sk.robot, sk.log = R(), None
     sk.move("base", delta=(0.006, 0.008))  # 1 cm asked: the Pi would end it at once
     sk.move("base", roll=-5.0)
     assert sent[0] == (0.012, 0.016, 0.0) and sent[1] == (0.0, 0.0, -7.0)
+    # at the brain's speeds, not the Pi's defaults (Nov 11: 43 s of base moves in a 191 s task)
+    assert speeds == [(prm.BASE_SPEED_MPS.value, None), (None, prm.BASE_TURN_DPS.value)]
 
 def test_a_base_turn_over_the_pis_limit_goes_in_two():
     sent = []
 
     class R:
-        def base(self, dx=0.0, dy=0.0, dtheta_deg=0.0):
+        def base(self, dx=0.0, dy=0.0, dtheta_deg=0.0, speed=None, theta_speed=None):
             sent.append(round(dtheta_deg, 2))
             return {"result": {"moved": [dx, dy, dtheta_deg]}}
 
@@ -351,7 +355,7 @@ def test_a_base_drive_over_the_pis_limit_goes_in_two():
     sent = []
 
     class R:
-        def base(self, dx=0.0, dy=0.0, dtheta_deg=0.0):
+        def base(self, dx=0.0, dy=0.0, dtheta_deg=0.0, speed=None, theta_speed=None):
             sent.append((round(dx, 3), round(dy, 3)))
             return {"result": {"moved": [dx, dy, dtheta_deg]}}
 

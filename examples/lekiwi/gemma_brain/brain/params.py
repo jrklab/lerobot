@@ -147,6 +147,8 @@ PLACE_TRIES = Param(2, "RULE", "a place step that fails before letting go (still
 PICK_TRIES = Param(3, "RULE", "a pick step retries this many times in code before the planner replans (owner's choice, Oct 24)")
 MAX_REPLANS = Param(2, "RULE", "times per task a failed step's remaining plan is run again before giving up (task_loop.recover; the planner's replans until Nov 11)")
 FOLD_CLEAR_M = Param(0.165, "RULE", "fold: jaw tips above the floor beyond which folding can't catch a place target, so a fold that can't lift straight up still goes (v1's cup rim plane 0.105 + 0.06; Oct 26 the fold dragged a cup with the jaws ~13 cm up)")
+BASE_SPEED_MPS = Param(0.12, "RULE", "base drive speed (the Pi's default 0.08, its limit auto_control.MAX_BASE_XY_SPEED 0.15): base moves were 43 s of a 191 s two-object task (Nov 11)")
+BASE_TURN_DPS = Param(40.0, "RULE", "base turn speed, deg/s (the Pi's default 25, its limit MAX_BASE_THETA_SPEED 45)")
 FREE_SPEED_MPS = Param(0.08, "RULE", "straight-line speed in free air: the arm planner's top speed (arm.MAX_EE_SPEED); 0.04 until Nov 11, when arm moves were 64 s of a 191 s two-object task")
 NEAR_SPEED_MPS = Param(0.01, "RULE", "speed for the last centimetres to the floor")
 

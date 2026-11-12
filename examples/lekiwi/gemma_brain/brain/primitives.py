@@ -329,7 +329,7 @@ class Skills:
                 # a look-around's turn back from facing backwards was refused).
                 first = self._move_base(None, turn / 2)
                 return self._move_base(None, turn / 2) if first.ok else first
-            res = self.robot.base(dtheta_deg=turn + math.copysign(short, turn))
+            res = self.robot.base(dtheta_deg=turn + math.copysign(short, turn), theta_speed=prm.BASE_TURN_DPS.value)
         else:
             d = np.asarray(delta, float)
             n = float(np.linalg.norm(d))
@@ -339,7 +339,7 @@ class Skills:
                 half = (float(delta[0]) / 2, float(delta[1]) / 2)
                 first = self._move_base(half, None)
                 return self._move_base(half, None) if first.ok else first
-            res = self.robot.base(dx=float(d[0]), dy=float(d[1]))
+            res = self.robot.base(dx=float(d[0]), dy=float(d[1]), speed=prm.BASE_SPEED_MPS.value)
         self._last_moved = "base"
         moved = res.get("result", {}).get("moved")
         self.ev("move", part="base", delta=None if delta is None else list(delta), turn=turn, moved=moved)
