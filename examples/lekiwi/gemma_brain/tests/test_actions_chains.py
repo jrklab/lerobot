@@ -418,8 +418,9 @@ def test_a_far_sighting_drives_only_when_a_second_look_puts_it_in_the_same_place
         def ev(self, name, **k):
             self.events.append(name)
 
-    s = S([0.31, 0.385, 0.365, 0.418])  # the same object, its box a little off
-    assert actions.confirmed_look(s, "cup").box == s.second and s.calls == 2
+    for same in ([0.31, 0.385, 0.365, 0.418], [0.298, 0.387, 0.36, 0.421]):  # a little off, either way
+        s = S(same)  # (Nov 11: a ball's box 1 px lower the second time was rejected, five times)
+        assert actions.confirmed_look(s, "cup").box == s.second and s.calls == 2
     for second in (None, [0.70, 0.40, 0.75, 0.44]):  # gone, or somewhere else
         s = S(second)
         assert actions.confirmed_look(s, "cup") is None and s.events == ["unconfirmed"] and "cup" not in s.memory

@@ -329,7 +329,7 @@ def look_around(sk: Skills, obj: str, fast_ok: bool = True, look=None) -> Result
 def confirmed_look(sk: Skills, obj: str, fast_ok: bool = True, stop_short: float = 0.0):
     """One front look for `obj` for the approach; a sighting that would drive the base further
     than the camera still sees past the stop (front_view_margin: a wrong one can't be told by the
-    looks on the way) only with a second look, the main model's, whose box's bottom middle falls
+    looks on the way) only with a second look, the main model's, whose box's middle falls
     inside the first's: a real object stays put, a mistaken one goes or moves. Not confirmed:
     None (the look-around goes on), and the place it was taken for forgotten. Nov 11 (run
     20261111T180733): the main model boxed white cloth and sneakers across the room as the white
@@ -342,7 +342,9 @@ def confirmed_look(sk: Skills, obj: str, fast_ok: bool = True, stop_short: float
         return det
     again = sk.find(obj, "front", fast_ok=False)
     if again is not None:
-        u, v = (again.box[0] + again.box[2]) / 2, again.box[3]
+        # Its middle, not its bottom: the bottom lies on the first box's edge, and a 1 px jitter
+        # down put the real ball "elsewhere" five times running (Nov 11, run 20261111T182141).
+        u, v = (again.box[0] + again.box[2]) / 2, (again.box[1] + again.box[3]) / 2
         if det.box[0] <= u <= det.box[2] and det.box[1] <= v <= det.box[3]:
             return again
     sk.ev("unconfirmed", obj=obj, box=det.box, again=None if again is None else again.box)
