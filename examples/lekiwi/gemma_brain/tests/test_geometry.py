@@ -112,3 +112,19 @@ def test_front_object_height_of_the_cup_in_two_logged_views():
     g = geom(-0.0966)
     near, far = front_object_height(g, [0.25, 0.321, 0.7, 0.803]), front_object_height(g, [0.5, 0.333, 0.88, 0.647])
     assert abs(near - far) < 0.005 and 0.05 < near < 0.07
+
+
+def test_a_point_kept_in_the_room_comes_back_where_the_base_now_sees_it():
+    # Seen 0.5 m straight ahead; the base then turns 90 deg left about its turn centre: the point
+    # is now off to the right, as far from the turn centre as before.
+    import math
+
+    from brain.geometry import from_room, to_room
+    from helpers import CAMS
+
+    p = np.array([0.5, 0.0])
+    w = to_room(CAMS, p, np.zeros(3))
+    np.testing.assert_allclose(from_room(CAMS, w, np.zeros(3)), p, atol=1e-12)
+    q = from_room(CAMS, w, np.array([0.0, 0.0, math.radians(90.0)]))
+    b = p - CAMS.turn_centre
+    np.testing.assert_allclose(q - CAMS.turn_centre, [b[1], -b[0]], atol=1e-12)  # turned 90 deg right

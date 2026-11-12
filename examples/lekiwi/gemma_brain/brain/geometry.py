@@ -246,6 +246,22 @@ class Geometry:
         return float(np.degrees(np.arctan2(v[1], v[0]))), near_distance(self.cams, p) - self.front_near_x
 
 
+def to_room(cams: Cameras, p, odom) -> np.ndarray:
+    """An arm-frame floor point p in the room: the frame of the base's wheel odometry (x, y in
+    metres, theta in radians since the Pi's service started), whose origin is the point the
+    base turns about (cams.turn_centre)."""
+    b = np.asarray(p[:2], float) - cams.turn_centre
+    c, s = np.cos(odom[2]), np.sin(odom[2])
+    return np.array([odom[0] + c * b[0] - s * b[1], odom[1] + s * b[0] + c * b[1]])
+
+
+def from_room(cams: Cameras, w, odom) -> np.ndarray:
+    """A room point (to_room) back in the arm frame, from the base's pose now."""
+    d = np.asarray(w, float) - np.asarray(odom[:2], float)
+    c, s = np.cos(odom[2]), np.sin(odom[2])
+    return np.array([c * d[0] + s * d[1], -s * d[0] + c * d[1]]) + cams.turn_centre
+
+
 def near_distance(cams: Cameras, p) -> float:
     """A floor point's x once the base has turned it straight ahead of the arm."""
     return float(cams.turn_centre[0] + np.hypot(*(np.asarray(p[:2], float) - cams.turn_centre)))

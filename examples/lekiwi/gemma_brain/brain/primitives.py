@@ -48,7 +48,7 @@ from common.robot import RobotError
 from common.vision import Look, look_matches, measured_angle_of, sample_look, snap_box
 
 from brain import params as prm
-from brain.geometry import Geometry
+from brain.geometry import Geometry, from_room, to_room
 from brain.goals import Detection
 
 VERTICAL = 90.0  # convention: the arm model's pitch for a gripper pointing straight down
@@ -78,6 +78,9 @@ class Skills:
         self.roll = 0.0
         self.hover_pitch = VERTICAL  # the gripper's tilt at the last hover_at (actions.hover_at)
         self.seen: dict[str, Detection] = {}  # the last detection of each object, per camera
+        # Where each object was last seen on the floor, in the room (geometry.to_room: the base's
+        # wheel odometry), so a later step turns straight towards it (actions.look_around).
+        self.memory: dict[str, np.ndarray] = {}
         self.heights: dict[str, float] = {}  # object heights measured side-on by the front camera
         self.widths: dict[str, float] = {}  # and their widths across its view (geometry.front_object_width)
         # How far the held object reaches below the jaw tips: their height above the floor when
@@ -106,6 +109,25 @@ class Skills:
     def ev(self, name: str, **kw) -> None:
         if self.log is not None:
             self.log.ev(name, **kw)
+
+    def odom(self) -> np.ndarray | None:
+        """The base's pose from its wheel odometry (x, y in metres, theta in radians), or None."""
+        o = self.robot.status().get("odom")
+        return None if o is None else np.array([o["x"], o["y"], math.radians(o["theta_deg"])])
+
+    def remember(self, obj: str, p) -> None:
+        """Note where `obj` is: arm-frame floor point p, kept in the room."""
+        o = self.odom()
+        if o is None:
+            return
+        self.memory[obj] = to_room(self.geom.cams, p, o)
+        self.ev("remember", obj=obj, room=[round(float(v), 3) for v in self.memory[obj]])
+
+    def remembered(self, obj: str) -> np.ndarray | None:
+        """Where `obj` was last seen, in the arm frame from where the base is now; None if never."""
+        w = self.memory.get(obj)
+        o = None if w is None else self.odom()
+        return None if o is None else from_room(self.geom.cams, w, o)
 
     def tcp(self) -> np.ndarray:
         """The measured TCP (forward kinematics of the measured joints)."""
@@ -418,6 +440,10 @@ class Skills:
         if angle:
             det.angle_deg, det.angle_how = measured_angle_of(jpeg, box, look)
         self.seen[f"{cam}:{obj}"] = det
+        if cam == "front":
+            p = self.geom.front_point(((box[0] + box[2]) / 2, box[3]))  # its near edge on the floor
+            if p is not None:
+                self.remember(obj, p)
         self.ev("find", obj=obj, cam=cam, found=True, box=det.box, by=by, angle=det.angle_deg)
         return det
 

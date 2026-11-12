@@ -33,10 +33,11 @@ out of v1's plan_brain.PlanBrain on Oct 28 when v1 was retired (tag lekiwi-v1-fi
 
 from __future__ import annotations
 
+import math
 import time
 
 from common.arm import JAW_TIP_OFFSET_M, RESET_SAFE_Z_M, PlanError
-from common.planner import Planner, Step, check_plan
+from common.planner import Planner, Step, check_plan, objects_in
 from common.robot import OperatorTookOver, RobotError
 from common.runlog import Log
 
@@ -193,6 +194,43 @@ class PlanBrain:
             self._forget()
         return ""
 
+    def locate(self, steps: list[Step]) -> None:
+        """Look for each object of the plan in the front view from where the task starts, the
+        main model, so a later step turns straight to it (Skills.find remembers what it sees;
+        actions.look_around). Nothing moves; one not in view is left to the look around."""
+        for obj in objects_in(steps):
+            if obj == self.holding:
+                continue
+            det = self.sk.find(obj, "front", fast_ok=False)
+            self.log.ev("located", obj=obj, found=det is not None)
+
+    def park(self) -> str:
+        """The base back where the task began (run: its odometry then), the arm folded first
+        (fold): a drive in the base's own frame, then a turn to the heading it had. Returns why
+        it didn't, or ""."""
+        start = getattr(self, "start_odom", None)
+        now = self.sk.odom()
+        if start is None or now is None:
+            return "no odometry"
+        why = self.fold()
+        if why:
+            return why
+        d = start[:2] - now[:2]
+        c, s = math.cos(now[2]), math.sin(now[2])
+        drive = (c * d[0] + s * d[1], -s * d[0] + c * d[1])  # in the base's frame now
+        turn = math.degrees(start[2] - now[2])
+        turn = (turn + 180.0) % 360.0 - 180.0
+        self.log.ev("park", drive=[round(v, 3) for v in drive], turn_deg=round(turn, 1))
+        if math.hypot(*drive) > prm.REACH_TOL_M.value:
+            r = self.sk.move("base", delta=drive)
+            if not r.ok:
+                return r.reason
+        if abs(turn) > prm.MIN_BASE_TURN_DEG.value:
+            r = self.sk.move("base", roll=turn)
+            if not r.ok:
+                return r.reason
+        return ""
+
     # --- the task ---
 
     def run(self, goal: str) -> tuple[bool, str]:
@@ -210,10 +248,12 @@ class PlanBrain:
             why = self.fold()
             if why:
                 return False, f"couldn't fold the arm to rest first: {why}"
+        self.start_odom = self.sk.odom()  # where the task began, for park()
         front, wrist = self.frames()
         steps, why = self.make_plan(goal, front, wrist)
         if steps is None:
             return False, why
+        self.locate(steps)
         done: list[Step] = []
         unverified: list[str] = []
         replans = repeats = 0

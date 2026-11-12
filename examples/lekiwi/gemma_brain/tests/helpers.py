@@ -94,9 +94,13 @@ class FrameRobot:
     def frame(self, cam, after=0.0):
         return self.jpeg, after
 
+    def status(self):
+        return {"odom": {"x": 0.0, "y": 0.0, "theta_deg": 0.0}}
+
 def finder(jpeg, main, fast):
     sk = Skills.__new__(Skills)
     sk.robot, sk.log, sk.main, sk.fast, sk.seen, sk.looks = FrameRobot(jpeg), None, main, fast, {}, {}
+    sk.memory = {}
     sk.heights, sk._height_fallbacks = {}, set()
     return sk
 

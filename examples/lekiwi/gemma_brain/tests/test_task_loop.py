@@ -89,12 +89,20 @@ class FakeSkills:
     def __init__(self, arm=None):
         self.holding, self.arm, self.roll, self.seen = None, arm or FakeArm(), 0.0, {}
         self.gripped = False
+        self.pose, self.found, self.base_moves = [0.0, 0.0, 0.0], [], []
 
     def height(self):
         return self.arm.z + 0.13  # the floor at TCP z -0.13
 
     def held(self):
         return self.gripped
+
+    def odom(self):
+        return np.array(self.pose)
+
+    def find(self, obj, cam, **kw):
+        self.found.append(obj)
+        return None
 
 
 class FakeRobot:
@@ -391,3 +399,41 @@ def test_a_place_keeps_failing_holding_and_gives_up_after_its_tries(world):
     r = brain(FakePlanner(), sk, holding="red block").place("in", "cup")
     assert not r.ok and "failed 2 times" in r.reason and world.calls.count("place red block in cup") == 2
     assert sk.holding == "red block"
+
+
+def test_the_plans_objects_are_located_from_where_the_task_starts(world):
+    # Nov 11: after the ball went in the box the brick was out of view; seen at the start, a later
+    # step turns straight to it (actions.look_around).
+    sk = FakeSkills()
+    plan = 'pick "tennis ball"\nplace "tennis ball" in "black box"\npick "red brick"\nplace "red brick" in "paper cup"\ndone'
+    ok, _ = brain(FakePlanner(plan), sk).run("x")
+    assert ok and sk.found == ["tennis ball", "black box", "red brick", "paper cup"]
+    sk = FakeSkills()
+    sk.gripped = True  # held from the start: not looked for on the floor
+    brain(FakePlanner('place "green block" next_to "red block"\ndone'), sk, holding="green block").run("x")
+    assert sk.found == ["red block"]
+
+
+def test_park_folds_then_drives_and_turns_back_where_the_task_began(world):
+    import math
+
+    sk = FakeSkills()
+    moves = []
+    sk.move = lambda part, delta=None, roll=None, **k: (moves.append((part, delta, roll)), Result(True))[1]
+    b = brain(FakePlanner('pick "red block"\ndone'), sk)
+    b.run("x")  # the task began at the odometry's origin, facing 0
+    sk.pose = [0.3, 0.4, math.radians(90.0)]  # ended 0.3 forward, 0.4 left, turned 90 left
+    world.calls.clear()
+    assert b.park() == ""
+    assert world.calls[0] == "hover"  # folded first (fold goes via the hover)
+    (_, drive, _), (_, _, turn) = moves
+    assert drive == (pytest.approx(-0.4), pytest.approx(0.3))  # in the base's frame, facing +y
+    assert turn == pytest.approx(-90.0)
+
+
+def test_park_without_odometry_stays(world):
+    sk = FakeSkills()
+    b = brain(FakePlanner('pick "red block"\ndone'), sk)
+    b.run("x")
+    sk.odom = lambda: None
+    assert b.park() == "no odometry"

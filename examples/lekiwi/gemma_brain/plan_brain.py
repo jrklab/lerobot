@@ -63,6 +63,8 @@ def main() -> int:
     ap.add_argument("--frames", nargs=2, metavar=("FRONT_JPG", "WRIST_JPG"), default=None,
                     help="with --plan-only: plan from these saved frames instead of the robot's cameras")
     ap.add_argument("--no-base", action="store_true", help="lock the base: arm-only picks within reach")
+    ap.add_argument("--no-park", action="store_true",
+                    help="after a task done, leave the base where it ended (default: back where it began)")
     args = ap.parse_args()
     logging.basicConfig(level=logging.WARNING)
 
@@ -106,6 +108,12 @@ def main() -> int:
                 if why:
                     log.ev("reset", ok=False, reason=why)
                     print(f"\nThe arm stayed where it is ({why}): fold it with the gamepad's B button.")
+                elif ok and not args.no_park and not args.no_base:
+                    try:
+                        why = pb.park()
+                    except (OSError, RobotError) as e:
+                        why = str(e)
+                    print("parked where the task began" if not why else f"\nnot parked: {why}")
     log.ev("result", success=ok, summary=summary)
     print(f"\n{'SUCCESS' if ok else 'NOT DONE'}: {summary}\nlog: {out}")
     return 0 if ok else 1

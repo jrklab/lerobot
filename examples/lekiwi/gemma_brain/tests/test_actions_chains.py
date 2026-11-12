@@ -174,6 +174,55 @@ def test_look_around_turns_left_and_right_until_it_finds_the_object():
     assert not actions.look_around(w, "red block").ok
     assert max(abs(t) for t in w.turns) <= 180.0 and abs((w.heading + 180) % 360 - 180) < 1e-6, w.turns
 
+@pytest.mark.parametrize("bearing", [-120.0, 95.0])
+def test_look_around_turns_straight_to_where_it_saw_the_object(bearing):
+    # Nov 11: the brick, seen at the start, was out of view after the ball's place; the sweep
+    # found it a few turns later. Remembered, one turn and one look.
+    import math
+
+    from brain.primitives import Result
+
+    class World:
+        def __init__(self):
+            self.geom = geom(-0.11)
+            self.heading, self.turns, self.events = 0.0, [], []
+
+        def remembered(self, obj):  # the object at `bearing` from the start, 0.5 m out
+            a = math.radians(bearing - self.heading)
+            return self.geom.cams.turn_centre + 0.5 * np.array([math.cos(a), math.sin(a)])
+
+        def find(self, obj, cam, fast_ok=True):
+            seen = abs(actions.wrap_deg(bearing - self.heading)) <= self.geom.front_view_deg() / 2
+            return Detection(box=[0.4, 0.4, 0.5, 0.5]) if seen else None
+
+        def move(self, part, roll=None, **kw):
+            self.turns.append(roll)
+            self.heading += roll
+            return Result(True)
+
+        def ev(self, name, **k):
+            self.events.append(name)
+
+    w = World()
+    assert actions.look_around(w, "red brick").ok
+    assert w.turns == [pytest.approx(bearing)] and w.events == ["turn_to_remembered"]
+
+
+def test_look_around_doesnt_turn_for_a_remembered_object_already_in_view():
+    from brain.primitives import Result
+
+    g = geom(-0.11)
+    turns = []
+
+    class W:
+        geom = g
+        remembered = staticmethod(lambda obj: g.cams.turn_centre + np.array([0.5, 0.0]))
+        find = staticmethod(lambda obj, cam, fast_ok=True: Detection(box=[0.4, 0.4, 0.5, 0.5]))
+        move = staticmethod(lambda part, roll=None, **k: (turns.append(roll), Result(True))[1])
+
+    assert actions.look_around(W(), "red brick").ok and turns == []
+
+
 def test_bring_into_view_moves_towards_the_container_and_stops_if_it_drifts_away():
     from brain.primitives import Result
 

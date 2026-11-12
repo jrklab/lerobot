@@ -272,6 +272,18 @@ def look_around(sk: Skills, obj: str, fast_ok: bool = True, look=None) -> Result
     fast_ok: as Skills.find. look: what one look is (default the front camera's find), returning
     what it found or None (find_marker)."""
     look = look or (lambda: sk.find(obj, "front", fast_ok=fast_ok))
+    # Seen before (sk.memory: the plan's look, an earlier step): turn straight to it if it's
+    # outside the view, before looking (Nov 11: after the ball went in the box the brick was
+    # out of view, and the sweep found it a few turns later).
+    remembered = getattr(sk, "remembered", None)
+    p = None if remembered is None else remembered(obj)
+    if p is not None:
+        turn = sk.geom.front_turn_and_distance(p)[0]
+        if abs(turn) > sk.geom.front_view_deg() / 2:
+            sk.ev("turn_to_remembered", obj=obj, turn_deg=round(turn, 1))
+            r = sk.move("base", roll=wrap_deg(turn))
+            if not r.ok:
+                return r
     det = look()
     if det is not None:
         return Result(True, data={"turned": 0.0, "det": det})
@@ -345,6 +357,9 @@ def find_marker(sk: Skills, container: str):
         return None
     m = min(found, key=lambda f: f.distance_m)
     sk.marker_img = img
+    remember = getattr(sk, "remember", None)
+    if remember is not None:
+        remember(container, m.centre)
     sk.ev("marker", obj=container, found=True, id=m.id, centre=[round(float(v), 4) for v in m.centre],
           heading_deg=round(m.heading_deg(), 1), distance_m=round(m.distance_m, 3))
     return m
