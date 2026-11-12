@@ -266,7 +266,7 @@ def lift(sk: Skills) -> Result:
     return Result(held, "" if held else "nothing held after the lift", {**r.data, "held": held})
 
 
-def look_around(sk: Skills, obj: str, fast_ok: bool = True, look=None) -> Result:
+def look_around(sk: Skills, obj: str, fast_ok: bool = True, look=None, from_memory=None) -> Result:
     """Turn the base until the front camera finds `obj`: left, then right (look_offsets), in
     steps of (1 - LOOK_OVERLAP) of the view's width, all the way round; then back up
     LOOK_BACK_M once (it may be too close to see) and turn round again. The base ends facing
@@ -296,6 +296,8 @@ def look_around(sk: Skills, obj: str, fast_ok: bool = True, look=None) -> Result
             if not r.ok:
                 return r
     det = look()
+    if det is None and p is not None and from_memory is not None:
+        det = from_memory()  # turned to it by memory and missed: start from where it's remembered
     if det is not None:
         return Result(True, data={"turned": 0.0, "det": det})
     step = (1 - prm.LOOK_OVERLAP.value) * sk.geom.front_view_deg()  # share of the view's width, in deg
@@ -365,12 +367,18 @@ def approach(sk: Skills, obj: str, tol=None, stop_short: float = 0.0, fast_ok: b
     the place drove to them (Nov 6, run 20261106T205655: the "box" measured 4.7 and 1.5 cm tall).
     A sighting further than the front camera sees past the stop (front_view_margin) counts only
     if a second look from where the base stands boxes it in the same place (confirmed_look)."""
-    r = look_around(sk, obj, fast_ok, look=lambda: confirmed_look(sk, obj, fast_ok, stop_short))
+    r = look_around(sk, obj, fast_ok, look=lambda: confirmed_look(sk, obj, fast_ok, stop_short),
+                    from_memory=getattr(sk, "start_from_memory", None) and (lambda: sk.start_from_memory(obj)))
     if r.ok:
-        first = r.data["det"] if r.data["det"].by == "main" else sk.find(obj, "front", fast_ok=False)
+        first = r.data["det"]
         track = getattr(sk, "track", None)
-        if track is not None and first is not None:
-            track(obj, first)  # from here, a sighting further off than its width is another thing
+        if first.by == "memory":
+            pass  # tracked from memory already (Skills.start_from_memory)
+        else:
+            if first.by != "main":
+                first = sk.find(obj, "front", fast_ok=False)
+            if track is not None and first is not None:
+                track(obj, first)  # from here, a sighting further off than its width is another thing
         try:
             r = sk.servo(obj, FrontApproachGoal(tol, stop_short), first=first, fast_ok=fast_ok)
         finally:

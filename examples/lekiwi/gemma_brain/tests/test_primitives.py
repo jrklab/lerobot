@@ -476,3 +476,32 @@ def test_a_servo_isnt_done_on_a_stand_in_only_on_a_sighting():
     sk.find = lambda obj, cam, **k: looks.pop(0)
     r = sk.servo("cup", Goal())
     assert r.ok and r.data["looks"] == 2 and looks == []
+
+
+def test_an_approach_starts_from_memory_when_the_remembered_object_is_missed(monkeypatch):
+    # Nov 11 (run 20261111T192651): turned to the remembered bowl, a sharp frame with it 30 cm ahead,
+    # missed by name; a full look round found it where it was remembered.
+    import brain.primitives as primitives
+    import pytest
+    from common.gemma import Answer
+
+    monkeypatch.setattr(primitives.time, "sleep", lambda s: None)
+    bowl = [0.40, 0.55, 0.55, 0.70]
+
+    class Main:
+        def __init__(self):
+            self.next = [bowl]
+
+        def box(self, jpeg, what):
+            return Answer(text="", value=self.next.pop(0) if self.next else None)
+
+    sk = finder(red_frame(bowl), Main(), None)
+    sk.geom = geom(-0.11)
+    sk.find("bowl", "front")  # seen once: remembered, with its width
+    assert sk.find("bowl", "front") is None  # missed, nothing tracked: a miss
+    det = sk.start_from_memory("bowl")
+    assert det.by == "memory" and det.box[3] == pytest.approx(0.70, abs=0.01)
+    assert sk.find("bowl", "front").by == "memory"  # tracked from memory: misses steer on it
+    sk.untrack("bowl")
+    sk.memory_width.clear()
+    assert sk.start_from_memory("bowl") is None  # its width not known: no tracking from memory

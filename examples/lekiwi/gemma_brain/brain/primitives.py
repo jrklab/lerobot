@@ -120,12 +120,15 @@ class Skills:
         o = self.robot.status().get("odom")
         return None if o is None else np.array([o["x"], o["y"], math.radians(o["theta_deg"])])
 
-    def remember(self, obj: str, p) -> None:
-        """Note where `obj` is: arm-frame floor point p, kept in the room."""
+    def remember(self, obj: str, p, width: float = 0.0) -> None:
+        """Note where `obj` is: arm-frame floor point p, kept in the room, and its width across
+        the front camera's view when measured (for tracking it from memory: start_from_memory)."""
         o = self.odom()
         if o is None:
             return
         self.memory[obj] = to_room(self.geom.cams, p, o)
+        if width > 0.0:
+            self.__dict__.setdefault("memory_width", {})[obj] = width
         pending = getattr(self, "pending", [])
         if obj in pending:
             pending.remove(obj)
@@ -164,6 +167,24 @@ class Skills:
         o = self.odom()
         if p is not None and width > 0.0 and o is not None:
             self.__dict__.setdefault("_tracks", {})[obj] = (to_room(self.geom.cams, p, o), width)
+
+    def start_from_memory(self, obj: str) -> Detection | None:
+        """A sighting of `obj` at its remembered place (the stand-in an approach steers on), with
+        it tracked from there, if it's remembered with its width and the place is in the frame;
+        else None. For a look that misses an object just turned to by memory (Nov 11, run
+        20261111T192651: the bowl 30 cm ahead, sharp, missed by name; a full look round found it
+        where it was remembered, ~25 s)."""
+        w = self.memory.get(obj)
+        width = self.__dict__.get("memory_width", {}).get(obj)
+        if w is None or not width:
+            return None
+        self.__dict__.setdefault("_tracks", {})[obj] = (np.asarray(w, float), width)
+        det = self._stand_in(obj, b"")
+        if det is None:
+            self.untrack(obj)
+        else:
+            self.ev("start_from_memory", obj=obj)
+        return det
 
     def untrack(self, obj: str) -> None:
         self.__dict__.get("_tracks", {}).pop(obj, None)
@@ -531,7 +552,7 @@ class Skills:
         if cam == "front":
             p = self.geom.front_point(((box[0] + box[2]) / 2, box[3]))  # its near edge on the floor
             if p is not None:
-                self.remember(obj, p)
+                self.remember(obj, p, front_object_width(self.geom, box))
         self.ev("find", obj=obj, cam=cam, found=True, box=det.box, by=by, angle=det.angle_deg)
         return det
 

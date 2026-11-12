@@ -236,6 +236,23 @@ def test_look_around_backs_up_first_for_an_object_remembered_too_close_to_see():
     assert moves == [((-prm.LOOK_BACK_M.value, 0.0), None)]
 
 
+def test_look_around_starts_from_memory_instead_of_looking_all_round():
+    from brain.primitives import Result
+
+    g = geom(-0.11)
+    turns = []
+    stand_in = Detection(box=[0.5, 0.7, 0.5, 0.7], by="memory")
+
+    class W:
+        geom = g
+        remembered = staticmethod(lambda obj: g.cams.turn_centre + np.array([0.5, 0.0]))
+        find = staticmethod(lambda obj, cam, fast_ok=True: None)  # missed by name
+        move = staticmethod(lambda part, roll=None, **k: (turns.append(roll), Result(True))[1])
+
+    r = actions.look_around(W(), "bowl", from_memory=lambda: stand_in)
+    assert r.ok and r.data["det"] is stand_in and turns == []  # no turning round
+
+
 def test_look_around_doesnt_turn_for_a_remembered_object_already_in_view():
     from brain.primitives import Result
 
