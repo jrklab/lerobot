@@ -368,7 +368,14 @@ def approach(sk: Skills, obj: str, tol=None, stop_short: float = 0.0, fast_ok: b
     r = look_around(sk, obj, fast_ok, look=lambda: confirmed_look(sk, obj, fast_ok, stop_short))
     if r.ok:
         first = r.data["det"] if r.data["det"].by == "main" else sk.find(obj, "front", fast_ok=False)
-        r = sk.servo(obj, FrontApproachGoal(tol, stop_short), first=first, fast_ok=fast_ok)
+        track = getattr(sk, "track", None)
+        if track is not None and first is not None:
+            track(obj, first)  # from here, a sighting further off than its width is another thing
+        try:
+            r = sk.servo(obj, FrontApproachGoal(tol, stop_short), first=first, fast_ok=fast_ok)
+        finally:
+            if track is not None:
+                sk.untrack(obj)
     det = sk.seen.get(f"front:{obj}")
     if r.ok and det is not None:  # side-on, for placing into it later (front_object_height)
         box, how = snap_top(det.jpeg, det.box)  # the box's top up to a rim it left out (Nov 4)

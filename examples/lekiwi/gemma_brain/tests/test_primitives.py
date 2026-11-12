@@ -402,3 +402,38 @@ def test_a_task_object_not_seen_yet_is_spotted_in_the_front_frames_the_task_take
     heading["deg"] = 90.0  # a new view
     sk.find("red brick", "front")
     assert "the blue box on the floor" in sk.main.asked and "blue box" in sk.memory
+
+
+def test_an_approachs_target_doesnt_jump_to_another_thing(monkeypatch):
+    # Nov 11 (run 20261111T182658): mid-approach, a second white thing 0.5-1 m past the cup was boxed
+    # as the cup five times; the base turned to it and lost both. Now a sighting further from the
+    # tracked one than the object's own width stands in at the tracked place.
+    import brain.primitives as primitives
+    import pytest
+    from brain.goals import Detection
+    from common.gemma import Answer
+
+    monkeypatch.setattr(primitives.time, "sleep", lambda s: None)
+    cup = [0.40, 0.55, 0.55, 0.70]
+    far = [0.05, 0.35, 0.12, 0.40]
+
+    class Main:
+        def __init__(self):
+            self.next = []
+
+        def box(self, jpeg, what):
+            return Answer(text="", value=self.next.pop(0))
+
+    sk = finder(red_frame(cup), Main(), None)
+    sk.geom = geom(-0.11)
+    sk.track("cup", Detection(box=cup))
+    sk.main.next = [far]
+    stand_in = sk.find("cup", "front")
+    assert stand_in.by == "memory" and "front:cup" not in sk.seen and "cup" not in sk.memory
+    u, v = stand_in.box[0], stand_in.box[3]  # at the cup's bottom middle, where it was tracked
+    assert u == pytest.approx((cup[0] + cup[2]) / 2, abs=0.01) and v == pytest.approx(cup[3], abs=0.01)
+    sk.main.next = [[0.41, 0.56, 0.56, 0.71]]  # the cup again, a little off: followed
+    assert sk.find("cup", "front").by == "main" and "cup" in sk.memory
+    sk.untrack("cup")
+    sk.main.next = [far]
+    assert sk.find("cup", "front").box == far  # no approach on: taken as seen

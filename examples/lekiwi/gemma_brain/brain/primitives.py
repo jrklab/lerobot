@@ -48,7 +48,8 @@ from common.robot import RobotError
 from common.vision import Look, look_matches, measured_angle_of, sample_look, snap_box
 
 from brain import params as prm
-from brain.geometry import Geometry, from_room, to_room, wrap_deg
+from brain.cameras import to_image
+from brain.geometry import Geometry, from_room, front_object_width, to_room, wrap_deg
 from brain.goals import Detection
 
 VERTICAL = 90.0  # convention: the arm model's pitch for a gripper pointing straight down
@@ -154,6 +155,42 @@ class Skills:
             if p is not None:
                 self.ev("spotted", obj=o, box=[round(float(v), 4) for v in a.value])
                 self.remember(o, p)
+
+    def track(self, obj: str, det: Detection) -> None:
+        """From this front sighting on (an approach), `obj` is where it was seen, give or take its
+        own width (geometry.front_object_width): a sighting further off is another thing (find)."""
+        p = self.geom.front_point(((det.box[0] + det.box[2]) / 2, det.box[3]))
+        width = front_object_width(self.geom, det.box)
+        o = self.odom()
+        if p is not None and width > 0.0 and o is not None:
+            self.__dict__.setdefault("_tracks", {})[obj] = (to_room(self.geom.cams, p, o), width)
+
+    def untrack(self, obj: str) -> None:
+        self.__dict__.get("_tracks", {}).pop(obj, None)
+
+    def _tracked(self, obj: str, p, jpeg: bytes) -> Detection | None:
+        """None if `obj`'s front sighting at floor point p is where it's tracked (and the track
+        follows it); else, a jump to another thing: a sighting at the tracked place, from the
+        odometry, for the approach to steer on (not kept: by "memory"), or nothing if that's out
+        of the frame. Nov 11 (run 20261111T182658): a second white thing 0.5-1 m past the cup was
+        boxed as the cup mid-approach five times; the base turned to it, lost both, and looked
+        all round each time (270 s for the place)."""
+        tr = self.__dict__.get("_tracks", {}).get(obj)
+        o = None if tr is None or p is None else self.odom()
+        if o is None:
+            return None
+        w = to_room(self.geom.cams, p, o)
+        jump = float(np.linalg.norm(w - tr[0]))
+        if jump <= tr[1]:
+            self._tracks[obj] = (w, tr[1])
+            return None
+        q = from_room(self.geom.cams, tr[0], o)
+        uv = to_image(self.geom.cams.front, self.geom.cams.T_base_cam, [q[0], q[1], self.geom.floor_seen_z])
+        self.ev("jumped", obj=obj, jump_m=round(jump, 3), width_m=round(tr[1], 3))
+        if uv is None or not (0.0 <= uv[0] <= 1.0 and 0.0 <= uv[1] <= 1.0):
+            return Detection(box=[], jpeg=jpeg, by="none")
+        u, v = float(uv[0]), float(uv[1])
+        return Detection(box=[u, v, u, v], jpeg=jpeg, by="memory")
 
     def remembered(self, obj: str) -> np.ndarray | None:
         """Where `obj` was last seen, in the arm frame from where the base is now; None if never."""
@@ -470,6 +507,10 @@ class Skills:
             self.looks[key] = sample_look(jpeg, a.value)
         look = self.looks.get(key)
         box = snap_box(jpeg, a.value, look=look)[0] if cam == "wrist" else list(a.value)
+        if cam == "front":
+            stand_in = self._tracked(obj, self.geom.front_point(((box[0] + box[2]) / 2, box[3])), jpeg)
+            if stand_in is not None:
+                return stand_in if stand_in.box else None
         det = Detection(box=[round(float(v), 4) for v in box], jpeg=jpeg, by=by)
         if angle:
             det.angle_deg, det.angle_how = measured_angle_of(jpeg, box, look)
