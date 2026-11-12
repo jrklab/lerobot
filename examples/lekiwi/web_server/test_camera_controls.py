@@ -62,6 +62,9 @@ class FakeV4l2:
         arg = cmd[3]
         if arg.startswith("--set-ctrl="):
             name, v = arg.removeprefix("--set-ctrl=").split("=")
+            if name == "exposure_time_absolute" and self.values["auto_exposure"] != 1:
+                # the camera's own refusal of an inactive control (Nov 11, on the Pi)
+                return subprocess.CompletedProcess(cmd, 255, "", "Error setting controls: Permission denied")
             self.values[name] = int(v)
             return subprocess.CompletedProcess(cmd, 0, "", "")
 
@@ -115,6 +118,12 @@ def test_manual_exposure_is_set_before_its_time_and_kept(cams):
     assert fresh.values["auto_exposure"] == 1 and fresh.values["exposure_time_absolute"] == 40
 
 
+def test_the_exposure_time_under_auto_exposure_is_left_alone(cams):
+    cc, fake = cams
+    cc.set("wrist", {"exposure_time_absolute": 40, "brightness": 5})
+    assert fake.values["exposure_time_absolute"] == 60 and fake.values["brightness"] == 5
+
+
 def test_values_are_kept_inside_the_cameras_range(cams):
     cc, fake = cams
     cc.set("wrist", {"brightness": -500, "gain": 900, "auto_exposure": 2})
@@ -130,10 +139,17 @@ def test_an_unknown_control_is_refused_before_anything_is_set(cams):
 
 
 def test_reset_puts_the_defaults_back_and_forgets_them(cams):
+    # Nov 11: under auto exposure the reset also set the exposure time, and the camera refused
+    # it ("Permission denied"); manual mode first, so the reset has both modes to undo.
     cc, fake = cams
-    cc.set("wrist", {"brightness": -20, "power_line_frequency": 2})
+    cc.set(
+        "wrist",
+        {"brightness": -20, "power_line_frequency": 2, "auto_exposure": 1, "exposure_time_absolute": 30},
+    )
     cc.reset("wrist")
     assert fake.values["brightness"] == 0 and fake.values["power_line_frequency"] == 1
+    assert fake.values["auto_exposure"] == 3  # back to auto; the time then is the camera's own
+    cc.reset("wrist")  # again, already under auto exposure: nothing refused
     fresh = FakeV4l2()
     fresh.values["brightness"] = 7
     CameraControls({"wrist": "/dev/wrist"}, store=cc.store, run=fresh).apply_saved()

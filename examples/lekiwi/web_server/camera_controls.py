@@ -43,6 +43,9 @@ CONTROLS = (
     "white_balance_automatic",
     "power_line_frequency",
 )
+# Controls that make others active or inactive: auto_exposure the exposure time,
+# white_balance_automatic the white balance temperature (not offered).
+TOGGLES = ("auto_exposure", "white_balance_automatic")
 STORE = Path.home() / ".config" / "lekiwi" / "camera_controls.json"
 V4L2_TIMEOUT_S = 5.0
 
@@ -116,17 +119,24 @@ class CameraControls:
 
     def _write(self, cam: str, values: dict[str, int], now: dict[str, dict]) -> dict[str, int]:
         """Each value clamped to the camera's range (a menu's to its entries), in CONTROLS
-        order, one v4l2-ctl call each: a failure names its control."""
+        order, one v4l2-ctl call each: a failure names its control. An inactive control is
+        left alone: the camera refuses it, "Permission denied" (Nov 11: the reset set the
+        exposure time under auto exposure). The controls are read again after one that turns
+        others on or off (TOGGLES), so the exposure time set with manual mode takes."""
         done = {}
         for name in CONTROLS:
             if name not in values or name not in now:
                 continue
             c = now[name]
+            if c["inactive"]:
+                continue
             v = min(max(int(values[name]), c["min"]), c["max"])
             if c.get("menu") and v not in c["menu"]:
                 v = c["value"]  # not one of its entries (auto_exposure has 1 and 3): unchanged
             self._v4l2(cam, f"--set-ctrl={name}={v}")
             done[name] = v
+            if name in TOGGLES:
+                now = self.read(cam)
         return done
 
     def set(self, cam: str, values: dict) -> dict[str, dict]:
