@@ -632,7 +632,7 @@ function renderEpisodeList(recording, container) {
 const CAM_CTL_LABELS = {
   auto_exposure: "Exposure mode",
   exposure_time_absolute: "Exposure time (x0.1 ms)",
-  exposure_dynamic_framerate: "Slower frames in the dark",
+  exposure_dynamic_framerate: "Slower in dim light", // auto exposure may drop the frame rate
   brightness: "Brightness",
   gain: "Gain",
   backlight_compensation: "Backlight compensation",
