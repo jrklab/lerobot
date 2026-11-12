@@ -215,14 +215,19 @@ def test_a_move_crossing_the_clearance_goes_at_the_near_speed_only_below_it():
     assert sk.move("arm", delta=(0.0, 0.0, prm.HOVER_HEIGHT_M.value)).ok
     clear = FLOOR_CLEARANCE_M + JAW_TIP_OFFSET_M
     assert len(sent) == 2 and sent[0][0] < clear  # the near part first, from the floor
+    # a trapezoid: distance over speed, plus speed over the acceleration (its ramps up and down)
+    from common.arm import EE_ACCEL_MPS2
+
     near_s = (clear - prm.GRASP_LIFT_M.value) / prm.NEAR_SPEED_MPS.value
     free_s = (prm.GRASP_LIFT_M.value + prm.HOVER_HEIGHT_M.value - clear) / prm.FREE_SPEED_MPS.value
+    free_s += prm.FREE_SPEED_MPS.value / EE_ACCEL_MPS2
     assert abs(sent[0][1] - near_s) < 0.5 and abs(sent[1][1] - free_s) < 0.5
     assert abs(sk.height() - (prm.GRASP_LIFT_M.value + prm.HOVER_HEIGHT_M.value)) < 0.005
     sent.clear()
     h0 = sk.height()
     assert sk.move("arm", height=prm.FINAL_LOOK_HEIGHT_M.value).ok  # down: free first, then near
-    assert abs(sent[0][1] - (h0 - clear) / prm.FREE_SPEED_MPS.value) < 0.5
+    free_down = (h0 - clear) / prm.FREE_SPEED_MPS.value + prm.FREE_SPEED_MPS.value / EE_ACCEL_MPS2
+    assert abs(sent[0][1] - free_down) < 0.5
     assert abs(sk.height() - prm.FINAL_LOOK_HEIGHT_M.value) < 0.002
 
 def test_contact_moves_always_carry_their_own_floor_guard():
