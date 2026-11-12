@@ -369,3 +369,36 @@ def test_close_up_front_looks_go_to_the_main_model(monkeypatch):
         sk.geom = geom(-0.11)
         assert sk.find("red block", "front") is not None and sk.find("red block", "front") is not None
         assert main.calls == main_calls, (box, main.calls, fast.calls)
+
+
+def test_a_task_object_not_seen_yet_is_spotted_in_the_front_frames_the_task_takes(monkeypatch):
+    # Nov 11: the cup, missed in the starting view, was looked for with 11 turns and looks of its
+    # own; checked in the frames of the brick's pick, it would have been remembered.
+    import brain.primitives as primitives
+    from common.gemma import Answer
+
+    monkeypatch.setattr(primitives.time, "sleep", lambda s: None)
+    cup = [0.30, 0.45, 0.50, 0.62]
+
+    class Main:
+        def __init__(self):
+            self.asked = []
+
+        def box(self, jpeg, what):
+            self.asked.append(what)
+            return Answer(text="", value=cup if "cup" in what or "box" in what else None)
+
+    sk = finder(red_frame(cup), Main(), None)
+    sk.geom = geom(-0.11)
+    heading = {"deg": 0.0}
+    sk.robot.status = lambda: {"odom": {"x": 0.0, "y": 0.0, "theta_deg": heading["deg"]}}
+    sk.pending = ["paper cup"]
+    sk.find("red brick", "front")
+    assert "paper cup" in sk.memory and sk.pending == []
+    sk.pending = ["blue box"]
+    sk.main.asked.clear()
+    sk.find("red brick", "front")  # the same view: not looked for again
+    assert sk.main.asked == ["the red brick on the floor"]
+    heading["deg"] = 90.0  # a new view
+    sk.find("red brick", "front")
+    assert "the blue box on the floor" in sk.main.asked and "blue box" in sk.memory

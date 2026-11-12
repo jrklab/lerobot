@@ -210,11 +210,15 @@ class PlanBrain:
         """Look for each object of the plan in the front view from where the task starts, the
         main model, so a later step turns straight to it (Skills.find remembers what it sees;
         actions.look_around). Nothing moves; one not in view is left to the look around."""
+        self.sk.pending = []
         for obj in objects_in(steps):
             if obj == self.holding:
                 continue
             det = self.sk.find(obj, "front", fast_ok=False)
             self.log.ev("located", obj=obj, found=det is not None)
+            if det is None:
+                self.sk.pending.append(obj)  # looked for in the task's later front frames (Skills._spot)
+        self.sk._spotted_from = [float(self.sk.odom()[2])] if self.sk.odom() is not None else []
 
     def park(self) -> str:
         """The base back where the task began (run: its odometry then), the arm folded first

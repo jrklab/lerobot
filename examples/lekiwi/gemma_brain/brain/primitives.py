@@ -48,7 +48,7 @@ from common.robot import RobotError
 from common.vision import Look, look_matches, measured_angle_of, sample_look, snap_box
 
 from brain import params as prm
-from brain.geometry import Geometry, from_room, to_room
+from brain.geometry import Geometry, from_room, to_room, wrap_deg
 from brain.goals import Detection
 
 VERTICAL = 90.0  # convention: the arm model's pitch for a gripper pointing straight down
@@ -81,6 +81,10 @@ class Skills:
         # Where each object was last seen on the floor, in the room (geometry.to_room: the base's
         # wheel odometry), so a later step turns straight towards it (actions.look_around).
         self.memory: dict[str, np.ndarray] = {}
+        # The task's objects not seen yet (task_loop.locate), looked for in the front frames the
+        # task takes anyway, once per new view (_spot): their headings in the room, checked.
+        self.pending: list[str] = []
+        self._spotted_from: list[float] = []
         self.heights: dict[str, float] = {}  # object heights measured side-on by the front camera
         self.widths: dict[str, float] = {}  # and their widths across its view (geometry.front_object_width)
         # How far the held object reaches below the jaw tips: their height above the floor when
@@ -121,7 +125,35 @@ class Skills:
         if o is None:
             return
         self.memory[obj] = to_room(self.geom.cams, p, o)
+        pending = getattr(self, "pending", [])
+        if obj in pending:
+            pending.remove(obj)
         self.ev("remember", obj=obj, room=[round(float(v), 3) for v in self.memory[obj]])
+
+    def _spot(self, jpeg: bytes, looking_for: str) -> None:
+        """The task's objects not seen yet, looked for in this front frame (the main model, one
+        call each), if the base faces a view not checked for them yet: a new heading half the
+        view's width or more from the ones checked. Nov 11: the cup, missed in the starting view,
+        was looked for with 11 turns and looks of its own after the brick's pick."""
+        todo = [o for o in getattr(self, "pending", []) if o != looking_for and o != getattr(self, "holding", None)]
+        if not todo or self.main is None:
+            return
+        odom = self.odom()
+        if odom is None:
+            return
+        half = self.geom.front_view_deg() / 2
+        checked = self.__dict__.setdefault("_spotted_from", [])
+        if any(abs(wrap_deg(math.degrees(odom[2] - h))) < half for h in checked):
+            return
+        checked.append(float(odom[2]))
+        for o in todo:
+            a = self.main.box(jpeg, f"the {o} on the floor")
+            if a.value is None or a.value[3] < self.geom.front_horizon_v():
+                continue
+            p = self.geom.front_point(((a.value[0] + a.value[2]) / 2, a.value[3]))
+            if p is not None:
+                self.ev("spotted", obj=o, box=[round(float(v), 4) for v in a.value])
+                self.remember(o, p)
 
     def remembered(self, obj: str) -> np.ndarray | None:
         """Where `obj` was last seen, in the arm frame from where the base is now; None if never."""
@@ -409,6 +441,8 @@ class Skills:
         # under the held brick and the jaws (Oct 28 replay); the boxes differ only below the rim,
         # which round_centre and the in-view test don't use, and the place check wants the
         # opening the rim encloses.
+        if cam == "front":
+            self._spot(jpeg, obj)
         prompt = f"the rim of the {obj}" if rim else f"the {obj} on the floor"
         key = f"{cam}:{obj}"
         tracked = self.seen.get(key)

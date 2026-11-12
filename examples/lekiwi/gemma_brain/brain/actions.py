@@ -25,6 +25,7 @@ from common.vision import ELONGATED_ASPECT, brick_angle, side_profile, snap_top
 
 from brain import params as prm
 from brain.geometry import (
+    BOTTOM_CENTRE,
     MM_PER_M,
     front_object_height,
     front_object_width,
@@ -282,6 +283,15 @@ def look_around(sk: Skills, obj: str, fast_ok: bool = True, look=None) -> Result
         if abs(turn) > sk.geom.front_view_deg() / 2:
             sk.ev("turn_to_remembered", obj=obj, turn_deg=round(turn, 1))
             r = sk.move("base", roll=wrap_deg(turn))
+            if not r.ok:
+                return r
+        # Closer than the nearest floor the front camera sees: back up first, not after a whole
+        # turn round (Nov 11: the cup beside the robot after the brick's pick; found only after
+        # 11 turns and looks, by the back-up at the end).
+        nearest = near_distance(sk.geom.cams, sk.geom.front_point(BOTTOM_CENTRE))
+        if near_distance(sk.geom.cams, p) < nearest:
+            sk.ev("back_up_to_see", obj=obj)
+            r = sk.move("base", delta=(-prm.LOOK_BACK_M.value, 0.0))
             if not r.ok:
                 return r
     det = look()

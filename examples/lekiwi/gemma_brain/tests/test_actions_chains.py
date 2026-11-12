@@ -208,6 +208,34 @@ def test_look_around_turns_straight_to_where_it_saw_the_object(bearing):
     assert w.turns == [pytest.approx(bearing)] and w.events == ["turn_to_remembered"]
 
 
+def test_look_around_backs_up_first_for_an_object_remembered_too_close_to_see():
+    # Nov 11: the cup beside the robot after the brick's pick: found only after 11 turns and looks,
+    # by the back-up at the end.
+    from brain.primitives import Result
+
+    g = geom(-0.11)
+    moves = []
+    seen = {"backed": False}
+
+    class W:
+        geom = g
+        remembered = staticmethod(lambda obj: np.array([0.05, 0.0]))  # under the camera's view
+        ev = staticmethod(lambda name, **k: None)
+
+        @staticmethod
+        def find(obj, cam, fast_ok=True):
+            return Detection(box=[0.4, 0.4, 0.5, 0.5]) if seen["backed"] else None
+
+        @staticmethod
+        def move(part, delta=None, roll=None, **k):
+            moves.append((delta, roll))
+            seen["backed"] = delta is not None and delta[0] < 0
+            return Result(True)
+
+    assert actions.look_around(W(), "paper cup").ok
+    assert moves == [((-prm.LOOK_BACK_M.value, 0.0), None)]
+
+
 def test_look_around_doesnt_turn_for_a_remembered_object_already_in_view():
     from brain.primitives import Result
 
