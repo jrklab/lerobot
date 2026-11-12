@@ -21,10 +21,12 @@
                   pick "x"                pick chain, approach included (PICK_TRIES tries)
                   place "x" in "y"        place_in chain
                   place "x" next_to "y"   place_next_to chain
-    recover   a failed step: fold, then the planner replans from what's done and why it
-              failed (MAX_REPLANS); the same plan back twice ends it. A place whose jaws
-              opened before a later step failed counts as placed (unverified): a replan would
-              pick it up again.
+    recover   a failed step: fold, then the plan's remaining steps again, as planned
+              (MAX_REPLANS times): a place whose object isn't held any more gets its pick back
+              in front, a pick that got hold of its object after all goes. The plan isn't
+              rewritten: on Nov 11 the planner's replan after a failed pick sent the ball to the
+              paper cup instead of the box it was told. A place whose jaws opened before a
+              later step failed counts as placed (unverified): retried, it would be picked again.
 
 The approach finds an object itself, so there's no separate scan. Between tries and before a
 replan the arm folds and the tracked detections are dropped: the base may have moved. Moved
@@ -194,6 +196,16 @@ class PlanBrain:
             self._forget()
         return ""
 
+    def recover(self, steps: list[Step], failed: Step) -> list[Step]:
+        """The plan's remaining steps (`steps`, the failed one first) to run again, from what the
+        gripper holds now: a place whose object isn't held any more (it fell, or missed the
+        target) gets its pick back in front; a pick that got hold of its object after all goes."""
+        if failed.verb == "place" and self.holding != failed.obj:
+            return [Step("pick", failed.obj), *steps]
+        if failed.verb == "pick" and self.holding == failed.obj:
+            return steps[1:]
+        return steps
+
     def locate(self, steps: list[Step]) -> None:
         """Look for each object of the plan in the front view from where the task starts, the
         main model, so a later step turns straight to it (Skills.find remembers what it sees;
@@ -256,7 +268,7 @@ class PlanBrain:
         self.locate(steps)
         done: list[Step] = []
         unverified: list[str] = []
-        replans = repeats = 0
+        replans = 0
         while steps:
             s = steps[0]
             print(f"\n>>> {s}")
@@ -293,27 +305,21 @@ class PlanBrain:
                 continue
             max_replans = int(prm.MAX_REPLANS.value)
             if replans >= max_replans:
-                return False, f"{s} failed after {max_replans} replans: {r.reason}"
+                return False, f"{s} failed after {max_replans} retries of the plan: {r.reason}"
+            if r.data.get("refused") and replans:
+                # Refused before anything moved: the same plan gets the same answer (Oct 28: a
+                # wrist roll past its limit, refused six times over ~140 s). Once more, not again.
+                return False, f"{s} refused again ({r.reason})"
             replans += 1
             why = self.fold()
             if why:
-                return False, f"{s} failed ({r.reason}); the arm stayed where it was to replan: {why}"
-            front, wrist = self.frames()
-            try:
-                new, a = self.planner.replan(goal, done, s, r.reason, self.holding, front, wrist)
-            except ValueError as e:
-                return False, f"{s} failed ({r.reason}) and the replan was not a plan: {e}"
-            # The same steps again: one more try is a retry; a second time won't go differently.
-            same = new == steps
-            if same and repeats:
-                return False, f"{s} failed twice ({r.reason}) and the replan didn't change it"
-            repeats += same
-            steps = new
-            self.log.ev("replan", n=replans, steps=[str(x) for x in steps], ms=round(a.ms))
-            print(f"replan {replans} ({a.ms / 1000:.1f} s):\n  " + "\n  ".join(map(str, steps)))
+                return False, f"{s} failed ({r.reason}); the arm stayed where it was to retry: {why}"
+            steps = self.recover(steps, s)
+            self.log.ev("retry_plan", n=replans, steps=[str(x) for x in steps], reason=r.reason)
+            print(f"retry {replans} of the plan:\n  " + "\n  ".join(map(str, steps)))
             problems = check_plan(steps, SUPPORTED, self.holding)
             if problems:
                 self.log.ev("plan_rejected", problems=problems)
-                return False, f"{s} failed ({r.reason}); replan not runnable: " + "; ".join(problems)
+                return False, f"{s} failed ({r.reason}); the retry isn't runnable: " + "; ".join(problems)
         summary = "done: " + "; ".join(map(str, done))
         return True, summary + (f" (unverified: {'; '.join(unverified)})" if unverified else "")

@@ -221,10 +221,9 @@ def test_a_refused_pick_is_not_retried(world):
     # Oct 28: a wrist roll past its limit was refused six times over two plans (~140 s).
     world.fail = {"pick red block": 99}
     world.fail_data = {"failed": "align", "refused": True}
-    planner = FakePlanner('pick "red block"', 'pick "red block"', 'pick "red block"')
-    ok, why = brain(planner, FakeSkills()).run("pick red")
-    assert not ok and "didn't change" in why, why
-    assert world.calls.count("pick red block") == 2, world.calls  # once per plan, not three
+    ok, why = brain(FakePlanner('pick "red block"'), FakeSkills()).run("pick red")
+    assert not ok and "refused again" in why, why
+    assert world.calls.count("pick red block") == 2, world.calls  # tried, and once more
 
 
 def test_a_pick_failing_after_the_hover_resumes_there_without_folding(world):
@@ -257,31 +256,30 @@ def test_a_pick_that_gripped_before_a_later_step_failed_keeps_it(world, monkeypa
     assert ok and sk.holding == "red block", why
 
 
-def test_replan_after_failure(world):
-    # The place fails all its tries in code; the replan continues from "holding the red block".
+def test_a_failed_step_runs_the_rest_of_the_plan_again_as_planned(world):
+    # The place fails all its tries in code; still holding, the plan's place runs again, to the
+    # same target: no planner (Nov 11: its replan after a failed pick sent the ball to the cup).
     world.fail = {"place red block in cup": int(prm.PLACE_TRIES.value)}
-    planner = FakePlanner('pick "red block"\nplace "red block" in "cup"\ndone', 'place "red block" in "cup"\ndone')
+    planner = FakePlanner('pick "red block"\nplace "red block" in "cup"\ndone')
     ok, _ = brain(planner, FakeSkills()).run("red in cup")
-    assert ok, world.calls
-    done, failed, _, holding = planner.replans[0]
-    assert done == [Step("pick", "red block")] and failed == Step("place", "red block", "in", "cup")
-    assert holding == "red block"
+    assert ok and planner.replans == [], world.calls
+    assert world.calls.count("pick red block") == 1 and world.calls[-1] == "place red block in cup"
 
 
-def test_gives_up_after_max_replans(world):
-    world.fail = {"place red block in cup": 99, "place red block in paper cup": 99}
-    plans = ['pick "red block"\nplace "red block" in "cup"', 'place "red block" in "paper cup"',
-             'place "red block" in "cup"']
-    ok, why = brain(FakePlanner(*plans), FakeSkills()).run("red in cup")
-    assert not ok and f"after {int(prm.MAX_REPLANS.value)} replans" in why, why
+def test_a_failed_pick_runs_again_and_the_destinations_stay(world):
+    world.fail = {"pick tennis ball": int(prm.PICK_TRIES.value)}
+    plan = 'pick "tennis ball"\nplace "tennis ball" in "box"\npick "red brick"\nplace "red brick" in "cup"\ndone'
+    ok, _ = brain(FakePlanner(plan), FakeSkills()).run("x")
+    assert ok
+    assert [c for c in world.calls if c.startswith("place")] == ["place tennis ball in box", "place red brick in cup"]
 
 
-def test_identical_replan_runs_once_more_only(world):
+def test_gives_up_after_max_retries_of_the_plan(world):
     world.fail = {"place red block in cup": 99}
-    plans = ['pick "red block"\nplace "red block" in "cup"'] + ['place "red block" in "cup"'] * 2
-    ok, why = brain(FakePlanner(*plans), FakeSkills()).run("red in cup")
-    assert not ok and "didn't change" in why, why
-    assert world.calls.count("place red block in cup") == 2 * int(prm.PLACE_TRIES.value), world.calls
+    ok, why = brain(FakePlanner('pick "red block"\nplace "red block" in "cup"'), FakeSkills()).run("red in cup")
+    assert not ok and f"after {int(prm.MAX_REPLANS.value)} retries" in why, why
+    tries = (int(prm.MAX_REPLANS.value) + 1) * int(prm.PLACE_TRIES.value)
+    assert world.calls.count("place red block in cup") == tries, world.calls
 
 
 def test_released_then_failed_counts_as_placed(world):
@@ -302,9 +300,10 @@ def test_a_place_the_check_finds_wrong_is_replanned_not_counted(world, monkeypat
         return Result(False, f"check: the {what} is not inside the {target}", {"failed": "check"})
 
     monkeypatch.setattr(chains, "place_in", missed)
-    planner = FakePlanner('pick "red block"\nplace "red block" in "cup"', 'pick "red block"\ndone')
+    planner = FakePlanner('pick "red block"\nplace "red block" in "cup"')
     ok, why = brain(planner, FakeSkills()).run("red in cup")
-    assert planner.replans and planner.replans[0][3] is None, planner.replans  # replanned, not holding
+    # not held any more: picked again, then placed again, in the same cup
+    assert world.calls[:4] == ["pick red block", "place red block in cup", "hover", "pick red block"], world.calls
     assert "unverified" not in why
 
 
