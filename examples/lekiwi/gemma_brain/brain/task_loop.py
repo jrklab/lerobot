@@ -251,7 +251,9 @@ class PlanBrain:
 
     # --- the task ---
 
-    def run(self, goal: str) -> tuple[bool, str]:
+    def prepare(self, goal: str) -> tuple[list[Step] | None, str]:
+        """run's start: the arm folded, the plan made from where the task begins; (steps, "") or
+        (None, why). For a caller that shows the plan before running it (voice_brain.py)."""
         # Holding something nobody named: Nov 6 the ball was still in the jaws from the run
         # before, the plan picked it, and the look for it on the floor swung the base round.
         self.held_unnamed = self.holding is None and self.sk.held()
@@ -265,12 +267,17 @@ class PlanBrain:
             print("folding the arm to rest first")
             why = self.fold()
             if why:
-                return False, f"couldn't fold the arm to rest first: {why}"
+                return None, f"couldn't fold the arm to rest first: {why}"
         self.start_odom = self.sk.odom()  # where the task began, for park()
         front, wrist = self.frames()
-        steps, why = self.make_plan(goal, front, wrist)
+        return self.make_plan(goal, front, wrist)
+
+    def run(self, goal: str, steps: list[Step] | None = None) -> tuple[bool, str]:
+        """The task: planned here (prepare), or `steps` as prepare made them."""
         if steps is None:
-            return False, why
+            steps, why = self.prepare(goal)
+            if steps is None:
+                return False, why
         self.locate(steps)
         done: list[Step] = []
         unverified: list[str] = []
