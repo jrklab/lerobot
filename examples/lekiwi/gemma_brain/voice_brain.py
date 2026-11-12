@@ -66,6 +66,7 @@ SPEECH_OVER_NOISE = 3.0  # a block is speech when this much louder than the room
 MIN_SPEECH_RMS = 300.0  # and at least this loud (int16), so a silent room doesn't count its hiss
 ANSWER_WAIT_S = 8.0  # how long a go/cancel answer is waited for
 WHISPER_MODEL = Path.home() / "models" / "whisper" / "ggml-small.bin"
+LEAD_IN_MS = 300  # silence said before each sentence, while the speaker fades in
 DEVICE_NAME = "PowerConf"  # the Anker speakerphone, microphone and speaker; else the defaults
 
 logger = logging.getLogger(__name__)
@@ -189,7 +190,11 @@ class Voice:
     def _loop(self) -> None:
         while True:
             text = self.q.get()
-            subprocess.run(["say"] + (["-a", self.device] if self.device else []) + [text])
+            # A moment of silence first: the speakerphone fades in when a sentence opens its
+            # stream, and the first word came out low (owner, Nov 11).
+            subprocess.run(
+                ["say"] + (["-a", self.device] if self.device else []) + [f"[[slnc {LEAD_IN_MS}]] {text}"]
+            )
             self.q.task_done()
 
     def say(self, text: str, wait: bool = False) -> None:
