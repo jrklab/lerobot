@@ -46,6 +46,10 @@ from common.vision import ELONGATED_ASPECT, brick_angle, sample_look  # noqa: E4
 
 PLANNER_URL = "http://127.0.0.1:8081"  # the main model, as plan_brain.py
 SETTLE_S = 2.0  # after a brightness change, for the camera's own auto exposure to settle
+# The height of each object's outline as the wrist camera sees it from above (the plane its size is
+# measured on, actions.outline_height): a pick takes it from the front camera; here from the
+# Nov 11 runs (the tennis ball's widest band's top ~4.2 cm, the red brick's top ~1.9 cm). --top.
+OUTLINE_M = {"tennis ball": 0.042, "red brick": 0.019, "green block": 0.023}
 CLIP = 250  # a channel at or above this is clipped (white)
 BLACK = 15  # a pixel this dark or darker in every channel is black
 
@@ -96,7 +100,18 @@ def main() -> int:
     ap.add_argument(
         "--no-move", action="store_true", help="the arm is already where the wrist camera should look"
     )
+    ap.add_argument(
+        "--top",
+        nargs="*",
+        default=[],
+        metavar="OBJ=M",
+        help='an outline height for the size, e.g. "red brick=0.019" (default OUTLINE_M)',
+    )
     args = ap.parse_args()
+    tops = dict(OUTLINE_M)
+    for t in args.top:
+        name, _, m = t.rpartition("=")
+        tops[name] = float(m)
 
     out = (
         Path(__file__).resolve().parents[1]
@@ -146,6 +161,14 @@ def main() -> int:
                                 aspect=None if m is None else m["aspect"],
                                 round=None if m is None else m["aspect"] < ELONGATED_ASPECT,
                             )
+                            if m is not None and obj in tops:  # the size, as the grasp's measure_width
+                                h = sk.height()
+                                row["short_mm"] = round(
+                                    1000 * sk.geom.wrist_distance(*m["across"], h, tops[obj], 0.0), 1
+                                )
+                                row["long_mm"] = round(
+                                    1000 * sk.geom.wrist_distance(*m["along"], h, tops[obj], 0.0), 1
+                                )
                         rows.append(row)
                         with open(out / "sweep.jsonl", "a") as f:
                             f.write(json.dumps(row) + "\n")
@@ -167,10 +190,17 @@ def main() -> int:
             found = [r for r in rs if r["found"]]
             aspects = [r["aspect"] for r in found if r.get("aspect") is not None]
             clip = [r["inside"]["clipped"] for r in found]
+            short = [r["short_mm"] for r in found if r.get("short_mm") is not None]
+            long_ = [r["long_mm"] for r in found if r.get("long_mm") is not None]
             print(
                 f"  {value:+3d} {obj:14s} found {len(found)}/{len(rs)}"
                 + (f", aspect {min(aspects):.2f}-{max(aspects):.2f}" if aspects else "")
                 + (f", clipped {100 * max(clip):.0f}%" if clip else "")
+                + (
+                    f", {min(short):.0f}-{max(short):.0f} x {min(long_):.0f}-{max(long_):.0f} mm"
+                    if short
+                    else ""
+                )
             )
     return 0
 
