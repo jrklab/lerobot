@@ -38,6 +38,10 @@ MARKED_CONTAINERS = {"box": CONTAINER_MARKER_IDS}
 # isn't measured: its two side edges nearly meet and their solve goes wild (Nov 6: id 90 at the
 # frame's edge, ~10 px wide, read 13 cm from the camera, 83 mm of spread over 10 frames).
 MIN_WIDTH_SHARE = 0.5  # cos 60 deg
+MARGIN_M = 0.010  # the white margin printed round the marker (make_markers.py's MARGIN_MM)
+# The lower share of the columns' edges taken as the face's top (face_top_z): a quarter of them
+# over a background unlike the face is enough; the lowest tenth read 1 mm under the tape once.
+FACE_TOP_SHARE = 0.25
 EDGE_BLUR_PX = 3  # an edge spreads over ~3 rows: the 5x5 blur below and the camera's own
 TOP_DELTA_E = 12.0  # a row is the same colour within this (Lab), as vision.snap_top's TOP_MIN_DELTA_E
 
@@ -114,33 +118,40 @@ def find_markers(img: np.ndarray, lens: Lens, T_base_cam: np.ndarray, ids=CONTAI
 
 
 def face_top_z(img: np.ndarray, m: MarkerPose, lens: Lens, T_base_cam: np.ndarray) -> float | None:
-    """The arm-frame height of the top edge of the face the marker is stuck on: up the image from
-    the marker, past its white margin, along the face's own colour to where it ends; that row's
-    ray meets the face's plane there. None without an edge before the image's top. Nov 6: the
-    box models put the shoe box's top at 9.8-11.7 cm."""
+    """The arm-frame height of the top edge of the face the marker is stuck on. Each image
+    column across the face (the marker's width and as much again each side) is walked up from
+    just above the marker's white margin while it keeps the face's colour; the edge is the lower
+    FACE_TOP_SHARE of where they end, and its ray meets the face's plane there. The front camera
+    sits below the box's top and sees the edge against what's behind it: a background the face's
+    colour only carries the walk on upwards, never stops it short, so the columns over a
+    contrasting background give the edge (Nov 11: one column above the marker, over a black bag,
+    read the 11.5 cm box at 13.4-17.8 cm; the lower quarter of all columns 11.6-12.8). Columns
+    that don't start on the face's colour (off the face) and ones that reach the frame's top
+    (the face may go on past it) don't count; None if none is left."""
     bgr = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR) if img.ndim == 2 else img
     lab = cv2.cvtColor(cv2.GaussianBlur(bgr, (5, 5), 0), cv2.COLOR_BGR2LAB).astype(float)
+    h, w = lab.shape[:2]
     px = m.corners * IMAGE_PX
     x0, x1 = px[:, 0].min(), px[:, 0].max()
-    c0, c1 = int(x0 + 0.3 * (x1 - x0)), int(x1 - 0.3 * (x1 - x0))  # the middle of its width
-    y = int(min(px[0, 1], px[1, 1])) - 2  # just above the marker's top edge
-    if c1 - c0 < 2 or y < 4:
+    top = min(px[0, 1], px[1, 1])
+    tall = max(px[3, 1], px[2, 1]) - top
+    y0 = int(top - tall * MARGIN_M / MARKER_SIZE_M) - 2 * EDGE_BLUR_PX  # on the face, above the margin
+    if y0 < 2 * EDGE_BLUR_PX:
         return None
-
-    def walk(y: int) -> int:
-        """Up from row y while the rows keep row y's colour; the first row that doesn't."""
-        ref = np.median(lab[y - 2 : y + 1, c0:c1].reshape(-1, 3), axis=0)
-        while y - 1 >= 0 and np.mean(np.linalg.norm(lab[y - 1, c0:c1] - ref, axis=1) <= TOP_DELTA_E) >= 0.5:
+    ref = np.median(lab[y0 - 2 : y0 + 1, int(x0) : int(x1)].reshape(-1, 3), axis=0)  # the face's colour
+    rows = []
+    for c in range(max(0, int(2 * x0 - x1)), min(w, int(2 * x1 - x0))):
+        if np.linalg.norm(lab[y0, c] - ref) > TOP_DELTA_E:
+            continue  # off the face
+        y = y0
+        while y - 1 >= 0 and np.linalg.norm(lab[y - 1, c] - ref) <= TOP_DELTA_E:
             y -= 1
-        return y - 1
-
-    y = walk(y) - EDGE_BLUR_PX  # the white margin, then past the blurred edge into the face
-    if y < 3:
+        if y >= 2 * EDGE_BLUR_PX:
+            rows.append(y)
+    if not rows:
         return None
-    y = walk(y)  # the face
-    if y < 2 * EDGE_BLUR_PX:  # at the frame's top: the face may go on past it (Nov 6, close up at 20 cm)
-        return None
+    edge = float(np.percentile(rows, 100 * (1 - FACE_TOP_SHARE)))  # rows count down: the lower edges
     rot, o = T_base_cam[:3, :3], T_base_cam[:3, 3]
-    d = rot @ lens.ray(((x0 + x1) / 2 / IMAGE_PX[0], (y + 1) / IMAGE_PX[1]))
+    d = rot @ lens.ray(((x0 + x1) / 2 / IMAGE_PX[0], edge / IMAGE_PX[1]))
     t = float((m.centre - o) @ m.normal) / float(d @ m.normal)
     return float(o[2] + t * d[2]) if t > 0 else None

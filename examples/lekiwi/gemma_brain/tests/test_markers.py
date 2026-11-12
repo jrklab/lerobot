@@ -62,9 +62,10 @@ def test_markers_not_on_a_container_are_ignored():
     assert find_markers(_render(12, np.array([0.45, 0.0, -0.05]), 0.0), LENS, T_BASE_CAM) == []
 
 
-def _render_face(mid, face_centre, face_top, marker_mid_z, background=200):
+def _render_face(mid, face_centre, face_top, marker_mid_z, background=200, dark_behind=False):
     """A grey image: a dark box face (its top at face_top, arm-frame z) square to the camera, with
-    marker `mid` and a white margin on it, its middle at marker_mid_z; a light room behind."""
+    marker `mid` and a white margin on it, its middle at marker_mid_z; a light room behind.
+    dark_behind: something as dark as the face behind its middle (a black bag, Nov 11)."""
     T = np.linalg.inv(T_BASE_CAM)
 
     def px(p):
@@ -72,6 +73,8 @@ def _render_face(mid, face_centre, face_top, marker_mid_z, background=200):
         return q[:2] / q[2]
 
     img = np.full((480, 640), background, np.uint8)
+    if dark_behind:
+        img[:, 270:370] = 25
     x, y = face_centre[0], face_centre[1]
     floor = -0.1
     face = np.array([px([x, y + 0.12, face_top]), px([x, y - 0.12, face_top]),
@@ -120,3 +123,13 @@ def test_a_marker_stuck_on_turned_is_measured_the_same(turns, monkeypatch):
     monkeypatch.setattr(mk.cv2.aruco.ArucoDetector, "detectMarkers", turned)
     (m,) = find_markers(img, LENS, T_BASE_CAM)
     assert np.linalg.norm(m.centre - centre) < 0.01 and m.heading_deg() == pytest.approx(15.0, abs=6.0)
+
+
+def test_the_top_is_found_where_the_background_behind_it_is_as_dark_as_the_face():
+    # Nov 11: a black bag behind the box over the marker carried the one-column walk up past the
+    # top: the 11.5 cm box read 13.4-17.8 cm. The columns beside it, over the light room, end at it.
+    from brain.markers import face_top_z
+
+    img = _render_face(91, np.array([0.40, 0.0]), 0.015, -0.055, dark_behind=True)
+    (m,) = find_markers(img, LENS, T_BASE_CAM)
+    assert face_top_z(img, m, LENS, T_BASE_CAM) == pytest.approx(0.015, abs=0.004)
