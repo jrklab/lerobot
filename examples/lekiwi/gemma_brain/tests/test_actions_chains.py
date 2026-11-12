@@ -400,6 +400,34 @@ def test_place_next_to_lines_up_twice_and_lands(monkeypatch):
     assert calls == ["move", "BesideGoal:base", "BesideGoal:arm", "move", "BesideGoal:arm", "land", "open", "move"]
 
 
+def test_a_far_sighting_drives_only_when_a_second_look_puts_it_in_the_same_place():
+    # Nov 11: white cloth and sneakers across the room boxed as the white paper cup; each drove
+    # the base 0.2-0.8 m and the next look had lost it.
+    far = [0.30, 0.38, 0.36, 0.42]  # its bottom near the horizon: ~1 m out
+
+    class S:
+        geom = geom(-0.11)
+
+        def __init__(self, second):
+            self.second, self.calls, self.memory, self.events = second, 0, {"cup": np.zeros(2)}, []
+
+        def find(self, obj, cam, fast_ok=True, **k):
+            self.calls += 1
+            return Detection(box=far) if self.calls == 1 else (None if self.second is None else Detection(box=self.second))
+
+        def ev(self, name, **k):
+            self.events.append(name)
+
+    s = S([0.31, 0.385, 0.365, 0.418])  # the same object, its box a little off
+    assert actions.confirmed_look(s, "cup").box == s.second and s.calls == 2
+    for second in (None, [0.70, 0.40, 0.75, 0.44]):  # gone, or somewhere else
+        s = S(second)
+        assert actions.confirmed_look(s, "cup") is None and s.events == ["unconfirmed"] and "cup" not in s.memory
+    s = S(None)
+    s.find = lambda obj, cam, fast_ok=True, **k: Detection(box=[0.48, 0.80, 0.53, 0.86])  # near: one look
+    assert actions.confirmed_look(s, "cup") is not None
+
+
 def test_the_approachs_first_drive_uses_the_main_models_look():
     # Oct 29: the look-around's main-model box put the brick 0.47 m away, the next (fast-model)
     # look 0.56 m; the drive went by the second and lost the brick.
@@ -407,11 +435,12 @@ def test_the_approachs_first_drive_uses_the_main_models_look():
 
     looks, used = [], []
 
-    def make(by):
-        return Detection(box=[0.48, 0.40, 0.53, 0.44], by=by)
+    def make(by):  # near: within what the camera sees past the stop, no confirming look
+        return Detection(box=[0.48, 0.80, 0.53, 0.86], by=by)
 
     class S:
         seen, heights = {}, {}
+        geom = geom(-0.11)
 
         def __init__(self, first_by):
             self.first_by = first_by

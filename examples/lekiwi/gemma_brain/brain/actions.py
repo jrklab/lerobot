@@ -30,6 +30,7 @@ from brain.geometry import (
     front_object_height,
     front_object_width,
     front_profile,
+    front_view_margin,
     grasp_spot,
     locate_from_one_view,
     look_offsets,
@@ -325,6 +326,32 @@ def look_around(sk: Skills, obj: str, fast_ok: bool = True, look=None) -> Result
     return Result(False, f"no {obj} in a full look around, nor after backing up")
 
 
+def confirmed_look(sk: Skills, obj: str, fast_ok: bool = True, stop_short: float = 0.0):
+    """One front look for `obj` for the approach; a sighting that would drive the base further
+    than the camera still sees past the stop (front_view_margin: a wrong one can't be told by the
+    looks on the way) only with a second look, the main model's, whose box's bottom middle falls
+    inside the first's: a real object stays put, a mistaken one goes or moves. Not confirmed:
+    None (the look-around goes on), and the place it was taken for forgotten. Nov 11 (run
+    20261111T180733): the main model boxed white cloth and sneakers across the room as the white
+    paper cup six times; each drove the base 0.2-0.8 m, and the next look had lost it."""
+    det = sk.find(obj, "front", fast_ok=fast_ok)
+    if det is None:
+        return None
+    p = sk.geom.front_point(((det.box[0] + det.box[2]) / 2, det.box[3]))
+    if p is None or sk.geom.front_turn_and_distance(p)[1] - stop_short <= front_view_margin(sk.geom):
+        return det
+    again = sk.find(obj, "front", fast_ok=False)
+    if again is not None:
+        u, v = (again.box[0] + again.box[2]) / 2, again.box[3]
+        if det.box[0] <= u <= det.box[2] and det.box[1] <= v <= det.box[3]:
+            return again
+    sk.ev("unconfirmed", obj=obj, box=det.box, again=None if again is None else again.box)
+    memory = getattr(sk, "memory", None)
+    if memory is not None:
+        memory.pop(obj, None)
+    return None
+
+
 def approach(sk: Skills, obj: str, tol=None, stop_short: float = 0.0, fast_ok: bool = True) -> Result:
     """Base: find the object (looking around if it isn't in the forward view), then turn and
     drive until the front camera sees it at the reach point. The first drive is measured on the
@@ -333,8 +360,10 @@ def approach(sk: Skills, obj: str, tol=None, stop_short: float = 0.0, fast_ok: b
     main model's of the same view, the drive went 9 cm too far and lost the brick (Oct 29,
     run 20261029T071804). fast_ok=False: the main model only, for a container (place_in): the
     fast model's boxes of the black shoe box passed its colour check on other dark things, and
-    the place drove to them (Nov 6, run 20261106T205655: the "box" measured 4.7 and 1.5 cm tall)."""
-    r = look_around(sk, obj, fast_ok)
+    the place drove to them (Nov 6, run 20261106T205655: the "box" measured 4.7 and 1.5 cm tall).
+    A sighting further than the front camera sees past the stop (front_view_margin) counts only
+    if a second look from where the base stands boxes it in the same place (confirmed_look)."""
+    r = look_around(sk, obj, fast_ok, look=lambda: confirmed_look(sk, obj, fast_ok, stop_short))
     if r.ok:
         first = r.data["det"] if r.data["det"].by == "main" else sk.find(obj, "front", fast_ok=False)
         r = sk.servo(obj, FrontApproachGoal(tol, stop_short), first=first, fast_ok=fast_ok)
