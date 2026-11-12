@@ -265,6 +265,25 @@ def test_held_needs_the_hold_watch_not_just_a_high_reading():
         assert sk.held() is want, (pos, state)
 
 
+def test_an_object_taken_out_of_the_jaws_outside_auto_mode_is_not_held():
+    # Nov 11: the brick taken out by hand under the gamepad (the Pi's drop watch runs only in auto
+    # mode): still "holding", the jaws on at 6 deg (7.2 mm, over the 5 mm empty line).
+    class R:
+        def __init__(self, deg):
+            self.st = {"joints": {"arm_gripper": deg},
+                       "gripper_hold": {"state": "holding", "pos": 10.6, "squeeze": 5.14}}
+
+        def status(self):
+            return self.st
+
+    sk = Skills.__new__(Skills)
+    sk.geom = geom(-0.11)
+    sk.robot = R(6.0)
+    assert not sk.held()
+    sk.robot = R(10.4)  # still on it, a little past where it stopped
+    assert sk.held()
+
+
 def test_the_gripper_opening_in_mm_follows_the_measured_curve():
     g = geom(-0.11)
     assert g.gripper_mm(1.0) == 0.0  # the jaws meet at 1.41 deg

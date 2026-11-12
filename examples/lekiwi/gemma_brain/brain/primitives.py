@@ -520,4 +520,12 @@ class Skills:
         place-in said "still holding" after opening, with the brick in the cup)."""
         st = self.robot.status()
         hold = st.get("gripper_hold") or {}
-        return hold.get("state") == "holding" and self.geom.gripper_mm(st["joints"]["arm_gripper"]) >= prm.GRIPPER_EMPTY_MAX.value
+        deg = st["joints"]["arm_gripper"]
+        if hold.get("state") != "holding":
+            return False
+        # Closed on past where they stopped on it, by the Pi's own drop rule: the Pi watches for
+        # that only in auto mode, so an object taken out of the jaws under the gamepad still read
+        # "holding" (Nov 11: the brick taken out, the jaws at 6 deg, 7.2 mm, over the 5 mm line).
+        if hold.get("squeeze") and deg < hold["pos"] - prm.HOLD_DROP_SHARE.value * hold["squeeze"]:
+            return False
+        return self.geom.gripper_mm(deg) >= prm.GRIPPER_EMPTY_MAX.value

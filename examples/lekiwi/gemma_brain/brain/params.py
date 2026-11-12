@@ -94,6 +94,7 @@ BASE_MOVE_MAX_M = Param(1.0, "SPEC", "the Pi refuses a base drive over this per 
 BASE_TURN_MAX_DEG = Param(180.0, "SPEC", "the Pi refuses a base turn over this in one command (auto_control: 1 m per axis, 180 deg)")
 BASE_TURN_STOP_SHORT_DEG = Param(2.0, "SPEC", "the Pi ends a base turn within this of its goal (auto_control.BASE_THETA_TOL_DEG): turns stopped ~2 deg short")
 CONTROL_PERIOD_S = Param(1 / 30, "SPEC", "the Pi reads the joints once per control tick (web_server/robot_bridge.py FPS 30): status reads closer together can return the same sample")
+HOLD_DROP_SHARE = Param(0.5, "SPEC", "the jaws closed past where they stopped on the object by this share of the squeeze: dropped (the Pi's own rule, auto_control.HOLD_DROP_FRACTION; it watches only in auto mode)")
 GRIPPER_EMPTY_MAX = Param(5.0, "SPEC", "mm: a close that stops wider holds something: closed on nothing the jaws meet (0 mm, 1.2-1.6 deg), the brick's narrowest side is 15.8 mm (calibrate_gripper.py, Oct 29; was 4.6 deg, 3.5 normalized units)")
 
 # --- RULE ---
