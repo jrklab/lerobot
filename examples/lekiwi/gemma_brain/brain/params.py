@@ -150,6 +150,6 @@ FOLD_CLEAR_M = Param(0.165, "RULE", "fold: jaw tips above the floor beyond which
 BASE_SPEED_MPS = Param(0.12, "RULE", "base drive speed (the Pi's default 0.08, its limit auto_control.MAX_BASE_XY_SPEED 0.15): base moves were 43 s of a 191 s two-object task (Nov 11)")
 BASE_TURN_DPS = Param(40.0, "RULE", "base turn speed, deg/s (the Pi's default 25, its limit MAX_BASE_THETA_SPEED 45)")
 FREE_SPEED_MPS = Param(0.08, "RULE", "straight-line speed in free air: the arm planner's top speed (arm.MAX_EE_SPEED); 0.04 until Nov 11, when arm moves were 64 s of a 191 s two-object task")
-NEAR_SPEED_MPS = Param(0.01, "RULE", "speed for the last centimetres to the floor")
+NEAR_SPEED_MPS = Param(0.02, "RULE", "speed for the last centimetres to the floor: 0.01 until Nov 11 (a 3.7 cm descent to a grasp took 4.4 s); a slow descent also let the Pi's contact watch read the arm's drifting droop as a touch (Nov 11)")
 
 ALL = {name: p for name, p in globals().items() if isinstance(p, Param)}
