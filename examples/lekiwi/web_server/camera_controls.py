@@ -27,6 +27,7 @@ import json
 import logging
 import re
 import subprocess
+import threading
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -48,6 +49,9 @@ CONTROLS = (
 TOGGLES = ("auto_exposure", "white_balance_automatic")
 STORE = Path.home() / ".config" / "lekiwi" / "camera_controls.json"
 V4L2_TIMEOUT_S = 5.0
+# How often the kept controls are compared with the cameras' (watch): a camera unplugged and back,
+# or dropped off USB and back, comes up on its defaults, unseen by the service's camera watchdog.
+CHECK_PERIOD_S = 5.0
 
 # "  brightness 0x00980900 (int)    : min=-64 max=64 step=1 default=0 value=0 flags=inactive"
 _CTRL = re.compile(r"^\s*(\w+) 0x[0-9a-f]+ \((\w+)\)\s*:\s*(.*)$")
@@ -92,6 +96,10 @@ class CameraControls:
 
     def __init__(self, devices: dict[str, str], store: Path = STORE, run=subprocess.run):
         self.devices, self.store, self._run = dict(devices), store, run
+        # One change at a time: the watch must not read a value the page just set before it's
+        # kept, and put the old one back.
+        self._lock = threading.RLock()
+        self._missing: set[str] = set()  # cameras the watch couldn't read last time
 
     def _v4l2(self, cam: str, *args: str) -> str:
         r = self._run(
@@ -144,31 +152,77 @@ class CameraControls:
         unknown = set(values) - set(CONTROLS)
         if unknown:
             raise ValueError(f"not a camera control here: {', '.join(sorted(unknown))}")
-        done = self._write(cam, values, self.read(cam))
-        saved = self._saved()
-        saved[cam] = {**saved.get(cam, {}), **done}
-        self._save(saved)
-        logger.info("camera %s: set %s", cam, done)
-        return self.read(cam)
+        with self._lock:
+            done = self._write(cam, values, self.read(cam))
+            saved = self._saved()
+            saved[cam] = {**saved.get(cam, {}), **done}
+            self._save(saved)
+            logger.info("camera %s: set %s", cam, done)
+            return self.read(cam)
 
     def reset(self, cam: str) -> dict[str, dict]:
         """Every control back to the camera's default, nothing kept."""
-        now = self.read(cam)
-        self._write(cam, {n: c["default"] for n, c in now.items()}, now)
-        saved = self._saved()
-        saved.pop(cam, None)
-        self._save(saved)
-        logger.info("camera %s: controls back to their defaults", cam)
-        return self.read(cam)
+        with self._lock:
+            now = self.read(cam)
+            self._write(cam, {n: c["default"] for n, c in now.items()}, now)
+            saved = self._saved()
+            saved.pop(cam, None)
+            self._save(saved)
+            logger.info("camera %s: controls back to their defaults", cam)
+            return self.read(cam)
 
     def apply_saved(self) -> None:
         """The kept controls, on every camera that has some (at startup, after a reconnect).
         A camera that fails is logged; the rest still get theirs."""
-        for cam, values in self._saved().items():
-            if cam not in self.devices:
-                continue
+        with self._lock:
+            for cam, values in self._saved().items():
+                if cam not in self.devices:
+                    continue
+                try:
+                    self._write(cam, values, self.read(cam))
+                    logger.info("camera %s: kept controls applied %s", cam, values)
+                except (RuntimeError, OSError, subprocess.TimeoutExpired) as e:
+                    logger.warning("camera %s: kept controls not applied: %s", cam, e)
+
+    def check(self) -> dict[str, dict[str, int]]:
+        """Each camera with kept controls compared with them, and given them again where they
+        differ (it came back on its defaults); {camera: the controls put back}. A camera that
+        can't be read is skipped, noted once until it reads again."""
+        put_back = {}
+        with self._lock:
+            for cam, values in self._saved().items():
+                if cam not in self.devices:
+                    continue
+                try:
+                    now = self.read(cam)
+                except (RuntimeError, OSError, subprocess.TimeoutExpired) as e:
+                    if cam not in self._missing:
+                        logger.warning("camera %s: can't read its controls (unplugged?): %s", cam, e)
+                        self._missing.add(cam)
+                    continue
+                if cam in self._missing:
+                    self._missing.discard(cam)
+                    logger.info("camera %s: readable again", cam)
+                lost = {
+                    n: v
+                    for n, v in values.items()
+                    if n in now and not now[n]["inactive"] and now[n]["value"] != v
+                }
+                if not lost:
+                    continue
+                try:
+                    put_back[cam] = self._write(cam, values, now)
+                    logger.warning(
+                        "camera %s: kept controls lost %s (replugged or reset?), put back", cam, lost
+                    )
+                except (RuntimeError, OSError, subprocess.TimeoutExpired) as e:
+                    logger.warning("camera %s: kept controls not put back: %s", cam, e)
+        return put_back
+
+    def watch(self, stop: threading.Event, period: float = CHECK_PERIOD_S) -> None:
+        """check() every `period` until `stop` is set (a daemon thread, server.py)."""
+        while not stop.wait(period):
             try:
-                self._write(cam, values, self.read(cam))
-                logger.info("camera %s: kept controls applied %s", cam, values)
-            except (RuntimeError, OSError, subprocess.TimeoutExpired) as e:
-                logger.warning("camera %s: kept controls not applied: %s", cam, e)
+                self.check()
+            except Exception:
+                logger.exception("camera controls check failed")

@@ -163,3 +163,34 @@ def test_a_failing_camera_at_startup_is_logged_not_raised(tmp_path):
     store = tmp_path / "cc.json"
     store.write_text('{"wrist": {"brightness": -10}}')
     CameraControls({"wrist": "/dev/wrist"}, store=store, run=broken).apply_saved()
+
+
+def test_a_camera_back_on_its_defaults_gets_its_kept_controls_again(cams, caplog):
+    # A replug or a USB drop the camera watchdog doesn't see: the camera comes back on its defaults.
+    cc, fake = cams
+    cc.set("wrist", {"power_line_frequency": 2, "brightness": -10})
+    assert cc.check() == {}  # as kept: nothing to do
+    fake.values.update(power_line_frequency=1, brightness=0)  # back on its defaults
+    assert cc.check() == {"wrist": {"power_line_frequency": 2, "brightness": -10}}
+    assert fake.values["power_line_frequency"] == 2 and fake.values["brightness"] == -10
+
+
+def test_an_unplugged_camera_is_noted_once_and_put_right_when_back(cams, caplog):
+    cc, fake = cams
+    cc.set("wrist", {"brightness": -10})
+    real = cc._run
+    cc._run = lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, "", "Cannot open device")
+    assert cc.check() == {} and cc.check() == {}
+    assert sum("unplugged" in r.message for r in caplog.records) == 1
+    fake.values["brightness"] = 0
+    cc._run = real
+    assert cc.check() == {"wrist": {"brightness": -10}}
+
+
+def test_an_inactive_kept_control_is_not_a_loss(cams):
+    # The exposure time kept from manual mode, now under auto exposure: inactive, not refought.
+    cc, fake = cams
+    cc.set("wrist", {"auto_exposure": 1, "exposure_time_absolute": 40})
+    cc.set("wrist", {"auto_exposure": 3})
+    fake.values["exposure_time_absolute"] = 157
+    assert cc.check() == {}

@@ -587,6 +587,9 @@ def main():
     camera_controls = CameraControls({name: str(c.index_or_path) for name, c in cams.items()})
     camera_controls.apply_saved()
     bridge.after_camera_reconnect = camera_controls.apply_saved
+    # And whenever a camera comes back on its defaults unseen by the watchdog (replugged, a USB
+    # drop): the kept controls compared every few seconds.
+    threading.Thread(target=camera_controls.watch, args=(threading.Event(),), name="camera_controls", daemon=True).start()
 
     if not args.no_gamepad:
         gamepad = GamepadInput(bridge)
