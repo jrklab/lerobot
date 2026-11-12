@@ -434,6 +434,36 @@ def test_an_approachs_target_doesnt_jump_to_another_thing(monkeypatch):
     assert u == pytest.approx((cup[0] + cup[2]) / 2, abs=0.01) and v == pytest.approx(cup[3], abs=0.01)
     sk.main.next = [[0.41, 0.56, 0.56, 0.71]]  # the cup again, a little off: followed
     assert sk.find("cup", "front").by == "main" and "cup" in sk.memory
+    sk.main.next = [None]  # missed by name: steered on where it's tracked
+    missed = sk.find("cup", "front")
+    assert missed.by == "memory" and missed.box[3] == pytest.approx(0.71, abs=0.01)
     sk.untrack("cup")
+    sk.main.next = [None]
+    assert sk.find("cup", "front") is None  # no approach on: a miss is a miss
     sk.main.next = [far]
-    assert sk.find("cup", "front").box == far  # no approach on: taken as seen
+    assert sk.find("cup", "front").box == far  # and a sighting is taken as seen
+
+
+
+def test_a_servo_isnt_done_on_a_stand_in_only_on_a_sighting():
+    # Steered on the tracked place through a miss, the approach still ends on a real look: it
+    # measures the object from it.
+    from brain.goals import Detection
+    from brain.primitives import Skills
+
+    class Goal:
+        cam, part = "front", "base"
+
+        def error(self, det, sk):
+            return np.zeros(2)
+
+        def done(self, err, sk):
+            return True
+
+    sk = Skills.__new__(Skills)
+    sk.log = None
+    sk.cmd_tcp = sk.tcp = lambda: np.zeros(3)
+    looks = [Detection(box=[0.5, 0.6, 0.5, 0.6], by="memory"), Detection(box=[0.4, 0.5, 0.6, 0.7], by="main")]
+    sk.find = lambda obj, cam, **k: looks.pop(0)
+    r = sk.servo("cup", Goal())
+    assert r.ok and r.data["looks"] == 2 and looks == []

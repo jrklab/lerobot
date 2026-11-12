@@ -184,11 +184,21 @@ class Skills:
         if jump <= tr[1]:
             self._tracks[obj] = (w, tr[1])
             return None
+        self.ev("jumped", obj=obj, jump_m=round(jump, 3), width_m=round(tr[1], 3))
+        return self._stand_in(obj, jpeg, o) or Detection(box=[], jpeg=jpeg, by="none")
+
+    def _stand_in(self, obj: str, jpeg: bytes, odom=None) -> Detection | None:
+        """A sighting of a tracked `obj` at its tracked place (from the odometry), for an approach
+        to steer on when a look jumped to another thing or missed it; None if it isn't tracked or
+        the place is out of the frame. Not kept, not remembered (by "memory")."""
+        tr = self.__dict__.get("_tracks", {}).get(obj)
+        o = odom if odom is not None else (None if tr is None else self.odom())
+        if o is None:
+            return None
         q = from_room(self.geom.cams, tr[0], o)
         uv = to_image(self.geom.cams.front, self.geom.cams.T_base_cam, [q[0], q[1], self.geom.floor_seen_z])
-        self.ev("jumped", obj=obj, jump_m=round(jump, 3), width_m=round(tr[1], 3))
         if uv is None or not (0.0 <= uv[0] <= 1.0 and 0.0 <= uv[1] <= 1.0):
-            return Detection(box=[], jpeg=jpeg, by="none")
+            return None
         u, v = float(uv[0]), float(uv[1])
         return Detection(box=[u, v, u, v], jpeg=jpeg, by="memory")
 
@@ -497,7 +507,10 @@ class Skills:
             a, by = self.main.box(jpeg, prompt), "main"
         if a.value is None:
             self.ev("find", obj=obj, cam=cam, found=False, box=a.value, by=by)
-            return None
+            # Tracked (an approach on): a miss steers on its tracked place, not ends the approach
+            # (Nov 11, run 20261111T184111: the cup in plain view 25 cm ahead, missed by name twice
+            # after a small move; each time the approach gave up and looked all round).
+            return self._stand_in(obj, jpeg) if cam == "front" else None
         if cam == "front" and a.value[3] < self.geom.front_horizon_v():
             # Nothing on the floor ends above the horizon: the held object's tips show there
             # when carried at the hover (Oct 28 check).
@@ -554,6 +567,8 @@ class Skills:
             # reversal after it barely moved (Oct 28), hysteresis the encoders may or may not see.
             self.ev("servo", obj=obj, goal=goal.__class__.__name__, k=k, err=[round(float(e), 4) for e in err], done=done,
                     tcp_cmd=[round(float(v), 4) for v in self.cmd_tcp()], tcp_meas=[round(float(v), 4) for v in self.tcp()])
+            if done and det.by == "memory":
+                continue  # there by the odometry: done only once a look sees it (the approach measures it)
             if done:
                 return Result(True, data={"looks": k + 1, "err": err.tolist()})
             step = goal.step(err, self)
