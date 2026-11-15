@@ -17,27 +17,46 @@ hand-set values; each one is measured, taken from a demo, a spec, or set by a st
 
 Source tags: CALIB = measured by a script into calib.json (see geometry.py); DEMO = the owner's
 demo or teach; SPEC = part datasheet / object; RULE = generic control value set by a stated
-rule, the same for any object. Nothing here is tuned per pick.
+rule, the same for any object; ROBOT = this robot's, from its config (configs/<robot>.toml, the
+robot named by GEMMA_BOT_ROBOT). Nothing here is tuned per pick.
 """
 
 from __future__ import annotations
 
 import json
+import os
+import tomllib
 from dataclasses import dataclass
 from pathlib import Path
+
+from gemma_bot import protocol
 
 HERE = Path(__file__).resolve().parent.parent
 # Committed (data/demos/): the raw recording under demos/ is not, and without this file a
 # fresh checkout silently fell back to the defaults below (a 9 cm lift, no place view).
 DEMO_EXTRACT = HERE / "data" / "demos" / "pick_cup" / "extract-ep0.json"
 CALIB_FILE = HERE / "data" / "calib.json"
+ROBOT = os.environ.get("GEMMA_BOT_ROBOT", "lekiwi")
+ROBOT_FILE = HERE.parent / "configs" / f"{ROBOT}.toml"
 
 
 @dataclass(frozen=True)
 class Param:
     value: float
-    source: str  # CALIB | DEMO | SPEC | RULE
+    source: str  # CALIB | DEMO | SPEC | RULE | ROBOT
     why: str
+
+
+_ROBOT_CONFIG = tomllib.loads(ROBOT_FILE.read_text())
+
+
+def _robot(key: str) -> float:
+    """This robot's value at "section.name" in its config: no fallback, a missing one stops here."""
+    section, name = key.split(".")
+    try:
+        return float(_ROBOT_CONFIG[section][name])
+    except KeyError:
+        raise KeyError(f"{ROBOT_FILE} has no {key}") from None
 
 
 def _demo(key: str, fallback: float) -> float:
@@ -89,22 +108,22 @@ PLACE_HOVER_M = Param(_demo("above_target_z_above_floor_m", 0.10), "DEMO",
 
 # --- SPEC ---
 TAUGHT_OBJECT_HEIGHT_M = Param(0.0114, "SPEC", "the grasp teach's object, a red 2x4 brick (11.4 mm body): the taught grasp target was seen on its top face; any object's height until the front camera measures it (Skills.object_height)")
-BASE_STOP_SHORT_M = Param(0.01, "SPEC", "the Pi ends a base drive within this of its goal (gemma_bot.models.lekiwi_base.BASE_POS_TOL_M): drives under it didn't move, longer ones stopped ~1 cm short (Oct 27 trials)")
-BASE_MOVE_MAX_M = Param(1.0, "SPEC", "the Pi refuses a base drive over this per axis in one command (auto_control: 1 m per axis, 180 deg; Nov 4: a 2.3 m approach drive was refused)")
-BASE_TURN_MAX_DEG = Param(180.0, "SPEC", "the Pi refuses a base turn over this in one command (auto_control: 1 m per axis, 180 deg)")
-BASE_TURN_STOP_SHORT_DEG = Param(2.0, "SPEC", "the Pi ends a base turn within this of its goal (gemma_bot.models.lekiwi_base.BASE_THETA_TOL_DEG): turns stopped ~2 deg short")
+BASE_STOP_SHORT_M = Param(0.01, "SPEC", "without a robot description (offline): the Pi ends a base drive within this of its goal (gemma_bot.models.lekiwi_base.BASE_POS_TOL_M): drives under it didn't move, longer ones stopped ~1 cm short (Oct 27 trials)")
+BASE_MOVE_MAX_M = Param(1.0, "SPEC", "without a robot description (offline): the Pi refuses a base drive over this per axis in one command (auto_control: 1 m per axis, 180 deg; Nov 4: a 2.3 m approach drive was refused)")
+BASE_TURN_MAX_DEG = Param(180.0, "SPEC", "without a robot description (offline): the Pi refuses a base turn over this in one command (auto_control: 1 m per axis, 180 deg)")
+BASE_TURN_STOP_SHORT_DEG = Param(2.0, "SPEC", "without a robot description (offline): the Pi ends a base turn within this of its goal (gemma_bot.models.lekiwi_base.BASE_THETA_TOL_DEG): turns stopped ~2 deg short")
 CONTROL_PERIOD_S = Param(1 / 30, "SPEC", "the Pi reads the joints once per control tick (web_server/robot_bridge.py FPS 30): status reads closer together can return the same sample")
 HOLD_DROP_SHARE = Param(0.5, "SPEC", "the jaws closed past where they stopped on the object by this share of the squeeze: dropped (the Pi's own rule, auto_control.HOLD_DROP_FRACTION; it watches only in auto mode)")
-GRIPPER_EMPTY_MAX = Param(5.0, "SPEC", "mm: a close that stops wider holds something: closed on nothing the jaws meet (0 mm, 1.2-1.6 deg), the brick's narrowest side is 15.8 mm (calibrate_gripper.py, Oct 29; was 4.6 deg, 3.5 normalized units)")
+GRIPPER_EMPTY_MAX = Param(_robot("gripper.empty_max_mm"), "ROBOT", "mm: a close that stops wider holds something: closed on nothing the jaws meet (0 mm, 1.2-1.6 deg), the brick's narrowest side is 15.8 mm (calibrate_gripper.py, Oct 29; was 4.6 deg, 3.5 normalized units)")
 
 # --- RULE ---
 GRASP_LIFT_M = Param(0.004, "RULE", "jaw tips above the floor when closing: inside the brick's lower half")
 SERVO_GAIN = Param(0.8, "RULE", "fraction of the measured error corrected per look: 0.5 until Oct 28; with a measured image Jacobian (the fitted one until Oct 30, the camera model's since, within 3 px of each other on logged moves) less damping is needed, and the simulated servo converges at 0.8 with the Jacobian 30% off either way")
 STEP_IN_VIEW_FRACTION = Param(0.25, "RULE", "one move may shift the target by at most this share of the image, so it stays in view")
-REACH_POINT_X_M = Param(0.25, "RULE", "where the base parks the object (arm x): vertical reach at 10 cm is 0.14-0.28 m; owner: 0.22 sat too close to the base")
+REACH_POINT_X_M = Param(_robot("arm.reach_point_x_m"), "ROBOT", "where the base parks the object (arm x): vertical reach at 10 cm is 0.14-0.28 m; owner: 0.22 sat too close to the base")
 HOVER_HEIGHT_M = Param(0.10, "RULE", "line-up and first servo height: the object fills a small part of the view, with room to line up (the fitted image Jacobian was measured at 9.4 cm; the camera model holds at any height)")
 ROUND_CLOSE_BELOW_M = Param(0.0075, "RULE", "a round object's close this far below the middle of its widest part: the jaws hold it above their tips, and closed at the middle the tennis ball was held above its middle (owner, Nov 6: 5-10 mm lower)")
-JAW_DEPTH_M = Param(0.063, "SPEC", "how far up an object the jaws reach from their tips (to the gripper's palm): a close lower than the object's height less this would press its top into the palm. SO-101 jaws, 6.3 cm by the owner's ruler (Nov 4; the URDF has the jaws as meshes only, no such length)")
+JAW_DEPTH_M = Param(_robot("gripper.jaw_depth_m"), "ROBOT", "how far up an object the jaws reach from their tips (to the gripper's palm): a close lower than the object's height less this would press its top into the palm. SO-101 jaws, 6.3 cm by the owner's ruler (Nov 4; the URDF has the jaws as meshes only, no such length)")
 PROFILE_BAND_M = Param(0.003, "RULE", "the side silhouette's rows within this of its widest count as widest (the grasp plan closes at the lowest of them): the brick's rows scatter 1-2 mm about their plateau (Nov 4 front frames)")
 MARKED_MISS_SPAN = Param(3.0, "RULE", "after a place by a container's marker, an object seen on the floor further from the release than this many times how far inside the near wall it was let go (actions.release_inside, ~4.3 cm for the tennis ball) is another one, not a miss off the rim (Nov 6: three balls on the floor)")
 MIN_HOVER_PITCH_DEG = Param(45.0, "RULE", "the shallowest tilt a hover takes when the gripper can't reach its height pointing straight down (actions.hover_at): at the reach point straight down reaches 16 cm, 75 deg 22 cm, 45 deg 30 cm (computed, Nov 6), under the 11.5 cm shoe box's hover of 17.6 cm")
@@ -137,19 +156,37 @@ WIDTH_ERROR_M = Param(0.001, "RULE", "how far off, either way, the wrist camera 
 SERVO_TOL_M = Param(0.002, "RULE", "servo position tolerance at the object: under the last descent's landing scatter (2.5 mm), so the servo isn't what limits a grasp")
 REACH_TOL_M = Param(0.015, "RULE", "line-up: close enough for the arm to take the rest, with room: vertical reach at the hover goes 3 cm past the reach point, half of it (at 3 cm the arm then needed 4.4 cm after a large roll and was refused, Oct 27; v1's ARM_REACH_M was 1.5 cm)")
 ANGLE_TOL_DEG = Param(12.0, "RULE", "roll tolerance: squeezing jaws square up a brick that far off (v1, Oct 23)")
-ROLL_FROM_REST_DEG = Param(90.0, "RULE", "the wrist-roll joint stays within this of its rest angle (owner, Oct 27)")
+ROLL_FROM_REST_DEG = Param(_robot("arm.roll_from_rest_deg"), "ROBOT", "the wrist-roll joint stays within this of its rest angle (owner, Oct 27)")
 SERVO_MAX_LOOKS = Param(8, "RULE", "looks per servo before giving up")
-MIN_BASE_TURN_DEG = Param(3.0, "RULE", "smallest base turn that moves: the Pi finishes turns under 2 deg without moving")
+MIN_BASE_TURN_DEG = Param(_robot("base.min_turn_deg"), "ROBOT", "smallest base turn that moves: the Pi finishes turns under 2 deg without moving")
 LOW_MOVE_GUARD_M = Param(0.002, "RULE", "below a low move's lowest point the Pi's z_min sits this much lower: room for servo jitter, not for the jaws")
-CLOSE_SPEED = Param(39.0, "RULE", "gripper closing speed (deg/s; 30 units/s until Oct 29): slow enough for the Pi's stall detection to stop on the brick")
+CLOSE_SPEED = Param(_robot("gripper.close_speed_dps"), "ROBOT", "gripper closing speed (deg/s; 30 units/s until Oct 29): slow enough for the Pi's stall detection to stop on the brick")
 LOOK_SETTLE_S = Param(0.3, "RULE", "longest wait after a move before a frame (servo settling); after an arm move it ends once the measured TCP stops (skills._settle)")
 PLACE_TRIES = Param(2, "RULE", "a place step that fails before letting go (still holding: the approach lost its target, the centring) retries this many times in code before the planner replans: Nov 4, the model boxed white sneakers as the cup once and the replan asked to pick the cup while holding the brick")
 PICK_TRIES = Param(3, "RULE", "a pick step retries this many times in code before the planner replans (owner's choice, Oct 24)")
 MAX_REPLANS = Param(2, "RULE", "times per task a failed step's remaining plan is run again before giving up (task_loop.recover; the planner's replans until Nov 11)")
-FOLD_CLEAR_M = Param(0.165, "RULE", "fold: jaw tips above the floor beyond which folding can't catch a place target, so a fold that can't lift straight up still goes (v1's cup rim plane 0.105 + 0.06; Oct 26 the fold dragged a cup with the jaws ~13 cm up)")
-BASE_SPEED_MPS = Param(0.12, "RULE", "base drive speed (the Pi's default 0.08, its limit auto_control.MAX_BASE_XY_SPEED 0.15): base moves were 43 s of a 191 s two-object task (Nov 11)")
-BASE_TURN_DPS = Param(40.0, "RULE", "base turn speed, deg/s (the Pi's default 25, its limit MAX_BASE_THETA_SPEED 45)")
-FREE_SPEED_MPS = Param(0.08, "RULE", "straight-line speed in free air: the arm planner's top speed (arm.MAX_EE_SPEED); 0.04 until Nov 11, when arm moves were 64 s of a 191 s two-object task")
-NEAR_SPEED_MPS = Param(0.02, "RULE", "speed for the last centimetres to the floor: 0.01 until Nov 11 (a 3.7 cm descent to a grasp took 4.4 s); a slow descent also let the Pi's contact watch read the arm's drifting droop as a touch (Nov 11)")
+FOLD_CLEAR_M = Param(_robot("arm.fold_clear_m"), "ROBOT", "fold: jaw tips above the floor beyond which folding can't catch a place target, so a fold that can't lift straight up still goes (v1's cup rim plane 0.105 + 0.06; Oct 26 the fold dragged a cup with the jaws ~13 cm up)")
+BASE_SPEED_MPS = Param(_robot("base.speed_mps"), "ROBOT", "base drive speed (the Pi's default 0.08, its limit auto_control.MAX_BASE_XY_SPEED 0.15): base moves were 43 s of a 191 s two-object task (Nov 11)")
+BASE_TURN_DPS = Param(_robot("base.turn_dps"), "ROBOT", "base turn speed, deg/s (the Pi's default 25, its limit MAX_BASE_THETA_SPEED 45)")
+FREE_SPEED_MPS = Param(_robot("arm.free_speed_mps"), "ROBOT", "straight-line speed in free air: the arm planner's top speed (arm.MAX_EE_SPEED); 0.04 until Nov 11, when arm moves were 64 s of a 191 s two-object task")
+NEAR_SPEED_MPS = Param(_robot("arm.near_speed_mps"), "ROBOT", "speed for the last centimetres to the floor: 0.01 until Nov 11 (a 3.7 cm descent to a grasp took 4.4 s); a slow descent also let the Pi's contact watch read the arm's drifting droop as a touch (Nov 11)")
+
+
+def base_limits(robot) -> protocol.Base:
+    """The base's limits as the robot reports them (/v1/describe: its one-command limits, where it
+    ends a drive or a turn), or the values above without a description (the offline tests)."""
+    d = getattr(robot, "description", None)
+    if d is not None and d.base is not None:
+        return d.base
+    return protocol.Base(
+        kind="omni",
+        max_speed_mps=BASE_SPEED_MPS.value,
+        max_turn_dps=BASE_TURN_DPS.value,
+        max_move_m=BASE_MOVE_MAX_M.value,
+        max_turn_deg=BASE_TURN_MAX_DEG.value,
+        pos_tol_m=BASE_STOP_SHORT_M.value,
+        turn_tol_deg=BASE_TURN_STOP_SHORT_DEG.value,
+    )
+
 
 ALL = {name: p for name, p in globals().items() if isinstance(p, Param)}

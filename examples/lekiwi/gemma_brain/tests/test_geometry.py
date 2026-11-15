@@ -46,7 +46,7 @@ def test_jacobian_grows_closer_to_the_floor_and_turns_with_roll():
 
 
 def test_every_param_names_its_source():
-    assert prm.ALL and all(p.source in ("CALIB", "DEMO", "SPEC", "RULE") and p.why for p in prm.ALL.values())
+    assert prm.ALL and all(p.source in ("CALIB", "DEMO", "SPEC", "RULE", "ROBOT") and p.why for p in prm.ALL.values())
 
 def _stray_numbers(path):
     """Numeric literals in a v2 module that aren't plain 0/1/2, an index, a rounding digit

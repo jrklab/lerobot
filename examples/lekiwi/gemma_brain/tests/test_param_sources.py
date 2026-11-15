@@ -13,10 +13,12 @@
 # limitations under the License.
 
 """brain/params.py values read from data/: where each one comes from when its source is there,
-and the fallback when it isn't."""
+and the fallback when it isn't; and this robot's values, read from its config (configs/)."""
 
 import json
+import tomllib
 
+import pytest
 from brain import params
 
 
@@ -37,3 +39,18 @@ def test_without_a_passed_check_the_old_value_stands(tmp_path, monkeypatch):
         assert params._floor_accuracy(0.008) == 0.008
     monkeypatch.setattr(params, "CALIB_FILE", tmp_path / "missing.json")
     assert params._floor_accuracy(0.008) == 0.008
+
+
+def test_every_robot_value_is_its_configs_and_the_config_has_no_unused_one():
+    config = tomllib.loads(params.ROBOT_FILE.read_text())
+    keys = {f"{section}.{name}" for section, values in config.items() for name in values}
+    robot = {n: p for n, p in params.ALL.items() if p.source == "ROBOT"}
+    assert robot and len(keys) == len(robot)
+    used = {p.value for p in robot.values()}
+    assert {float(config[k.split(".")[0]][k.split(".")[1]]) for k in keys} == used
+
+
+def test_a_value_missing_from_the_config_stops_the_brain(monkeypatch):
+    monkeypatch.setattr(params, "_ROBOT_CONFIG", {"arm": {}})
+    with pytest.raises(KeyError, match="arm.reach_point_x_m"):
+        params._robot("arm.reach_point_x_m")

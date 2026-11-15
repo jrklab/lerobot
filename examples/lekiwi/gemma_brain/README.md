@@ -47,6 +47,7 @@ the B button then folds the arm. A task can pick, place in, and place next to; o
 | `plan_brain.py` | say a task (entry point) |
 | `run_skills.py` | one chain on the robot, or driven pick trials, without the planner |
 | `brain/` | the skills: params, geometry, primitives, goals, actions, chains, the task loop |
+| `../configs/` | each robot's own values the skills use (`lekiwi.toml`: reach point, arm, gripper and base speeds), read by `brain/params.py`; the robot by `GEMMA_BOT_ROBOT` (default `lekiwi`) |
 | `common/` | shared by everything: the arm model and planner, the robot client, the models, vision, the run log |
 | `../packages/` | shared with the Pi's web server: `gemma_bot.models` (the SO-101 kinematics, joint angles, arm and base constants) and `gemma_bot.protocol` (the executor protocol: the `/v1` paths and the robot's description). Install them once into each environment that runs either side: `.venv/bin/python -m pip install --no-deps -e ../packages/models -e ../packages/protocol` |
 | `calibration/` | scripts that measure this robot into `data/calib.json`; the demo extractor |

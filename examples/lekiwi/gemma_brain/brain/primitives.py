@@ -342,10 +342,11 @@ class Skills:
             return Result(False, "base: give a drive (dx, dy) or a turn, one at a time")
         # The Pi ends a base move once within its tolerance of the goal, so a move asks for that
         # much more, in the same direction, to end where it was meant to.
+        lim = prm.base_limits(self.robot)
         if turn is not None:
             turn = float(turn)
-            short = prm.BASE_TURN_STOP_SHORT_DEG.value
-            if abs(turn) + short > prm.BASE_TURN_MAX_DEG.value:
+            short = lim.turn_tol_deg
+            if abs(turn) + short > lim.max_turn_deg:
                 # Over the Pi's one-command limit with the stop-short added: two halves (Oct 28:
                 # a look-around's turn back from facing backwards was refused).
                 first = self._move_base(None, turn / 2)
@@ -354,8 +355,8 @@ class Skills:
         else:
             d = np.asarray(delta, float)
             n = float(np.linalg.norm(d))
-            d = d * (n + prm.BASE_STOP_SHORT_M.value) / n if n > 0 else d
-            if np.max(np.abs(d)) > prm.BASE_MOVE_MAX_M.value:
+            d = d * (n + lim.pos_tol_m) / n if n > 0 else d
+            if np.max(np.abs(d)) > lim.max_move_m:
                 # Over the Pi's one-command limit with the stop-short added: two halves.
                 half = (float(delta[0]) / 2, float(delta[1]) / 2)
                 first = self._move_base(half, None)

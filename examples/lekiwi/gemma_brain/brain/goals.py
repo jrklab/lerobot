@@ -202,7 +202,8 @@ class FrontApproachGoal:
         rem, margin = self.remaining(err, sk), front_view_margin(sk.geom)
         short = margin if rem - self.tol_m.value / 2 > margin else self.tol_m.value / 2
         # At most one of the Pi's commands (its stop-short added), then a look again.
-        longest = prm.BASE_MOVE_MAX_M.value - prm.BASE_STOP_SHORT_M.value
+        lim = prm.base_limits(getattr(sk, "robot", None))
+        longest = lim.max_move_m - lim.pos_tol_m
         return {"delta": (min(max(rem - short, 0.0), longest), 0.0)}
 
 

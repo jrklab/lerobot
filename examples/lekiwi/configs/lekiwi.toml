@@ -1,0 +1,23 @@
+# LeKiwi (SO-101 arm on an omni base, front and wrist cameras): the values the brain's skills use
+# that belong to this robot, not to a skill. brain/params.py reads them (the robot by
+# GEMMA_BOT_ROBOT, default lekiwi) and says where each comes from; a value missing here stops the
+# brain at start. What the executor itself enforces (joint limits, base move limits and where it
+# ends a drive or a turn) isn't here: the brain reads it from the robot's /v1/describe.
+# The robot's measured calibration stays in gemma_brain/data/calib.json (calibration/*.py).
+
+[arm]
+reach_point_x_m = 0.25     # where an object is picked from, arm x (reach at 10 cm: 0.14-0.28 m)
+free_speed_mps = 0.08      # straight-line speed in free air
+near_speed_mps = 0.02      # the last centimetres to the floor (the Pi's contact watch reads it)
+roll_from_rest_deg = 90.0  # the wrist roll stays this close to its rest angle (cabling)
+fold_clear_m = 0.165       # jaw tips above the floor beyond which a fold can't catch a target
+
+[gripper]
+jaw_depth_m = 0.063        # from the jaw tips to the palm (SO-101 jaws)
+empty_max_mm = 5.0         # a close that stops wider holds something
+close_speed_dps = 39.0     # slow enough for the Pi's stall detection to stop on the object
+
+[base]
+speed_mps = 0.12           # drive speed (the Pi's limit 0.15)
+turn_dps = 40.0            # turn speed (the Pi's limit 45)
+min_turn_deg = 3.0         # the smallest turn that moves

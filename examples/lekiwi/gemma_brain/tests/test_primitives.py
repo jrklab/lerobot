@@ -365,6 +365,34 @@ def test_a_base_drive_over_the_pis_limit_goes_in_two():
     stop = prm.BASE_STOP_SHORT_M.value
     assert sent == [(round(0.8 + stop, 3), 0.0)] * 2 and all(abs(d[0]) <= prm.BASE_MOVE_MAX_M.value for d in sent)
 
+def test_the_base_limits_are_the_robots_own_when_it_describes_them():
+    # A robot whose executor allows 0.5 m per drive and ends drives within 2 cm: a 0.8 m drive
+    # goes in two, each asking for its 2 cm more, whatever params' offline values say.
+    from gemma_bot import protocol
+
+    sent = []
+
+    class R:
+        description = protocol.Description(
+            protocol=1, embodiment="test", joint_units="deg", arm_model="so101_new_calib", joints=[],
+            max_joint_speed_dps=60.0, heartbeat_timeout_s=1.5,
+            base=protocol.Base(kind="omni", max_speed_mps=0.15, max_turn_dps=45.0, max_move_m=0.5,
+                               max_turn_deg=90.0, pos_tol_m=0.02, turn_tol_deg=1.0),
+        )
+
+        def base(self, dx=0.0, dy=0.0, dtheta_deg=0.0, speed=None, theta_speed=None):
+            sent.append((round(dx, 3), round(dtheta_deg, 3)))
+            return {"result": {"moved": [dx, dy, dtheta_deg]}}
+
+    sk = Skills.__new__(Skills)
+    sk.robot, sk.log = R(), None
+    assert sk.move("base", delta=(0.8, 0.0)).ok
+    assert sent == [(0.42, 0.0)] * 2
+    sent.clear()
+    assert sk.move("base", roll=120.0).ok
+    assert sent == [(0.0, 61.0)] * 2
+
+
 def test_close_up_front_looks_go_to_the_main_model(monkeypatch):
     # Oct 30: the 26B chose the named block among several in 15 of 15 asks at 0.4-0.5 m, 4 of 7
     # at ~1 m: within CLOSE_CHOICE_M the front camera's looks are its, not the fast model's.
