@@ -92,7 +92,8 @@ def test_get_observation(follower):
     follower.connect()
     obs = follower.get_observation()
 
-    expected_keys = {f"{m}.pos" for m in follower.bus.motors}
+    # positions, and each motor's load and speed (torque feedback, stall detection)
+    expected_keys = {f"{m}.{k}" for m in follower.bus.motors for k in ("pos", "load", "speed")}
     assert set(obs.keys()) == expected_keys
 
     for idx, motor in enumerate(follower.bus.motors, 1):
