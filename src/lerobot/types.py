@@ -16,11 +16,35 @@
 
 from __future__ import annotations
 
+import importlib.util
+import subprocess
+import sys
 from enum import Enum
 from typing import Any, TypedDict
 
 import numpy as np
-import torch
+
+
+def _probe_torch_available() -> bool:
+    """Check if torch can actually be imported without crashing (SIGILL-safe)."""
+    if importlib.util.find_spec("torch") is None:
+        return False
+    try:
+        result = subprocess.run(
+            [sys.executable, "-c", "import torch"],
+            timeout=15,
+            capture_output=True,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+_torch_available = _probe_torch_available()
+if _torch_available:
+    import torch
+else:
+    torch = None  # type: ignore[assignment]
 
 
 class TransitionKey(str, Enum):
@@ -36,7 +60,7 @@ class TransitionKey(str, Enum):
     COMPLEMENTARY_DATA = "complementary_data"
 
 
-PolicyAction = torch.Tensor
+PolicyAction = torch.Tensor if _torch_available else Any
 RobotAction = dict[str, Any]
 EnvAction = np.ndarray
 RobotObservation = dict[str, Any]
@@ -46,10 +70,10 @@ EnvTransition = TypedDict(
     "EnvTransition",
     {
         TransitionKey.OBSERVATION.value: RobotObservation | None,
-        TransitionKey.ACTION.value: PolicyAction | RobotAction | EnvAction | None,
-        TransitionKey.REWARD.value: float | torch.Tensor | None,
-        TransitionKey.DONE.value: bool | torch.Tensor | None,
-        TransitionKey.TRUNCATED.value: bool | torch.Tensor | None,
+        TransitionKey.ACTION.value: Any,
+        TransitionKey.REWARD.value: Any,
+        TransitionKey.DONE.value: Any,
+        TransitionKey.TRUNCATED.value: Any,
         TransitionKey.INFO.value: dict[str, Any] | None,
         TransitionKey.COMPLEMENTARY_DATA.value: dict[str, Any] | None,
     },

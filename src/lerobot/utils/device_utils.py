@@ -14,13 +14,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import logging
+from __future__ import annotations
 
-import torch
+import logging
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    import torch
 
 
 def auto_select_torch_device() -> torch.device:
     """Tries to select automatically a torch device."""
+    import torch
+
     if torch.cuda.is_available():
         logging.info("Cuda backend detected, using cuda.")
         return torch.device("cuda")
@@ -38,6 +44,8 @@ def auto_select_torch_device() -> torch.device:
 # TODO(Steven): Remove log. log shouldn't be an argument, this should be handled by the logger level
 def get_safe_torch_device(try_device: str, log: bool = False) -> torch.device:
     """Given a string, return a torch.device with checks on whether the device is available."""
+    import torch
+
     try_device = str(try_device)
     if try_device.startswith("cuda"):
         assert torch.cuda.is_available()
@@ -63,6 +71,8 @@ def get_safe_dtype(dtype: torch.dtype, device: str | torch.device):
     """
     mps is currently not compatible with float64
     """
+    import torch
+
     if isinstance(device, torch.device):
         device = device.type
     if device == "mps" and dtype == torch.float64:
@@ -87,6 +97,8 @@ def get_safe_dtype(dtype: torch.dtype, device: str | torch.device):
 
 
 def is_torch_device_available(try_device: str) -> bool:
+    import torch
+
     try_device = str(try_device)  # Ensure try_device is a string
     if try_device.startswith("cuda"):
         return torch.cuda.is_available()
