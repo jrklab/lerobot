@@ -23,7 +23,7 @@ import numpy as np
 from common.arm import EE_ROT_STEP_DEG
 from common.vision import ELONGATED_ASPECT, brick_angle, side_profile, snap_top
 
-from brain import params as prm
+from brain import body, params as prm
 from brain.geometry import (
     BOTTOM_CENTRE,
     MM_PER_M,
@@ -274,6 +274,11 @@ def look_around(sk: Skills, obj: str, fast_ok: bool = True, look=None, from_memo
     fast_ok: as Skills.find. look: what one look is (default the front camera's find), returning
     what it found or None (find_marker)."""
     look = look or (lambda: sk.find(obj, "front", fast_ok=fast_ok))
+    if not body.has_base(getattr(sk, "robot", None)):  # nothing to turn: the one view there is
+        det = look()
+        if det is None:
+            return Result(False, f"no {obj} in view, and no base to turn and look further")
+        return Result(True, data={"turned": 0.0, "det": det})
     # Seen before (sk.memory: the plan's look, an earlier step): turn straight to it if it's
     # outside the view, before looking (Nov 11: after the ball went in the box the brick was
     # out of view, and the sweep found it a few turns later).

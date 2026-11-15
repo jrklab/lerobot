@@ -43,11 +43,13 @@ from common.planner import Planner, Step, check_plan, objects_in
 from common.robot import OperatorTookOver, RobotError
 from common.runlog import Log
 
-from brain import actions, chains, params as prm
+from brain import actions, body, chains, params as prm
 from brain.primitives import Result, Skills
 
 # What the chains can run: (verb, relation).
 SUPPORTED = {("pick", None), ("place", "in"), ("place", "next_to")}
+# The cameras every chain uses (by role, as the robot describes them).
+REQUIRED_CAMERAS = ("front", "wrist")
 
 
 class PlanBrain:
@@ -224,6 +226,8 @@ class PlanBrain:
         """The base back where the task began (run: its odometry then), the arm folded first
         (fold): a drive in the base's own frame, then a turn to the heading it had. Returns why
         it didn't, or ""."""
+        if not body.has_base(getattr(self.sk, "robot", None)):  # nowhere to drive back from: the arm at rest is the end
+            return "" if self.sk.arm.at_pose("rest") else self.fold()
         start = getattr(self, "start_odom", None)
         now = self.sk.odom()
         if start is None or now is None:
@@ -254,6 +258,11 @@ class PlanBrain:
     def prepare(self, goal: str) -> tuple[list[Step] | None, str]:
         """run's start: the arm folded, the plan made from where the task begins; (steps, "") or
         (None, why). For a caller that shows the plan before running it (voice_brain.py)."""
+        # Every chain finds, measures and places with a front and a wrist camera (other camera
+        # layouts come with the skills for them): without both, nothing is planned or moved.
+        missing = [cam for cam in REQUIRED_CAMERAS if not body.has_camera(getattr(self.sk, "robot", None), cam)]
+        if missing:
+            return None, f"this robot has no {' or '.join(missing)} camera, which every pick and place uses"
         # Holding something nobody named: Nov 6 the ball was still in the jaws from the run
         # before, the plan picked it, and the look for it on the floor swung the base round.
         self.held_unnamed = self.holding is None and self.sk.held()

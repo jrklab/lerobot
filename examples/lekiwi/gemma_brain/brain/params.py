@@ -29,8 +29,6 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
-from gemma_bot import protocol
-
 HERE = Path(__file__).resolve().parent.parent
 # Committed (data/demos/): the raw recording under demos/ is not, and without this file a
 # fresh checkout silently fell back to the defaults below (a 9 cm lift, no place view).
@@ -170,23 +168,6 @@ BASE_SPEED_MPS = Param(_robot("base.speed_mps"), "ROBOT", "base drive speed (the
 BASE_TURN_DPS = Param(_robot("base.turn_dps"), "ROBOT", "base turn speed, deg/s (the Pi's default 25, its limit MAX_BASE_THETA_SPEED 45)")
 FREE_SPEED_MPS = Param(_robot("arm.free_speed_mps"), "ROBOT", "straight-line speed in free air: the arm planner's top speed (arm.MAX_EE_SPEED); 0.04 until Nov 11, when arm moves were 64 s of a 191 s two-object task")
 NEAR_SPEED_MPS = Param(_robot("arm.near_speed_mps"), "ROBOT", "speed for the last centimetres to the floor: 0.01 until Nov 11 (a 3.7 cm descent to a grasp took 4.4 s); a slow descent also let the Pi's contact watch read the arm's drifting droop as a touch (Nov 11)")
-
-
-def base_limits(robot) -> protocol.Base:
-    """The base's limits as the robot reports them (/v1/describe: its one-command limits, where it
-    ends a drive or a turn), or the values above without a description (the offline tests)."""
-    d = getattr(robot, "description", None)
-    if d is not None and d.base is not None:
-        return d.base
-    return protocol.Base(
-        kind="omni",
-        max_speed_mps=BASE_SPEED_MPS.value,
-        max_turn_dps=BASE_TURN_DPS.value,
-        max_move_m=BASE_MOVE_MAX_M.value,
-        max_turn_deg=BASE_TURN_MAX_DEG.value,
-        pos_tol_m=BASE_STOP_SHORT_M.value,
-        turn_tol_deg=BASE_TURN_STOP_SHORT_DEG.value,
-    )
 
 
 ALL = {name: p for name, p in globals().items() if isinstance(p, Param)}

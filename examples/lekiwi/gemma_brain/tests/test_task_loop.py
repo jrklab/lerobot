@@ -449,3 +449,29 @@ def test_park_without_odometry_stays(world):
     b.run("x")
     sk.odom = lambda: None
     assert b.park() == "no odometry"
+
+
+def test_a_robot_without_a_base_parks_by_folding_only(world):
+    from test_body import Robot, described
+
+    sk = FakeSkills()
+    sk.robot = Robot(described(base=None))
+    moves = []
+    sk.move = lambda part, **k: moves.append((part, k)) or Result(True)
+    b = brain(FakePlanner('pick "red block"\ndone'), sk)
+    b.run("x")
+    moves.clear()
+    sk.pose = [0.3, 0.1, 0.5]  # odometry would say it moved: nothing to drive back on
+    assert b.park() == "" and not [m for m in moves if m[0] == "base"]
+
+
+def test_a_robot_without_a_wrist_camera_plans_and_moves_nothing(world):
+    from test_body import Robot, described
+
+    sk = FakeSkills()
+    sk.robot = Robot(described(cameras=("front",)))
+    sk.arm.at_rest = False  # a fold would move it
+    planner = FakePlanner('pick "red block"\ndone')
+    ok, why = brain(planner, sk).run("pick the red block")
+    assert not ok and "no wrist camera" in why
+    assert world.calls == [] and sk.arm.moves == [] and planner.plans  # the planner never asked

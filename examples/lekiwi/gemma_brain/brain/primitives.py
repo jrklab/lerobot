@@ -47,7 +47,7 @@ from common.arm import (
 from common.robot import RobotError
 from common.vision import Look, look_matches, measured_angle_of, sample_look, snap_box
 
-from brain import params as prm
+from brain import body, params as prm
 from brain.cameras import to_image
 from brain.geometry import Geometry, from_room, front_object_width, to_room, wrap_deg
 from brain.goals import Detection
@@ -340,9 +340,11 @@ class Skills:
     def _move_base(self, delta, turn) -> Result:
         if (delta is None) == (turn is None):
             return Result(False, "base: give a drive (dx, dy) or a turn, one at a time")
+        if not body.has_base(self.robot):
+            return Result(False, f"this robot has no base to {'turn' if turn is not None else 'drive'}")
         # The Pi ends a base move once within its tolerance of the goal, so a move asks for that
         # much more, in the same direction, to end where it was meant to.
-        lim = prm.base_limits(self.robot)
+        lim = body.base_limits(self.robot)
         if turn is not None:
             turn = float(turn)
             short = lim.turn_tol_deg
@@ -477,6 +479,9 @@ class Skills:
         """A frame captured after this call, or None. A failed request re-measures the Mac-Pi
         clock offset and tries once more: the Pi has no time source and its clock jumped ~36 s
         mid-run (Oct 27 trials), so "a frame after now" asked for one from its future (HTTP 504)."""
+        if not body.has_camera(self.robot, cam):
+            self.ev("frame_failed", cam=cam, error=f"this robot has no {cam} camera")
+            return None
         self._settle()
         try:
             jpeg, _ = self.robot.frame(cam, after=time.time())
