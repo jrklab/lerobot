@@ -89,6 +89,8 @@ MIN_GRIPPER_SPEED = 6.5  # deg/s (5 units/s)
 
 MAX_BASE_XY_SPEED = 0.15  # m/s
 MAX_BASE_THETA_SPEED = 45.0  # deg/s
+MAX_BASE_MOVE_M = 1.0  # per axis, in one command
+MAX_BASE_TURN_DEG = 180.0  # in one command
 DEFAULT_BASE_XY_SPEED = 0.08
 DEFAULT_BASE_THETA_SPEED = 25.0
 MIN_BASE_XY_SPEED = 0.025  # below this the omniwheels barely move
@@ -514,8 +516,10 @@ class AutoController:
             vth = float(cmd.get("theta_speed") or DEFAULT_BASE_THETA_SPEED)
         except (TypeError, ValueError):
             raise CommandRefused("base: dx, dy (m), dtheta_deg and speeds must be numbers") from None
-        if abs(dx) > 1.0 or abs(dy) > 1.0 or abs(dth) > 180.0:
-            raise CommandRefused("base: one move is limited to 1 m per axis and 180 deg")
+        if abs(dx) > MAX_BASE_MOVE_M or abs(dy) > MAX_BASE_MOVE_M or abs(dth) > MAX_BASE_TURN_DEG:
+            raise CommandRefused(
+                f"base: one move is limited to {MAX_BASE_MOVE_M:g} m per axis and {MAX_BASE_TURN_DEG:g} deg"
+            )
         vxy = _clamp(vxy, MIN_BASE_XY_SPEED, MAX_BASE_XY_SPEED)
         vth = _clamp(vth, MIN_BASE_THETA_SPEED, MAX_BASE_THETA_SPEED)
         expected = max(math.hypot(dx, dy) / vxy, abs(dth) / vth)

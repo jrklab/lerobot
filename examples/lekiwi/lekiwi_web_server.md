@@ -47,11 +47,16 @@ For running Claude Code and pulling dependencies, the Pi requires external inter
 ## 6. Use this repo
 Do the development on host pc, and run testing on raspberry pi.
 
-The web server imports the robot models it shares with the brain (`gemma_bot.models`: the SO-101
-kinematics, joint angles, arm and base constants) from `packages/models`. Install it once into the
-Pi's `lerobot` environment (offline is fine):
+The web server imports what it shares with the brain from `packages/`: `gemma_bot.models` (the
+SO-101 kinematics, joint angles, arm and base constants) and `gemma_bot.protocol` (the executor
+protocol: `/v1` paths, `/v1/describe`). Install them once into the Pi's `lerobot` environment
+(offline is fine):
 
 ```bash
 conda activate lerobot
-pip install --no-deps --no-build-isolation -e ~/Work/lerobot/examples/lekiwi/packages/models
+cd ~/Work/lerobot/examples/lekiwi
+pip install --no-deps --no-build-isolation -e packages/models -e packages/protocol
 ```
+
+The brain calls the `/v1` paths; the server also answers at the paths before `/v1` (`/auto/...`,
+`/camera/...`) for an older brain.

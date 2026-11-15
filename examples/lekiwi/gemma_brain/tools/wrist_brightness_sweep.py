@@ -43,6 +43,7 @@ from common.arm import Arm  # noqa: E402
 from common.gemma import LlamaCpp  # noqa: E402
 from common.robot import Robot  # noqa: E402
 from common.vision import ELONGATED_ASPECT, brick_angle, sample_look  # noqa: E402
+from gemma_bot import protocol  # noqa: E402
 
 PLANNER_URL = "http://127.0.0.1:8081"  # the main model, as plan_brain.py
 SETTLE_S = 2.0  # after a brightness change, for the camera's own auto exposure to settle
@@ -56,7 +57,7 @@ BLACK = 15  # a pixel this dark or darker in every channel is black
 
 def controls(robot: Robot, values: dict | None = None) -> dict:
     """The wrist camera's controls (GET), or set some (POST): the web server's camera endpoint."""
-    url = robot.url + "/camera/wrist/controls"
+    url = robot.url + protocol.camera_controls("wrist")
     data = None if values is None else json.dumps(values).encode()
     req = urllib.request.Request(
         url, data=data, method="GET" if data is None else "POST", headers={"Content-Type": "application/json"}

@@ -694,7 +694,7 @@ async function camCtlRequest(block, url, body) {
 }
 
 function camCtlSend(block, values) {
-  return camCtlRequest(block, `/camera/${block.dataset.cam}/controls`, values);
+  return camCtlRequest(block, `/v1/camera/${block.dataset.cam}/controls`, values);
 }
 
 function setupCameraControls() {
@@ -703,10 +703,10 @@ function setupCameraControls() {
     const preview = block.querySelector(".cam-ctl-preview");
     block.addEventListener("toggle", () => {
       setSrc(preview, block.open ? `/video/${cam}` : "");
-      if (block.open) camCtlRequest(block, `/camera/${cam}/controls`);
+      if (block.open) camCtlRequest(block, `/v1/camera/${cam}/controls`);
     });
     block.querySelector(".cam-ctl-reset").addEventListener("click", () =>
-      camCtlRequest(block, `/camera/${cam}/controls/reset`, {}));
+      camCtlRequest(block, `/v1/camera/${cam}/controls/reset`, {}));
   });
 }
 

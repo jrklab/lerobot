@@ -48,7 +48,7 @@ the B button then folds the arm. A task can pick, place in, and place next to; o
 | `run_skills.py` | one chain on the robot, or driven pick trials, without the planner |
 | `brain/` | the skills: params, geometry, primitives, goals, actions, chains, the task loop |
 | `common/` | shared by everything: the arm model and planner, the robot client, the models, vision, the run log |
-| `../packages/models` | `gemma_bot.models`, shared with the Pi's web server: the SO-101 kinematics, joint angles, arm and base constants. Install it once into each environment that runs either side: `.venv/bin/python -m pip install --no-deps -e ../packages/models` |
+| `../packages/` | shared with the Pi's web server: `gemma_bot.models` (the SO-101 kinematics, joint angles, arm and base constants) and `gemma_bot.protocol` (the executor protocol: the `/v1` paths and the robot's description). Install them once into each environment that runs either side: `.venv/bin/python -m pip install --no-deps -e ../packages/models -e ../packages/protocol` |
 | `calibration/` | scripts that measure this robot into `data/calib.json`; the demo extractor |
 | `tools/` | robot checks: the link (`check_link.py`), the front view with the arm carried (`check_carry_view.py`) |
 | `data/` | `calib.json`, the floor touches, the demo extract (`data/demos/`) |

@@ -14,11 +14,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Client for the LeKiwi web server's auto-mode HTTP API (web_server/auto_control.py).
+"""Client for an executor's HTTP API (gemma_bot.protocol; the LeKiwi web server, web_server/).
 
 Each primitive is submitted, then waited on until it is done, failed or aborted. A background
 thread sends heartbeats while the client is enabled; if this process stalls or dies, the Pi
-stops the robot on its own within auto_control.HEARTBEAT_TIMEOUT_S.
+stops the robot on its own within its heartbeat_timeout_s (in its description).
 """
 
 from __future__ import annotations
@@ -31,6 +31,8 @@ import time
 import urllib.error
 import urllib.request
 
+from gemma_bot import protocol
+
 logger = logging.getLogger(__name__)
 
 # Where the LeKiwi web service can be, tried in this order (see find_url): the Ethernet cable
@@ -41,15 +43,15 @@ DEFAULT_URL = CANDIDATE_URLS[0]
 
 
 def find_url(candidates=CANDIDATE_URLS, timeout: float = 1.5) -> str:
-    """The first candidate whose /auto/status answers; raises RobotError if none does."""
+    """The first candidate whose /v1/status answers; raises RobotError if none does."""
     for url in candidates:
         try:
-            with urllib.request.urlopen(url + "/auto/status", timeout=timeout) as r:
+            with urllib.request.urlopen(url + protocol.STATUS, timeout=timeout) as r:
                 if r.status == 200:
                     return url
         except OSError:
             continue
-    raise RobotError(f"no LeKiwi web service answered at {', '.join(candidates)}")
+    raise RobotError(f"no robot answered {protocol.STATUS} at {', '.join(candidates)} (web_server not deployed?)")
 # Heartbeats every 0.1 s on one kept-open connection (no TCP handshake per beat over a laggy
 # Wi-Fi link): a single late reply no longer comes near the Pi's 1.5 s timeout.
 # The auto interface's joint positions (gemma_bot.models.joint_angles): degrees, since Oct 29.
@@ -85,6 +87,8 @@ class Robot:
         # while the robot is tethered to power and must not drive.
         self.base_enabled = base_enabled
         self.require_calibrated = require_calibrated
+        # The robot as it describes itself (gemma_bot.protocol.Description), read by enable().
+        self.description: protocol.Description | None = None
         self._hb_stop = threading.Event()
         self._hb_thread: threading.Thread | None = None
         # Pi clock minus Mac clock. The Pi has no RTC and often no internet, so after a reboot
@@ -120,34 +124,41 @@ class Robot:
     # --- session ---
 
     def enable(self) -> None:
-        """Switch the robot into auto mode and start heartbeats. Refused, before anything
-        changes, when the Pi's auto interface isn't in degrees (JOINT_UNITS): one on the version
-        before Oct 29 would read this planner's degrees as its normalized units."""
-        st = self._json("GET", "/auto/status")
-        units = st.get("joint_units")
-        if self.require_calibrated and st.get("arm_calibration") == "provisional":
+        """Read the robot's description, switch it into auto mode and start heartbeats. Refused,
+        before anything changes, when the robot doesn't serve the protocol's /v1 or its joints
+        aren't in degrees (JOINT_UNITS), or its arm is on a provisional calibration."""
+        self.description = d = self.describe()
+        if self.require_calibrated and d.calibration == "provisional":
             raise RobotError("the arm is on a provisional calibration (its motors don't match the saved file): "
                              "run calibration/calibrate_all.py first")
-        if units != JOINT_UNITS:
-            raise RobotError(f"the Pi's auto interface reports joint units {units!r}, this planner sends "
+        if d.joint_units != JOINT_UNITS:
+            raise RobotError(f"the robot reports joint units {d.joint_units!r}, this planner sends "
                              f"{JOINT_UNITS!r}: deploy web_server to the Pi first")
-        self._json("POST", "/auto/enable")
+        self._json("POST", protocol.ENABLE)
         self._hb_stop.clear()
         self._hb_thread = threading.Thread(target=self._heartbeat_loop, name="heartbeat", daemon=True)
         self._hb_thread.start()
         # Auto mode holds no joint targets until its first control step; a command sent before
         # that is refused "no joint state yet" (Oct 29: the first one after a service restart).
         deadline = time.monotonic() + ENABLE_TIMEOUT_S
-        while not self._json("GET", "/auto/status").get("targets"):
+        while not self._json("GET", protocol.STATUS).get("targets"):
             if time.monotonic() > deadline:
                 raise RobotError(f"auto mode has no joint state {ENABLE_TIMEOUT_S:.0f} s after enable")
             time.sleep(0.05)
         logger.info("auto mode enabled")
 
+    def describe(self) -> protocol.Description:
+        try:
+            return protocol.Description.from_dict(self._json("GET", protocol.DESCRIBE))
+        except RobotError as e:
+            if "HTTP 404" in str(e):
+                raise RobotError(f"the robot doesn't serve {protocol.DESCRIBE}: deploy web_server to the Pi first") from None
+            raise
+
     def disable(self) -> None:
         self._hb_stop.set()
         try:
-            self._json("POST", "/auto/disable")
+            self._json("POST", protocol.DISABLE)
         except (RobotError, OSError) as e:
             logger.warning("disable failed: %s", e)
 
@@ -158,7 +169,7 @@ class Robot:
             try:
                 if conn is None:
                     conn = http.client.HTTPConnection(host, timeout=HEARTBEAT_TIMEOUT_S)
-                conn.request("POST", "/auto/heartbeat", body=b"", headers={"Content-Length": "0"})
+                conn.request("POST", protocol.HEARTBEAT, body=b"", headers={"Content-Length": "0"})
                 conn.getresponse().read()
             except (OSError, http.client.HTTPException) as e:
                 logger.warning("heartbeat failed: %s", e)
@@ -183,7 +194,7 @@ class Robot:
 
     def status(self) -> dict:
         t0 = time.time()
-        st = self._json("GET", "/auto/status")
+        st = self._json("GET", protocol.STATUS)
         t1 = time.time()
         self._clock_offset = st["time"] - (t0 + t1) / 2
         for listener in self.listeners:
@@ -197,18 +208,18 @@ class Robot:
             self.status()
         off = self._clock_offset
         after_pi = after + off if after > 0 else 0.0
-        headers, jpeg = self._request("GET", f"/auto/frame/{cam}?after={after_pi:.4f}", timeout=3.0)
+        headers, jpeg = self._request("GET", f"{protocol.frame(cam)}?after={after_pi:.4f}", timeout=3.0)
         return jpeg, float(headers.get("X-Capture-Time", "0")) - off
 
     def stop(self) -> None:
-        self._json("POST", "/auto/stop")
+        self._json("POST", protocol.STOP)
 
     # --- primitives (each blocks until it finishes; raises RobotError unless it's "done") ---
 
     def run(self, cmd: dict, timeout: float = 60.0, trace: list | None = None) -> dict:
         """trace: each status polled while the command runs is appended (time, joints, targets),
         e.g. a close's lag for calibrate_gripper.py."""
-        reply = self._json("POST", "/auto/cmd", cmd, timeout=10.0)
+        reply = self._json("POST", protocol.CMD, cmd, timeout=10.0)
         cmd_id = reply["id"]
         deadline = time.monotonic() + timeout
         while True:
@@ -235,7 +246,7 @@ class Robot:
             time.sleep(0.05)
 
     def calibration(self) -> dict:
-        return self._json("GET", "/auto/calibration")
+        return self._json("GET", protocol.CALIBRATION)
 
     def write_calibration(self, joints: dict[str, dict], save: bool, relax_s: float = 0.0) -> dict:
         """The arm's motor calibration ({joint: {homing_offset, range_min, range_max}}, ticks),
@@ -243,7 +254,7 @@ class Robot:
         resting); save: to its calibration file too (calibration/self_calibrate.py); relax_s: the
         torque off that long first, for the arm to settle where it lies."""
         body = {"joints": joints, "save": save, **({"relax_s": relax_s} if relax_s else {})}
-        return self._json("POST", "/auto/calibration", body, timeout=10.0 + relax_s)
+        return self._json("POST", protocol.CALIBRATION, body, timeout=10.0 + relax_s)
 
     def trajectory(
         self, waypoints: list[dict], durations: list[float], z_min: float | None = None, contact_stop: bool = False

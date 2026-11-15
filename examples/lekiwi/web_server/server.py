@@ -48,10 +48,23 @@ from fastapi.staticfiles import StaticFiles
 # module rather than part of the installed lerobot package.
 sys.path.insert(0, str(Path(__file__).parent))
 
-from auto_control import CommandRefused  # noqa: E402
+from auto_control import (  # noqa: E402
+    GRIPPER,
+    HEARTBEAT_TIMEOUT_S,
+    IK_ARM_JOINTS,
+    MAX_BASE_MOVE_M,
+    MAX_BASE_THETA_SPEED,
+    MAX_BASE_TURN_DEG,
+    MAX_BASE_XY_SPEED,
+    CommandRefused,
+)
 from camera_controls import CameraControls  # noqa: E402
 from episode_recorder import EpisodeRecorder  # noqa: E402
 from gamepad_input import GamepadInput  # noqa: E402
+from gemma_bot import protocol  # noqa: E402
+from gemma_bot.models.joint_angles import JointAngles  # noqa: E402
+from gemma_bot.models.lekiwi_base import BASE_POS_TOL_M, BASE_THETA_TOL_DEG  # noqa: E402
+from gemma_bot.models.so101 import MAX_JOINT_SPEED  # noqa: E402
 from robot_bridge import (  # noqa: E402
     ARM_JOINTS,
     BASE_SPEEDS,
@@ -88,6 +101,19 @@ app.mount("/static", NoCacheStaticFiles(directory=STATIC_DIR), name="static")
 bridge: RobotBridge | None = None
 gamepad: GamepadInput | None = None
 camera_controls: CameraControls | None = None  # None with --mock (no cameras)
+
+
+def route(method: str, path: str):
+    """Serve a handler at its protocol path (gemma_bot.protocol, /v1/...) and at the same path
+    before /v1 (/auto/...), which older brains still call."""
+
+    def register(fn):
+        getattr(app, method)(path)(fn)
+        if path in protocol.LEGACY:
+            getattr(app, method)(protocol.LEGACY[path])(fn)
+        return fn
+
+    return register
 
 # Uploading to the Hub only works when the Pi has a route to the internet (only true when
 # Ethernet is plugged into the host -- the Pi's own hotspot mode, used for cordless ground
@@ -127,7 +153,7 @@ async def vr_page():
 
 @app.get("/video/{cam_name}")
 async def video_feed(cam_name: str):
-    if cam_name not in ("front", "wrist"):
+    if cam_name not in CAMERA_MOUNTS:
         return StreamingResponse(iter([b""]), status_code=404)
 
     async def mjpeg_stream():
@@ -154,27 +180,62 @@ async def video_feed(cam_name: str):
 # the event loop (or the 30Hz control loop, which is a separate thread).
 
 
-@app.post("/auto/enable")
+# Where each camera is: the front camera is fixed on the body, the wrist camera moves with the gripper.
+CAMERA_MOUNTS = {"front": "body", "wrist": "arm"}
+
+
+@app.get(protocol.DESCRIBE)
+def describe():
+    """This robot, for the brain (gemma_bot.protocol.Description): the joints' reachable ranges
+    under the current calibration, the gripper, the base and its limits, the cameras."""
+    angles = JointAngles(bridge.get_arm_calibration(), MOTOR_RESOLUTION)
+    return protocol.Description(
+        protocol=protocol.VERSION,
+        embodiment="lekiwi",
+        joint_units="deg",
+        arm_model="so101_new_calib",
+        joints=[protocol.Joint(j, *angles.limits(j)) for j in IK_ARM_JOINTS],
+        max_joint_speed_dps=MAX_JOINT_SPEED,
+        heartbeat_timeout_s=HEARTBEAT_TIMEOUT_S,
+        gripper=protocol.Gripper(GRIPPER, *angles.limits(GRIPPER)),
+        base=protocol.Base(
+            kind="omni",
+            max_speed_mps=MAX_BASE_XY_SPEED,
+            max_turn_dps=MAX_BASE_THETA_SPEED,
+            max_move_m=MAX_BASE_MOVE_M,
+            max_turn_deg=MAX_BASE_TURN_DEG,
+            pos_tol_m=BASE_POS_TOL_M,
+            turn_tol_deg=BASE_THETA_TOL_DEG,
+        ),
+        cameras=[
+            protocol.Camera(role, mount, controls=camera_controls is not None and role in camera_controls.devices)
+            for role, mount in CAMERA_MOUNTS.items()
+        ],
+        calibration=bridge.arm_calibration_state(),
+    ).to_dict()
+
+
+@route("post", protocol.ENABLE)
 def auto_enable():
     bridge.auto.heartbeat()
     bridge.set_control_mode("auto")
     return {"ok": True, "mode": bridge.get_control_mode()}
 
 
-@app.post("/auto/disable")
+@route("post", protocol.DISABLE)
 def auto_disable():
     if bridge.get_control_mode() == "auto":
         bridge.set_control_mode("gamepad")
     return {"ok": True, "mode": bridge.get_control_mode()}
 
 
-@app.post("/auto/heartbeat")
+@route("post", protocol.HEARTBEAT)
 def auto_heartbeat():
     bridge.auto.heartbeat()
     return {"ok": True, "mode": bridge.get_control_mode()}
 
 
-@app.post("/auto/cmd")
+@route("post", protocol.CMD)
 def auto_cmd(cmd: dict = Body(...)):
     if bridge.get_control_mode() != "auto":
         return JSONResponse(
@@ -189,13 +250,13 @@ def auto_cmd(cmd: dict = Body(...)):
     return {"ok": True, "id": cmd_id}
 
 
-@app.post("/auto/stop")
+@route("post", protocol.STOP)
 def auto_stop():
     bridge.auto.abort("stop requested by the planner")
     return {"ok": True}
 
 
-@app.get("/auto/status")
+@route("get", protocol.STATUS)
 def auto_status():
     joint_state = bridge.get_joint_state()
     measured = {j: st["pos"] for j, st in joint_state.items()}
@@ -214,7 +275,7 @@ def auto_status():
     }
 
 
-@app.get("/auto/calibration")
+@route("get", protocol.CALIBRATION)
 def auto_calibration():
     """Per-joint calibration, so the planner's IK uses the same unit conversion as the Pi."""
     return {
@@ -224,7 +285,7 @@ def auto_calibration():
     }
 
 
-@app.post("/auto/calibration")
+@route("post", protocol.CALIBRATION)
 def auto_write_calibration(body: dict = Body(...)):
     """{"joints": {joint: {homing_offset, range_min, range_max}}, "save": bool}: the arm
     calibrating itself (gemma_brain/calibration/self_calibrate.py) writes its motors' zeros and
@@ -262,27 +323,27 @@ def _camera_controls_call(cam_name: str, fn):
         return JSONResponse({"ok": False, "reason": str(e)}, status_code=502)
 
 
-@app.get("/camera/{cam_name}/controls")
+@route("get", protocol.camera_controls("{cam_name}"))
 def camera_controls_get(cam_name: str):
     return _camera_controls_call(cam_name, lambda: camera_controls.read(cam_name))
 
 
-@app.post("/camera/{cam_name}/controls")
+@route("post", protocol.camera_controls("{cam_name}"))
 def camera_controls_set(cam_name: str, values: dict = Body(...)):
     """{control: value}: clamped to the camera's range, set, and kept for the next start."""
     return _camera_controls_call(cam_name, lambda: camera_controls.set(cam_name, values))
 
 
-@app.post("/camera/{cam_name}/controls/reset")
+@route("post", protocol.camera_controls("{cam_name}") + "/reset")
 def camera_controls_reset(cam_name: str):
     return _camera_controls_call(cam_name, lambda: camera_controls.reset(cam_name))
 
 
-@app.get("/auto/frame/{cam_name}")
+@route("get", protocol.frame("{cam_name}"))
 def auto_frame(cam_name: str, after: float = 0.0):
     """One JPEG captured after wall-clock time `after` (e.g. a command's finish time), so the
     planner never reasons about a frame taken mid-motion."""
-    if cam_name not in ("front", "wrist"):
+    if cam_name not in CAMERA_MOUNTS:
         return Response(status_code=404)
     got = bridge.get_jpeg_frame_after(cam_name, after)
     if got is None:

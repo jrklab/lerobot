@@ -36,6 +36,7 @@ ROOT = Path(__file__).resolve().parents[1]  # gemma_brain: common/, brain/, data
 sys.path.insert(0, str(ROOT))
 
 from common.robot import find_url
+from gemma_bot import protocol
 
 PI_TIMEOUT_S = 1.5
 
@@ -55,7 +56,7 @@ def main() -> None:
         try:
             if conn is None:
                 conn = http.client.HTTPConnection(host, timeout=1.0)
-            conn.request("POST", "/auto/heartbeat", body=b"", headers={"Content-Length": "0"})
+            conn.request("POST", protocol.HEARTBEAT, body=b"", headers={"Content-Length": "0"})
             conn.getresponse().read()
             now = time.monotonic()
             rtts.append(1000 * (now - t))

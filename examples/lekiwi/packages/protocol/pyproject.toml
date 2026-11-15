@@ -1,0 +1,22 @@
+# The executor protocol shared by the brain (gemma_brain, on the Mac) and every executor
+# (web_server, on the Pi): its paths and the robot description an executor serves at /v1/describe.
+# Standard library only. Install it editable into each environment that runs either side
+# (--no-build-isolation so the Pi needs no internet):
+#
+#     pip install --no-deps --no-build-isolation -e examples/lekiwi/packages/protocol
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gemma-bot-protocol"
+version = "0.1.0"
+description = "The protocol between the gemma-bot brain and its executors"
+requires-python = ">=3.10"
+dependencies = []
+license = { text = "Apache-2.0" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["gemma_bot.*"]
+namespaces = true
