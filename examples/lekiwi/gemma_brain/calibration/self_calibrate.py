@@ -82,7 +82,7 @@ from common.arm import (
     arm_points,
 )
 from common.robot import Robot, RobotError
-from joint_angles import GRIPPER, URDF_LIMITS_DEG, shifted_calibration
+from gemma_bot.models.joint_angles import GRIPPER, URDF_LIMITS_DEG, shifted_calibration
 
 STATE = ROOT / "data" / "self_calibration.json"
 RESOLUTION = 4096

@@ -169,7 +169,7 @@ Same caveat as base mode — these directions come from the code's sign conventi
 since the code changed. Verify on hardware and flip any sign that feels backwards.
 
 ### Motion mapping — Arm mode, Cartesian/IK sub-mode
-Drives the end-effector's position and orientation directly (via `so101_kinematics.py`'s
+Drives the end-effector's position and orientation directly (via `packages/models/src/gemma_bot/models/so101_kinematics.py`'s
 inverse kinematics) instead of jogging individual joints. **Entering this sub-mode first
 ramps the arm to a fixed, more open mid-range pose over ~1.5s** (all 5 arm joints at
 normalized 0) rather than jogging from wherever it was — starting cartesian jogging from a

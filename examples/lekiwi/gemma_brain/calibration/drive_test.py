@@ -55,7 +55,7 @@ from pathlib import Path
 import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path[:0] = [str(ROOT), str(ROOT.parent / "web_server")]
+sys.path.insert(0, str(ROOT))
 
 LEG_M = 0.20  # convention: long enough that the camera's ~2 mm reads a direction to under 1 deg
 # (dx, dy) in the base's frame: each pair goes out and back to the start, the floor board ahead

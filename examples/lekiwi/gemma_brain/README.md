@@ -48,6 +48,7 @@ the B button then folds the arm. A task can pick, place in, and place next to; o
 | `run_skills.py` | one chain on the robot, or driven pick trials, without the planner |
 | `brain/` | the skills: params, geometry, primitives, goals, actions, chains, the task loop |
 | `common/` | shared by everything: the arm model and planner, the robot client, the models, vision, the run log |
+| `../packages/models` | `gemma_bot.models`, shared with the Pi's web server: the SO-101 kinematics, joint angles, arm and base constants. Install it once into each environment that runs either side: `.venv/bin/python -m pip install --no-deps -e ../packages/models` |
 | `calibration/` | scripts that measure this robot into `data/calib.json`; the demo extractor |
 | `tools/` | robot checks: the link (`check_link.py`), the front view with the arm carried (`check_carry_view.py`) |
 | `data/` | `calib.json`, the floor touches, the demo extract (`data/demos/`) |
@@ -181,7 +182,7 @@ refuses to run on a provisional arm: run `calibrate_all.py` first.
 | cameras (lenses, wrist mount, front pose, base turning centre, floor they see; joint zeros if needed) | `calibration/capture_cameras.py` + `solve_cameras.py` with the ChArUco boards: [setup](calibration/CAMERA_CALIBRATION.md); within `calibrate_all.py` | a camera moved, or an arm recalibration |
 | floor height (where the jaws touch) | `calibration/calibrate_floor.py`; within `calibrate_all.py` | new floor or arm calibration |
 | arm joint zeros and ranges | `calibration/self_calibrate.py` (bootstrap, probe, write, correct, restore), within `calibrate_all.py` | new arm, or zeros in doubt |
-| jaw-tip offset (`web_server/auto_control.py` JAW_TIP_OFFSET_M, 6.3 mm) | the SO-101 URDF's jaw meshes: the fixed jaw's tip past `gripper_frame_link` (stock parts; it was 9.7 mm, fitted, Oct 30) | gripper parts changed |
+| jaw-tip offset (`gemma_bot.models.so101` JAW_TIP_OFFSET_M, 6.3 mm) | the SO-101 URDF's jaw meshes: the fixed jaw's tip past `gripper_frame_link` (stock parts; it was 9.7 mm, fitted, Oct 30) | gripper parts changed |
 | front stop row (`front_camera` near_bottom: a brick at the reach point) | from `calibration/calibrate_front.py` (Oct 27; the script is otherwise superseded) | reach point changed |
 | grasp target | `calibration/teach_grasp.py` (the owner's midpoint teach) | gripper or wrist camera changed |
 | gripper opening (mm against angle) | `calibration/calibrate_gripper.py` | gripper recalibrated |

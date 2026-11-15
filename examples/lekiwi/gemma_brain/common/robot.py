@@ -52,7 +52,7 @@ def find_url(candidates=CANDIDATE_URLS, timeout: float = 1.5) -> str:
     raise RobotError(f"no LeKiwi web service answered at {', '.join(candidates)}")
 # Heartbeats every 0.1 s on one kept-open connection (no TCP handshake per beat over a laggy
 # Wi-Fi link): a single late reply no longer comes near the Pi's 1.5 s timeout.
-# The auto interface's joint positions (web_server/joint_angles.py): degrees, since Oct 29.
+# The auto interface's joint positions (gemma_bot.models.joint_angles): degrees, since Oct 29.
 JOINT_UNITS = "deg"
 HEARTBEAT_PERIOD_S = 0.1
 HEARTBEAT_TIMEOUT_S = 1.0

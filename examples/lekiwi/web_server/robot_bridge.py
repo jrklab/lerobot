@@ -32,11 +32,11 @@ from typing import Protocol
 
 import cv2
 import numpy as np
-
-import so101_kinematics as kin
 from auto_control import DEFAULT_Z_MIN_M, AutoController
-from joint_angles import JointAngles
 from episode_recorder import EpisodeRecorder
+from gemma_bot.models import so101_kinematics as kin
+from gemma_bot.models.joint_angles import JointAngles
+from gemma_bot.models.so101 import STALL_LOAD_THRESHOLDS, STALL_SPEED_THRESHOLD
 
 logger = logging.getLogger(__name__)
 
@@ -195,20 +195,6 @@ WEBXR_TO_ARM_FRAME = np.array(
     ]
 )
 
-# Stall detection, per examples/lekiwi/torque_feedback.md: a motor is "stalled" when it's
-# under significant load (Present_Load, raw 0-1000) while barely moving (Present_Velocity,
-# raw magnitude) -- high load alone can just mean fast acceleration, so the speed gate
-# guards against false positives on an unloaded but quickly-moving joint.
-# Per-motor load thresholds match torque_feedback.md's recommended `per_motor_thresholds`.
-STALL_LOAD_THRESHOLDS = {
-    "arm_shoulder_pan": 0.3,
-    "arm_shoulder_lift": 0.5,
-    "arm_elbow_flex": 0.5,
-    "arm_wrist_flex": 0.5,
-    "arm_wrist_roll": 0.3,
-    "arm_gripper": 0.2,
-}
-STALL_SPEED_THRESHOLD = 50  # raw Present_Velocity magnitude, matches torque_feedback.md's example
 
 # How long a leader-arm mode entry takes to ramp from the arm's current pose up to the
 # leader's live pose (see RobotBridge.set_arm_absolute()).

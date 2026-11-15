@@ -16,7 +16,7 @@
 
 """Arm planning on the Mac: IK, straight-line end-effector paths, named poses, arm reset.
 
-Plans become joint-space trajectories in degrees (web_server/joint_angles.py: arm joints from
+Plans become joint-space trajectories in degrees (gemma_bot.models.joint_angles: arm joints from
 the homing tick, the URDF's zero; the gripper's opening from closed), checked against the same
 joint limits as the Pi (the robot's recorded range clipped to the URDF's, from
 /auto/calibration), that the Pi only validates and plays back (web_server/auto_control.py).
@@ -28,16 +28,11 @@ TCP's local +Z is the gripper's approach direction.
 from __future__ import annotations
 
 import math
-import sys
-from pathlib import Path
 
 import numpy as np
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "web_server"))
-
-import so101_kinematics as kin  # noqa: E402
-from auto_control import JAW_TIP_OFFSET_M, MAX_JOINT_SPEED  # noqa: E402
-from joint_angles import JointAngles  # noqa: E402
+from gemma_bot.models import so101_kinematics as kin
+from gemma_bot.models.joint_angles import JointAngles
+from gemma_bot.models.so101 import JAW_TIP_OFFSET_M, MAX_JOINT_SPEED
 
 IK_ARM_JOINTS = [f"arm_{name}" for name in kin.JOINT_NAMES]
 GRIPPER = "arm_gripper"
@@ -113,7 +108,7 @@ class PlanError(ValueError):
 
 
 class Calibration(JointAngles):
-    """This robot's joint calibration (the Pi's /auto/calibration) as web_server/joint_angles.py
+    """This robot's joint calibration (the Pi's /auto/calibration) as gemma_bot.models.joint_angles
     reads it: degrees from the homing tick (the URDF's zero; the recorded range's midpoint, used
     until Oct 27, leaned the model's "straight down" ~26-30 deg), the joint limits, and, for
     data recorded in LeRobot's normalized units (teleop demos), to_deg()."""

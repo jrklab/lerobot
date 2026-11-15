@@ -1,0 +1,22 @@
+# The robot models shared by the brain (gemma_brain, on the Mac) and the executor (web_server, on
+# the Pi): the SO-101 arm's kinematics, joint angles from a calibration, arm and base constants.
+# Install it editable into each environment that runs either side (no dependencies beyond numpy,
+# which both already have; --no-build-isolation so the Pi needs no internet):
+#
+#     pip install --no-deps --no-build-isolation -e examples/lekiwi/packages/models
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gemma-bot-models"
+version = "0.1.0"
+description = "Robot models shared by the gemma-bot brain and executors"
+requires-python = ">=3.10"
+dependencies = ["numpy"]
+license = { text = "Apache-2.0" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["gemma_bot.*"]
+namespaces = true

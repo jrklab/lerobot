@@ -1,5 +1,5 @@
 # The tests import gemma_brain's packages (brain/, common/, calibration/) and the Pi-side
-# web_server modules (auto_control's limits, its arm simulator) the client code uses.
+# web_server's simulation (test_auto_control.Sim), the stand-in executor the brain is tested against.
 import sys
 from pathlib import Path
 

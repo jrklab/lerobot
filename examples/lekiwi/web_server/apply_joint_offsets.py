@@ -53,7 +53,7 @@ import json
 import shutil
 from pathlib import Path
 
-from joint_angles import GRIPPER, shifted_calibration
+from gemma_bot.models.joint_angles import GRIPPER, shifted_calibration
 
 
 def _parse_offsets(items: list[str]) -> dict[str, float]:

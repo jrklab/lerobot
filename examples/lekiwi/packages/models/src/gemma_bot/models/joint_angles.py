@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Joint positions in degrees, for the auto interface (auto_control.py) and the planner on the
+"""Joint positions in degrees, for the auto interface (web_server/auto_control.py) and the planner on the
 Mac (gemma_brain/common/arm.py), from one robot calibration.
 
 LeRobot's bus works in normalized units: -100..100 over each arm joint's recorded range,
@@ -42,7 +42,7 @@ from __future__ import annotations
 
 import math
 
-import so101_kinematics as kin
+from gemma_bot.models import so101_kinematics as kin
 
 GRIPPER = "arm_gripper"
 IK_ARM_JOINTS = [f"arm_{name}" for name in kin.JOINT_NAMES]

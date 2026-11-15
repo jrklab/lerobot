@@ -34,7 +34,6 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-import so101_kinematics as kin  # noqa: E402
 from auto_control import (  # noqa: E402
     GRIPPER,
     GRIPPER_EASE_FRACTION,
@@ -45,7 +44,8 @@ from auto_control import (  # noqa: E402
     AutoController,
     CommandRefused,
 )
-from joint_angles import JointAngles, shifted_calibration  # noqa: E402
+from gemma_bot.models import so101_kinematics as kin  # noqa: E402
+from gemma_bot.models.joint_angles import JointAngles, shifted_calibration  # noqa: E402
 
 PERIOD = 1 / 30
 READY = dict.fromkeys(IK_ARM_JOINTS, 0.0)

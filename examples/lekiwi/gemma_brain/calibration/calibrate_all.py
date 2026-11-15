@@ -72,13 +72,12 @@ from pathlib import Path
 import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path[:0] = [str(ROOT), str(ROOT.parent / "web_server")]
+sys.path.insert(0, str(ROOT))
 
-from auto_control import JAW_TIP_OFFSET_M
 from brain import params as prm
 from common.arm import Arm, Calibration
 from common.robot import Robot
-from robot_bridge import STALL_LOAD_THRESHOLDS, STALL_SPEED_THRESHOLD
+from gemma_bot.models.so101 import JAW_TIP_OFFSET_M, STALL_LOAD_THRESHOLDS, STALL_SPEED_THRESHOLD
 
 from calibration import (
     boards,
@@ -450,7 +449,7 @@ def save_load_proposal(proposal: dict) -> None:
         "value": {j: p["proposed"] for j, p in proposal.items()},
         "enabled": False,
         "meaning": "per arm joint, the load (fraction of the motor's full scale) above which a (nearly) still "
-        "joint counts as stalled, proposed for robot_bridge.STALL_LOAD_THRESHOLDS; not applied",
+        "joint counts as stalled, proposed for gemma_bot.models.so101.STALL_LOAD_THRESHOLDS; not applied",
         "method": f"calibrate_all.py: the {LOAD_PERCENTILE} percentile of each joint's load while still over the run "
         f"(probes and floor touches left out), times {STALL_MARGIN}; at least the highest load times {MAX_LOAD_MARGIN}",
         "date": datetime.date.today().isoformat(),

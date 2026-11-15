@@ -21,7 +21,7 @@ import pytest
 from calibration import self_calibrate as sc
 from common.arm import IK_ARM_JOINTS
 from common.robot import RobotError
-from joint_angles import GRIPPER, URDF_LIMITS_DEG, JointAngles
+from gemma_bot.models.joint_angles import GRIPPER, URDF_LIMITS_DEG, JointAngles
 from test_auto_control import Sim
 
 RES = 4096

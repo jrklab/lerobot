@@ -45,4 +45,13 @@ For running Claude Code and pulling dependencies, the Pi requires external inter
 * **Stateless UI:** Keep the frontend as vanilla as possible (HTML5, JS, WebSockets) served directly from the Python backend so users don't need to install Node/NPM to run the robot.
 
 ## 6. Use this repo
-Do the development on host pc, and run testing on raspberry pi. 
+Do the development on host pc, and run testing on raspberry pi.
+
+The web server imports the robot models it shares with the brain (`gemma_bot.models`: the SO-101
+kinematics, joint angles, arm and base constants) from `packages/models`. Install it once into the
+Pi's `lerobot` environment (offline is fine):
+
+```bash
+conda activate lerobot
+pip install --no-deps --no-build-isolation -e ~/Work/lerobot/examples/lekiwi/packages/models
+```

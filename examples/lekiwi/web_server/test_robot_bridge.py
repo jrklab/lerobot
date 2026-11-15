@@ -481,7 +481,7 @@ def _arm_deg(bridge):
 
 def _pose(bridge):
     import numpy as np
-    import so101_kinematics as kin
+    from gemma_bot.models import so101_kinematics as kin
 
     return kin.forward_kinematics(np.radians(list(_arm_deg(bridge).values())))
 
@@ -490,7 +490,7 @@ def _turned_deg(a, b):
     import math
 
     import numpy as np
-    import so101_kinematics as kin
+    from gemma_bot.models import so101_kinematics as kin
 
     return math.degrees(float(np.linalg.norm(kin.matrix_to_rotvec(a[:3, :3] @ b[:3, :3].T))))
 

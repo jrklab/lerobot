@@ -55,8 +55,10 @@ import time
 from collections.abc import Callable
 
 import numpy as np
-import so101_kinematics as kin
-from joint_angles import JointAngles
+from gemma_bot.models import so101_kinematics as kin
+from gemma_bot.models.joint_angles import JointAngles
+from gemma_bot.models.lekiwi_base import BASE_POS_TOL_M, BASE_THETA_TOL_DEG
+from gemma_bot.models.so101 import JAW_TIP_OFFSET_M, MAX_JOINT_SPEED
 
 logger = logging.getLogger(__name__)
 
@@ -74,17 +76,9 @@ HEARTBEAT_TIMEOUT_S = 1.5
 # the nearest round degrees (one unit was 0.88-1.52 deg on this arm's joints, 1.30 on the
 # gripper).
 JOINT_UNITS = "deg"
-MAX_JOINT_SPEED = 60.0  # deg/s, on any joint in any segment (was 60 units/s: 53-91 deg/s)
 DEFAULT_JOINT_SPEED = 35.0  # deg/s
 MAX_WAYPOINTS = 600
 CLEARANCE_SAMPLE_DEG = 5.0
-# The jaw tips extend this far past the TCP along its approach axis: the SO-101 URDF's own geometry
-# (so101_new_calib.urdf's jaw meshes placed as the model places them: the fixed jaw's tip 6.3 mm
-# past gripper_frame_link, on its axis; the closed moving jaw's 4.5 mm), the owner's stock parts.
-# Was 0.0097 (Oct 30): fitted so the floor touches and the cameras agreed under the hand
-# calibration, absorbing its 3-4 deg zero errors; the self-calibrated zeros left that fit 5 mm off.
-# Before that 0.015, an estimate. The planner (gemma_brain/common/arm.py) imports it from here.
-JAW_TIP_OFFSET_M = 0.0063
 # Floor guard for the jaw tips' z in the arm base frame when a command doesn't send its own
 # z_min (the brain always sends one): the measured floor at the jaw tips (-0.112 m since the
 # Oct 29 arm recalibration; -0.126 with the old joint zeros) plus 2 cm.
@@ -99,8 +93,6 @@ DEFAULT_BASE_XY_SPEED = 0.08
 DEFAULT_BASE_THETA_SPEED = 25.0
 MIN_BASE_XY_SPEED = 0.025  # below this the omniwheels barely move
 MIN_BASE_THETA_SPEED = 8.0
-BASE_POS_TOL_M = 0.01
-BASE_THETA_TOL_DEG = 2.0
 BASE_GAIN = 1.5  # 1/s: commanded speed = gain * remaining, then capped
 
 # Abort thresholds while an arm move runs (gripper excluded: squeezing a block is a stall).
