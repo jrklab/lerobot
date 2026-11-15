@@ -151,17 +151,19 @@ class LeKiwi(Robot):
 
         homing_offsets.update(dict.fromkeys(self.base_motors, 0))
 
-        full_turn_motor = [
-            motor for motor in motors if any(keyword in motor for keyword in ["wheel", "wrist_roll"])
+        # Wheels are true full-turn motors (no mechanical stop); wrist_roll has a physical
+        # stop on SO-101 and must have its actual range recorded.
+        full_turn_motors = [
+            motor for motor in motors if "wheel" in motor
         ]
-        unknown_range_motors = [motor for motor in motors if motor not in full_turn_motor]
+        unknown_range_motors = [motor for motor in motors if motor not in full_turn_motors]
 
         print(
-            f"Move all arm joints except '{full_turn_motor}' sequentially through their "
+            f"Move all arm joints sequentially through their "
             "entire ranges of motion.\nRecording positions. Press ENTER to stop..."
         )
         range_mins, range_maxes = self.bus.record_ranges_of_motion(unknown_range_motors)
-        for name in full_turn_motor:
+        for name in full_turn_motors:
             range_mins[name] = 0
             range_maxes[name] = 4095
 
